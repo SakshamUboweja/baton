@@ -1,0 +1,46 @@
+# Handoff: Wire the receive transaction
+
+- Status: 1/2 steps done, 1 active
+- Origin: codex / gpt-5.6-sol
+- Finalized: You've hit your usage limit
+
+## Warnings
+
+- Bundle finalized 14h ago (staleness threshold 12h) — re-verify before continuing.
+- HEAD moved since capture: bundle recorded a1b2c3d, working tree now e5f6a7b.
+- Working tree is dirty; captured file state may not match what is on disk.
+
+## Constraints
+
+- Deterministic output
+
+## Plan
+
+- [x] Draft prepare/commit
+- [ ] Bind receipt token
+
+## Roles
+
+_No role assignments._
+
+## Decisions (last 15)
+
+- Token binds journalSeq + git digest
+
+## Files touched
+
+- edit core/src/receive/prompt.mjs
+
+## Git
+
+- Branch: main
+- HEAD: a1b2c3d
+- Dirty: yes
+  - M core/src/receive/prompt.mjs
+
+## Next actions
+
+1. Bind receipt token
+
+---
+Machine-readable data: .handoff/bundle.json (baton bundle schema v1)

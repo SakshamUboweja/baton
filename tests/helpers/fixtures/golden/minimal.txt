@@ -1,0 +1,35 @@
+# Handoff: Set up the project
+
+- Status: No plan steps yet
+- Origin: claude-code / claude-fable-5
+
+## Constraints
+
+_None._
+
+## Plan
+
+_No plan steps._
+
+## Roles
+
+_No role assignments._
+
+## Decisions (last 15)
+
+_No decisions recorded._
+
+## Files touched
+
+_No files touched._
+
+## Git
+
+_No git state captured._
+
+## Next actions
+
+_No pending actions._
+
+---
+Machine-readable data: .handoff/bundle.json (baton bundle schema v1)

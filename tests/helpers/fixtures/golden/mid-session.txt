@@ -1,0 +1,52 @@
+# Handoff: Implement the bundle store layer
+
+- Status: 1/5 steps done, 1 active, 1 blocked
+- Origin: codex / gpt-5.6-sol
+
+## Constraints
+
+- Zero runtime dependencies
+- Deterministic output
+
+## Plan
+
+- [x] Write fsx
+- [ ] Write store
+- [ ] Write render
+- [ ] Write lock
+- [ ] Wire CLI
+
+## Roles
+
+| Role | Platform | Model |
+| --- | --- | --- |
+| implementer | claude-code | claude-fable-5 |
+| test-author | claude-code | claude-opus-4-8 |
+
+## Decisions (last 15)
+
+- Chose tmp+rename for atomic writes
+- Journal is append-only NDJSON
+- Recovery prefers .bak then journal rebuild
+
+## Files touched
+
+- create core/src/util/fsx.mjs
+- edit core/src/bundle/store.mjs
+
+## Git
+
+- Branch: main
+- HEAD: a1b2c3d
+- Dirty: yes
+  - M core/src/bundle/store.mjs
+  - ?? tests/unit/store.test.mjs
+
+## Next actions
+
+1. Write store
+2. Write render
+3. Write lock
+
+---
+Machine-readable data: .handoff/bundle.json (baton bundle schema v1)
