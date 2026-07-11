@@ -1,0 +1,66 @@
+{
+  "schema": "baton/signatures@1",
+  "updated": "2026-07-12",
+  "signatures": [
+    {
+      "id": "claude-code/session-limit",
+      "platform": "claude-code",
+      "class": "usage-limit",
+      "confidence": "high",
+      "matcher": { "kind": "substring", "value": "You've hit your session limit" },
+      "resetHint": "resets ([^\\n]+)"
+    },
+    {
+      "id": "claude-code/weekly-limit",
+      "platform": "claude-code",
+      "class": "usage-limit",
+      "confidence": "high",
+      "matcher": { "kind": "substring", "value": "You've hit your weekly limit" },
+      "resetHint": "resets ([^\\n]+)"
+    },
+    {
+      "id": "claude-code/model-limit",
+      "platform": "claude-code",
+      "class": "usage-limit",
+      "confidence": "medium",
+      "matcher": { "kind": "regex", "pattern": "You've hit your \\S+ limit" },
+      "resetHint": "resets ([^\\n]+)"
+    },
+    {
+      "id": "claude-code/throttle",
+      "platform": "claude-code",
+      "class": "throttle",
+      "confidence": "high",
+      "matcher": { "kind": "substring", "value": "Server is temporarily limiting requests" }
+    },
+    {
+      "id": "claude-code/429-rejected",
+      "platform": "claude-code",
+      "class": "other-error",
+      "confidence": "medium",
+      "matcher": { "kind": "substring", "value": "API Error: Request rejected (429)" }
+    },
+    {
+      "id": "codex/usage-limit",
+      "platform": "codex",
+      "class": "usage-limit",
+      "confidence": "high",
+      "matcher": { "kind": "substring", "value": "You've hit your usage limit" },
+      "resetHint": "try again at ([^\\n.]+)"
+    },
+    {
+      "id": "cursor/too-many-requests",
+      "platform": "cursor",
+      "class": "throttle",
+      "confidence": "medium",
+      "matcher": { "kind": "json-field", "path": "error", "equals": "Too Many Requests" }
+    },
+    {
+      "id": "cursor/usage-limit-heuristic",
+      "platform": "cursor",
+      "class": "usage-limit",
+      "confidence": "low",
+      "matcher": { "kind": "regex", "pattern": "usage limit exceeded|quota exceeded", "flags": "i" }
+    }
+  ]
+}
