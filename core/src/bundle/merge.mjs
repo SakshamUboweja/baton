@@ -16,6 +16,7 @@ export function applyEvent(bundle, event) {
 
   switch (type) {
     case 'decision': {
+      /** @type {{seq: number, ts: string, summary: any, detail?: any}} */
       const entry = { seq, ts, summary: payload.summary };
       if (payload.detail !== undefined) entry.detail = payload.detail;
       out.decisions.push(entry);
@@ -28,14 +29,14 @@ export function applyEvent(bundle, event) {
       out.plan.steps = payload.steps;
       break;
     case 'plan.step': {
-      const existing = out.plan.steps.find((s) => s.id === payload.id);
+      const existing = out.plan.steps.find((/** @type {any} */ s) => s.id === payload.id);
       if (existing) Object.assign(existing, payload);
       else out.plan.steps.push(payload);
       break;
     }
     case 'file.touch': {
       const entry = { path: payload.path, op: payload.op, lastTs: ts };
-      const i = out.files.touched.findIndex((f) => f.path === payload.path);
+      const i = out.files.touched.findIndex((/** @type {any} */ f) => f.path === payload.path);
       if (i === -1) out.files.touched.push(entry);
       else out.files.touched[i] = entry;
       break;
