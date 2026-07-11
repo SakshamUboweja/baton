@@ -1,0 +1,41 @@
+{
+  "name": "@sakshamuboweja/baton",
+  "version": "0.1.0",
+  "description": "Usage-limit failover for AI coding sessions across Claude Code, Codex CLI, and Cursor: checkpoint, hand off, resume with remapped model roles.",
+  "type": "module",
+  "bin": {
+    "baton": "core/bin/baton.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "core/",
+    "adapters/",
+    "templates/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test tests/",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "claude-code",
+    "codex",
+    "cursor",
+    "handoff",
+    "failover",
+    "agents"
+  ],
+  "author": "SakshamUboweja <ssakshamu@gmail.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SakshamUboweja/baton"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.6.0"
+  }
+}
