@@ -53,11 +53,11 @@ Tests mirror this: `tests/{helpers,unit,commands,invariants,integration}/`.
 
 ## Bundle schema (`baton/bundle@1`)
 
-`bundle.json` fields: `schema`, `bundleId`, `generation`, `createdAt/updatedAt`, `origin {platform, model, sessionHint, unstable?}`, `task {goal, constraints[], acceptance[]}`, `plan.steps[] {id, title, status: pending|active|done|blocked, note}`, `decisions[] {seq, ts, summary, detail(capped)}`, `files.touched[] {path, op, lastTs}`, `roles.assignments`, `git {branch, headSha, dirty, dirtySummary[], contentDigest, summaryTruncated}`, `handoff {status: open|sealed|received, reason, reasonClass, toPlatformHint, finalizedAt, receive_log[]}`, `journalSeq`, `compaction`, transcript field (opt-in, redacted).
+`bundle.json` fields: `schema`, `bundleId`, `generation`, `createdAt/updatedAt`, `origin {platform, model, sessionHint, unstable}`, `task {goal, constraints[], acceptance[]}`, `plan.steps[] {id, title, status: pending|active|done|blocked, note}`, `decisions[] {seq, ts, summary, detail(capped)}`, `files {touched[] {path, op, lastTs}, truncated}`, `roles.assignments`, `git {branch, headSha, dirty, dirtySummary[], contentDigest, summaryTruncated} | null`, `handoff {status: open|sealed|received, reason, reasonClass, toPlatformHint, finalizedAt, receive_log[]}`, `journalSeq`, `compaction {droppedDecisions, note}`, `dedupeRing: string[]` (merge idempotency ring, capped 500, oldest evicted), transcript field (opt-in, redacted).
 
 `journal.ndjson` entry: `{seq, ts, type, dedupeKey, writerId, source, payload}`. Types: `decision | plan.set | plan.step | file.touch | note | roles.remap | task.update | git.update`. Every type is self-applicable for replay over `emptyBundle()`.
 
-Size budget (pure `compact.mjs`): decisions capped first-20 + last-150 + marker; `detail` <= 2000 chars; `files.touched` <= 300 (LRU); `dirtySummary` <= 100 lines. Deterministic truncation only — no LLM summarization.
+Size budget (pure `compact.mjs`): decisions capped first-20 + last-150 + marker; `detail` <= 2000 chars; `files.touched` <= 300 (LRU by `lastTs`, sets `files.truncated: true`); `git.dirtySummary` <= 100 lines (sets `git.summaryTruncated: true`; skipped when `git` is null). Deterministic truncation only — no LLM summarization.
 
 ## Module APIs
 
