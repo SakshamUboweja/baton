@@ -13,6 +13,7 @@ Verified 2026-07-11 against official docs and this machine. Re-verify floors whe
 - Hook events include `Stop`, `StopFailure`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`, `PostToolUseFailure`, and others.
 - **`StopFailure`** fires when a turn ends due to an API error; output and exit code are ignored (observability-only). Matcher filters by error type. **Enum snapshot (2026-07-11, code.claude.com/docs/en/hooks):** `rate_limit`, `overloaded`, `authentication_failed`, `oauth_org_not_allowed`, `billing_error`, `invalid_request`, `model_not_found`, `server_error`, `max_output_tokens`, `unknown`. Note: a Gate-1 reviewer disputed `overloaded`'s presence in the current enum — fixtures are generated from this snapshot and unknown values normalize to `unknown`, so drift is safe either way. Re-snapshot before freezing fixtures.
 - Limit strings (fallback tier): `You've hit your session limit · resets …` / `weekly limit` / `Opus limit`; throttle: `Server is temporarily limiting requests (not your usage limit)`; `API Error: Request rejected (429)`.
+- **Live capture (2026-07-12, this machine)**: a subagent died with `Agent terminated early due to an API error: You've hit your session limit · resets 2am (Asia/Dubai)` — reset hints can carry a timezone suffix in parentheses; the resetHint extractor and fixtures must cover this variant.
 - Attribution: `"attribution": {"commit": "", "pr": ""}` in settings.json (`includeCoAuthoredBy` is deprecated).
 
 ## Codex CLI (>= 0.144; this machine: 0.144.1)
