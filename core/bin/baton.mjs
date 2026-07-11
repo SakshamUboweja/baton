@@ -7,12 +7,26 @@ if (major < 20) {
 
 const fs = await import('node:fs');
 const { execFile } = await import('node:child_process');
+const { promisify } = await import('node:util');
 const { run } = await import('../src/cli.mjs');
-const code = run(process.argv.slice(2), {
+
+// Commands consume stdin as a string (hook payloads arrive that way).
+let stdin = '';
+if (!process.stdin.isTTY) {
+  try {
+    const { readFileSync } = fs.default ?? fs;
+    stdin = readFileSync(0, 'utf8');
+  } catch {
+    stdin = '';
+  }
+}
+
+const code = await run(process.argv.slice(2), {
   cwd: process.cwd(),
   env: process.env,
+  stdin,
   fs: fs.default ?? fs,
-  execFile,
+  execFile: promisify(execFile),
   now: () => new Date().toISOString(),
   host: (await import('node:os')).hostname(),
   pid: process.pid,

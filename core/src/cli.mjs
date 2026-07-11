@@ -3,6 +3,9 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { cmdDetect } from './commands/detect.mjs';
 import { cmdRemap } from './commands/remap.mjs';
+import { cmdCheckpoint } from './commands/checkpoint.mjs';
+import { cmdFinalize } from './commands/finalize.mjs';
+import { cmdReceive } from './commands/receive.mjs';
 
 const COMMANDS = [
   'checkpoint',
@@ -75,7 +78,7 @@ function cmdStatus(args, io) {
 /**
  * @param {string[]} argv process args after the binary
  * @param {any} io injected {cwd, stdout, stderr}
- * @returns {number} exit code
+ * @returns {number | Promise<number>} exit code
  */
 export function run(argv, io) {
   const args = argv.filter((a) => a !== '');
@@ -108,6 +111,9 @@ export function run(argv, io) {
   if (cmd === 'status') return cmdStatus(rest, io);
   if (cmd === 'detect') return cmdDetect(rest, io);
   if (cmd === 'remap') return cmdRemap(rest, io);
+  if (cmd === 'checkpoint') return cmdCheckpoint(rest, io);
+  if (cmd === 'finalize') return cmdFinalize(rest, io);
+  if (cmd === 'receive') return cmdReceive(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {
