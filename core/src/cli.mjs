@@ -1,6 +1,8 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import { cmdDetect } from './commands/detect.mjs';
+import { cmdRemap } from './commands/remap.mjs';
 
 const COMMANDS = [
   'checkpoint',
@@ -104,6 +106,8 @@ export function run(argv, io) {
   }
 
   if (cmd === 'status') return cmdStatus(rest, io);
+  if (cmd === 'detect') return cmdDetect(rest, io);
+  if (cmd === 'remap') return cmdRemap(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {
