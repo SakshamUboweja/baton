@@ -56,6 +56,9 @@ describe('probe catches group-free pathological patterns over non-alnum classes 
     ['\\d chained star', '\\d*\\d*\\d*\\d*\\d*\\d*\\d*\\d*\\d*\\d*\\d*\\d*!'],
     ['\\s chained star', '\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*\\s*!'],
     ['punctuation class chained star', '[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*[!-/]*X'],
+    // iter-3 F7: non-ASCII literal and class — the ASCII-only cover missed these.
+    ['non-ASCII literal chained star', 'é*é*é*é*é*é*é*é*é*é*é*é*!'],
+    ['non-ASCII escaped class-range chained star', '[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*!'],
   ];
   for (const [label, pattern] of HANGS) {
     it(`probeRegexSafe rejects: ${label}`, () => {
