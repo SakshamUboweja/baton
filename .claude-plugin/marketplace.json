@@ -1,0 +1,17 @@
+{
+  "name": "baton-marketplace",
+  "owner": {
+    "name": "SakshamUboweja",
+    "email": "ssakshamu@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "baton",
+      "source": "./",
+      "description": "Usage-limit failover across Claude Code, Codex CLI, and Cursor — hook-driven checkpoints, handoff seals, receive with role remap.",
+      "author": {
+        "name": "SakshamUboweja"
+      }
+    }
+  ]
+}
