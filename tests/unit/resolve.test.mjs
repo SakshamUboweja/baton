@@ -261,11 +261,25 @@ describe('resolveRoles — skip reasons', () => {
     assert.equal(assignments.r.skipped[0].platform, 'codex');
   });
 
-  it("capability 'installed' only -> skip, why 'unauthenticated'", () => {
+  it("capability 'installed' with a capped SUCCESS -> selectable + degraded, not skipped (iter-3 F1)", () => {
+    // A --version success caps capability at 'installed' but leaves auth
+    // UNVERIFIED (not verified-failed), so the platform stays selectable and is
+    // flagged degraded — per plan §Role matrix. Only a verified failure skips.
     const { assignments } = resolveRoles({
       config: oneRole([e('codex', 'a'), e('cursor', 'b')]),
       to: 'cursor',
       probes: { codex: { capability: 'installed', outcome: 'ok' }, cursor: { capability: 'authenticated', outcome: 'ok' } },
+    });
+    assert.equal(assignments.r.platform, 'codex', 'auth-unverified codex stays selectable at chain head');
+    assert.equal(assignments.r.degraded, true, 'the auth-unverified selection is flagged degraded');
+    assert.equal(assignments.r.skipped.length, 0);
+  });
+
+  it("capability 'installed' with a VERIFIED failure -> skip, why 'unauthenticated' (iter-3 F1)", () => {
+    const { assignments } = resolveRoles({
+      config: oneRole([e('codex', 'a'), e('cursor', 'b')]),
+      to: 'cursor',
+      probes: { codex: { capability: 'installed', outcome: 'error' }, cursor: { capability: 'authenticated', outcome: 'ok' } },
     });
     assert.equal(assignments.r.platform, 'cursor');
     assert.equal(assignments.r.skipped[0].why, 'unauthenticated');

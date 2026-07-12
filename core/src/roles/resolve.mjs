@@ -18,19 +18,27 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
     if (!(platform in (config.platforms ?? {}))) return 'unknown-platform';
     if (config.platforms[platform]?.enabled === false) return 'disabled';
     if (probes && probes[platform]) {
-      if (probes[platform].outcome === 'rate-limited') return 'rate-limited';
-      if (probes[platform].capability === 'installed') return 'unauthenticated';
-      if (probes[platform].capability === 'not-installed') return 'not-installed';
+      const { capability, outcome } = probes[platform];
+      if (outcome === 'rate-limited') return 'rate-limited';
+      if (capability === 'not-installed') return 'not-installed';
+      // 'installed' means installation was PROVEN but the probe was capped there
+      // (capOnSuccess) — authentication is UNVERIFIED, not verified-failed. Only
+      // a probe that ran and did NOT succeed (outcome !== 'ok') is a verified
+      // auth/reachability failure worth skipping; a capped success stays
+      // selectable and is flagged degraded below (iter-3 F1, plan §Role matrix).
+      if (capability === 'installed' && outcome !== 'ok') return 'unauthenticated';
     }
     return null;
   }
 
   // A selection is degraded when its availability is UNVERIFIED (gate-2 iter-2
-  // M3): with no probe cache at all, resolution is offline and EVERY selection
-  // is degraded (plan: "Offline resolution always succeeds, flagged degraded");
-  // with a partial cache, only the platforms the cache is missing are.
+  // M3, iter-3 F1): with no probe cache at all, resolution is offline and EVERY
+  // selection is degraded (plan: "Offline resolution always succeeds, flagged
+  // degraded"); with a partial cache, platforms the cache is missing are; and a
+  // platform probed only to 'installed' (auth unverified, e.g. a --version
+  // success) is degraded even though it stays selectable.
   /** @param {string} platform */
-  const probeUnverified = (platform) => probes == null || !probes[platform];
+  const probeUnverified = (platform) => probes == null || !probes[platform] || probes[platform].capability === 'installed';
 
   /** @type {Record<string, any>} */
   const assignments = {};
