@@ -90,6 +90,43 @@ describe('checkpoint — config-gated transcript tail capture (plan §Transcript
     assert.doesNotMatch(io.files()['/repo/.handoff/HANDOFF.md'], /message-14|\[redacted\]/, 'the tail is excluded from HANDOFF.md');
   });
 
+  // iter-3 F9: the transcript allowlist compares realpathSync outputs. On
+  // Windows those are backslash-spelled, so the caller must go through the
+  // separator-normalized containment — a raw startsWith would refuse every
+  // in-tree transcript. These pin the cmdCheckpoint CALLER (not just the helper).
+  const winRealpath = (io, map) => {
+    io.fs.realpathSync = (/** @type {any} */ p) => (map[String(p)] ?? String(p));
+  };
+
+  it('ON with Windows backslash realpaths: an in-tree transcript IS captured (F9)', async () => {
+    const io = makeIo({
+      files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),
+      stdin: preCompact,
+      now: T0,
+    });
+    // Simulate Windows realpaths for the root, the managed tree, and the
+    // transcript file (.handoff must resolve consistently or the checkpoint's
+    // own jail refuses the write before capture is even reached).
+    winRealpath(io, { '/repo': 'C:\\repo', '/repo/.handoff': 'C:\\repo\\.handoff', '/repo/.claude/t.jsonl': 'C:\\repo\\.claude\\t.jsonl' });
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(typeof snap.transcript?.tail, 'string', 'an in-tree transcript is captured despite backslash realpaths');
+  });
+
+  it('ON but the transcript realpath escapes to another volume: NOT captured (F9)', async () => {
+    const io = makeIo({
+      files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),
+      stdin: preCompact,
+      now: T0,
+    });
+    // The transcript path resolves outside the repo (a different volume); the
+    // managed tree still resolves in-repo so the checkpoint itself can write.
+    winRealpath(io, { '/repo': 'C:\\repo', '/repo/.handoff': 'C:\\repo\\.handoff', '/repo/.claude/t.jsonl': 'D:\\evil\\t.jsonl' });
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(snap.transcript, undefined, 'a cross-volume transcript is refused by the containment check');
+  });
+
   it('ON but a routine Stop event (not PreCompact): no capture', async () => {
     const io = makeIo({
       files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),

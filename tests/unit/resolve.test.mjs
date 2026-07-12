@@ -28,8 +28,10 @@ import { resolveRoles } from '../../core/src/roles/resolve.mjs';
 //        - platform NOT a key of config.platforms    -> skip, why 'unknown-platform'
 //        - config.platforms[p].enabled === false     -> skip, why 'disabled'
 //        - probes given & probes[p].outcome==='rate-limited' -> skip, why 'rate-limited'
-//        - probes given & probes[p].capability==='installed' (only, i.e. not
-//          authenticated/reachable)                  -> skip, why 'unauthenticated'
+//        - probes given & capability==='installed' AND outcome!=='ok' (a VERIFIED
+//          auth/reachability FAILURE)                 -> skip, why 'unauthenticated'
+//          (iter-3 F1: a capped SUCCESS {installed, ok} leaves auth UNVERIFIED —
+//          it stays selectable and is flagged degraded, it is NOT skipped)
 //      A platform with capability ∈ {authenticated, reachable} AND outcome
 //      ≠ 'rate-limited' is eligible.
 //   3. DEGRADED. If probes is a non-null object but has NO entry for the chosen

@@ -70,6 +70,43 @@ describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
     assert.throws(() => withLock('/repo', io, (t) => t), /reclaiming the dead lock|transient contention/i);
   });
 
+  it('the takeover note is journaled while the lock dir is HELD — seq allocated under the lock (iter-3 F2)', () => {
+    // Deterministic white-box guard for the under-lock-collision finding: the
+    // old code journaled the takeover during arbitration (dir renamed aside, NOT
+    // held), so its seq could collide with a free-path competitor's concurrent
+    // append. Assert the note is appended only while the canonical lock dir
+    // exists (held). Fails against journal-before-lock, which appends it while
+    // the dir is renamed away.
+    const io = makeIo({ files: { [OWNER]: deadOwner, '/repo/.handoff/bundle.json': '{"journalSeq":0}' } });
+    const LOCK = '/repo/.handoff/lock';
+    let heldAtNoteTime = null;
+    const realAppend = io.fs.appendFileSync.bind(io.fs);
+    io.fs.appendFileSync = (p, data) => {
+      if (String(p).endsWith('/journal.ndjson') && /took over stale lock/.test(String(data))) {
+        heldAtNoteTime = io.fs.existsSync(LOCK);
+      }
+      return realAppend(p, data);
+    };
+    withLock('/repo', io, (t) => t);
+    assert.equal(heldAtNoteTime, true, 'the takeover note is appended while the lock dir is held');
+  });
+
+  it('recoverLock journals its recovery note while HOLDING the lock (iter-3 F2)', () => {
+    const io = makeIo({ files: { [OWNER]: deadOwner, '/repo/.handoff/bundle.json': '{"journalSeq":0}' } });
+    const LOCK = '/repo/.handoff/lock';
+    let heldAtNoteTime = null;
+    const realAppend = io.fs.appendFileSync.bind(io.fs);
+    io.fs.appendFileSync = (p, data) => {
+      if (String(p).endsWith('/journal.ndjson') && /lock recovery/.test(String(data))) {
+        heldAtNoteTime = io.fs.existsSync(LOCK);
+      }
+      return realAppend(p, data);
+    };
+    const r = recoverLock('/repo', io, { force: true });
+    assert.equal(r.recovered, true, 'a provably-dead lock is recovered');
+    assert.equal(heldAtNoteTime, true, 'the recovery note is appended under a re-acquired lock, not after a bare rmSync');
+  });
+
   it('after release the lock is free and the next acquisition mints its own token', () => {
     const io = makeIo({ files: { [OWNER]: deadOwner } });
     const first = withLock('/repo', io, (t) => t);

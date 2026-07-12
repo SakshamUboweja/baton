@@ -90,4 +90,25 @@ describe('F12 — SessionStart hook never echoes the untrusted origin verbatim',
     await runHook(['SessionStart'], io);
     assert.match(io.stdoutText(), /from codex is pending/);
   });
+
+  it('refuses to read the bundle through a symlinked .handoff — emits no context (F12)', async () => {
+    const io = hookIo(sealedForeign('codex'));
+    // Simulate .handoff being a symlink: checkHandoffTree must refuse before the
+    // raw bundle read, so sessionStart emits nothing and never follows the link.
+    const realLstat = io.fs.lstatSync.bind(io.fs);
+    io.fs.lstatSync = (p) => {
+      if (String(p) === '/repo/.handoff') return { ...realLstat('/repo/.handoff'), isSymbolicLink: () => true, isDirectory: () => true, isFile: () => false };
+      return realLstat(p);
+    };
+    let readThroughTree = false;
+    const realRead = io.fs.readFileSync.bind(io.fs);
+    io.fs.readFileSync = (p, enc) => {
+      if (String(p) === '/repo/.handoff/bundle.json') readThroughTree = true;
+      return realRead(p, enc);
+    };
+    const code = await runHook(['SessionStart'], io);
+    assert.equal(code, 0, 'fail-open');
+    assert.equal(io.stdoutText(), '', 'no context is injected from an unsafe tree');
+    assert.equal(readThroughTree, false, 'the bundle is never read through the symlinked tree');
+  });
 });
