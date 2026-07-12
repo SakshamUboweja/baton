@@ -20,6 +20,37 @@ function readOrNull(io, path) {
 }
 
 /**
+ * Detect the template variables from the target tree (plan §Templates:
+ * "{{TEST_CMD}}-style variables filled by baton init from detection").
+ * Deterministic ladder; when nothing is detectable the fallback is an explicit
+ * fill-me hint, never a leftover {{VAR}}.
+ * @param {string} cwd @param {any} io
+ * @returns {Record<string, string>}
+ */
+function detectVars(cwd, io) {
+  let projectName = cwd.split('/').filter(Boolean).pop() ?? 'this project';
+  /** @type {string | null} */
+  let testCmd = null;
+  const pkgText = readOrNull(io, `${cwd}/package.json`);
+  if (pkgText !== null) {
+    try {
+      const pkg = JSON.parse(pkgText);
+      if (typeof pkg.name === 'string' && pkg.name.length > 0) projectName = pkg.name;
+      if (typeof pkg.scripts?.test === 'string') testCmd = 'npm test';
+    } catch {
+      // unparseable package.json — fall through to the other detectors
+    }
+  }
+  if (testCmd === null && io.fs.existsSync(`${cwd}/pyproject.toml`)) testCmd = 'pytest';
+  if (testCmd === null && io.fs.existsSync(`${cwd}/Cargo.toml`)) testCmd = 'cargo test';
+  if (testCmd === null && io.fs.existsSync(`${cwd}/go.mod`)) testCmd = 'go test ./...';
+  return { PROJECT_NAME: projectName, TEST_CMD: testCmd ?? '(set your test command)' };
+}
+
+/** @param {string} tpl @param {Record<string, string>} vars */
+const fillVars = (tpl, vars) => tpl.replace(/\{\{([A-Z_]+)\}\}/g, (m, k) => (k in vars ? vars[k] : m));
+
+/**
  * The plan phase of `baton init`: read-only. Composes the pure scaffold
  * transforms over the current tree and the packaged templates into an Action[]
  * whose previews are the exact bytes apply would write. Never writes.
@@ -31,11 +62,14 @@ export function planInit(cwd, opts, io) {
   const actions = [];
 
   const configTpl = readOrNull(io, join(TPL_DIR, 'baton.config.json.tpl'));
-  const agentsTpl = readOrNull(io, join(TPL_DIR, 'AGENTS.md.tpl'));
-  const claudeTpl = readOrNull(io, join(TPL_DIR, 'CLAUDE.md.tpl'));
-  if (configTpl === null || agentsTpl === null || claudeTpl === null) {
+  const agentsTplRaw = readOrNull(io, join(TPL_DIR, 'AGENTS.md.tpl'));
+  const claudeTplRaw = readOrNull(io, join(TPL_DIR, 'CLAUDE.md.tpl'));
+  if (configTpl === null || agentsTplRaw === null || claudeTplRaw === null) {
     throw new Error(`packaged templates missing under ${TPL_DIR} — broken install`);
   }
+  const vars = detectVars(cwd, io);
+  const agentsTpl = fillVars(agentsTplRaw, vars);
+  const claudeTpl = fillVars(claudeTplRaw, vars);
 
   const configPath = `${cwd}/baton.config.json`;
   if (readOrNull(io, configPath) === null) {

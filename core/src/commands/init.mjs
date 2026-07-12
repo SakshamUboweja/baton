@@ -37,6 +37,24 @@ export async function cmdInit(args, io) {
   const describe = (/** @type {any} */ a) =>
     a.op === 'write' ? `write ${a.path}` : a.op === 'skip' ? `skip  ${a.path} (${a.note})` : `REFUSE ${a.path} — ${a.note}`;
 
+  // --check (gate-2 fix 9): the CI drift gate. Read-only — a scaffolded tree
+  // where init would change nothing passes; anything init would write or
+  // refuse is drift and fails the check.
+  if (flags.check === true) {
+    const drift = actions.filter((a) => a.op !== 'skip');
+    if (flags.json) {
+      emitEnvelope(io, {
+        ok: drift.length === 0,
+        data: { drift: drift.map(({ id, path, op, note }) => ({ id, path, op, note: note ?? null })) },
+      });
+    } else if (drift.length === 0) {
+      io.stdout.write('baton init --check: no drift — rendered files match template output\n');
+    } else {
+      io.stderr.write(`baton init --check: drift detected — init would write:\n${drift.map((a) => `  ${describe(a)}`).join('\n')}\n`);
+    }
+    return drift.length === 0 ? 0 : 1;
+  }
+
   if (flags['dry-run'] === true) {
     if (flags.json) {
       emitEnvelope(io, { ok: true, data: { dryRun: true, actions: actions.map(({ id, path, op, note }) => ({ id, path, op, note: note ?? null })) } });
