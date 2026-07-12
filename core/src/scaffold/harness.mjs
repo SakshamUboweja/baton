@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { ensureIgnoreLine } from './gitignore.mjs';
 
 // Harness-surface writer for `baton init --codex` / `--cursor`. Read-only
 // planner (same Action shape as scaffold/plan.mjs); merges are add-only —
@@ -158,7 +159,9 @@ function copyAction(id, targetPath, tplPath, io) {
 /**
  * The plan phase of the harness scaffold. Gated: no flags, no actions.
  * @param {string} cwd
- * @param {{codex?: boolean, cursor?: boolean, withLegacyPrompts?: boolean}} opts
+ * @param {{codex?: boolean, cursor?: boolean, withLegacyPrompts?: boolean, gitignoreBase?: string | null}} opts
+ *   gitignoreBase: the .gitignore text AFTER the base scaffold's own gitignore
+ *   action (cmdInit passes it) so the two writers chain instead of clobber.
  * @param {any} io
  * @returns {import('./plan.mjs').Action[]}
  */
@@ -191,6 +194,26 @@ export function planHarnessInit(cwd, opts, io) {
     for (const [id, rel] of CURSOR_FILES) {
       actions.push(copyAction(id, `${cwd}/.cursor/${rel}`, join(ADAPTERS_DIR, 'cursor', rel), io));
     }
+  }
+
+  // The written hook manifests embed THIS machine's absolute node path, so they
+  // are machine-specific and must never be committed — ensure ignore lines for
+  // each adapter initialized. Chained from gitignoreBase (the base scaffold's
+  // planned text) so this write is a superset, never a clobber.
+  if (opts.codex === true || opts.cursor === true) {
+    let text = opts.gitignoreBase !== undefined ? opts.gitignoreBase : readOrNull(io, `${cwd}/.gitignore`);
+    let changed = false;
+    const patterns = [...(opts.codex === true ? ['.codex/hooks.json'] : []), ...(opts.cursor === true ? ['.cursor/hooks.json'] : [])];
+    for (const p of patterns) {
+      const r = ensureIgnoreLine(text, p);
+      text = r.text;
+      changed = changed || r.changed;
+    }
+    actions.push(
+      changed
+        ? { id: 'harness-gitignore', path: `${cwd}/.gitignore`, op: 'write', preview: /** @type {string} */ (text) }
+        : { id: 'harness-gitignore', path: `${cwd}/.gitignore`, op: 'skip', note: '.gitignore already covers the machine-specific hook manifests' },
+    );
   }
 
   return actions;

@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
+import { cmdInit } from '../../core/src/commands/init.mjs';
 import { planHarnessInit } from '../../core/src/scaffold/harness.mjs';
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,22 @@ const CURSOR_TPL = join(repoRoot, 'adapters', 'cursor', 'hooks.json');
 const BATON_ENTRY = join(repoRoot, 'core', 'bin', 'baton.mjs');
 const FAKE_NODE = '/opt/fake/nvm/v24/bin/node';
 const ROOT = '/repo';
+const TPL_DIR = join(repoRoot, 'templates');
+
+// Base-template seeds so full cmdInit runs succeed (mirrors init.test.mjs).
+const BASE_TEMPLATES = {
+  [join(TPL_DIR, 'baton.config.json.tpl')]: JSON.stringify({ schema: 'baton/config@1', roles: {}, platforms: {}, defaults: {} }),
+  [join(TPL_DIR, 'AGENTS.md.tpl')]: '## Handoff protocol\n\nCheckpoint after each subtask.\n',
+  [join(TPL_DIR, 'CLAUDE.md.tpl')]: '@AGENTS.md\n',
+};
+const GIT_CLEAN = {
+  'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' },
+  'git rev-parse HEAD': { stdout: 'abc123\n' },
+  'git status --porcelain': { stdout: '' },
+  'git diff --cached': { stdout: '' },
+  'git diff': { stdout: '' },
+  'git ls-files --others --exclude-standard': { stdout: '' },
+};
 
 // Seed the REAL packaged template bytes into memfs at their module-resolved paths.
 const realTemplates = {
@@ -53,6 +70,45 @@ function allCommands(manifest) {
   walk(manifest.hooks ?? {});
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// The absolute-path hook manifests are MACHINE-SPECIFIC (they embed this
+// machine's node path), so init must gitignore them — committing one would
+// break every other machine and node upgrade.
+// ---------------------------------------------------------------------------
+describe('init gitignores the machine-specific hook manifests', () => {
+  it('planHarnessInit(--codex --cursor) plans a .gitignore write covering both hooks.json paths', () => {
+    const actions = planHarnessInit(ROOT, { codex: true, cursor: true }, io());
+    const gi = actions.find((a) => a.path === `${ROOT}/.gitignore`);
+    assert.ok(gi && gi.op === 'write', 'a .gitignore action is planned');
+    assert.ok(gi.preview.includes('.codex/hooks.json'), 'covers .codex/hooks.json');
+    assert.ok(gi.preview.includes('.cursor/hooks.json'), 'covers .cursor/hooks.json');
+  });
+
+  it('with no harness flags, no .gitignore action is planned by the harness writer', () => {
+    const actions = planHarnessInit(ROOT, {}, io());
+    assert.equal(actions.find((a) => a.path === `${ROOT}/.gitignore`), undefined);
+  });
+
+  it('full `init --codex --cursor` on a FRESH tree lands .handoff/ AND both hooks.json lines (no clobber between the two gitignore writers)', async () => {
+    const fio = makeIo({ files: { ...realTemplates, ...BASE_TEMPLATES, [`${ROOT}/package.json`]: '{}' }, execResults: GIT_CLEAN, env: { HOME: '/home/u' }, execPath: FAKE_NODE });
+    const code = await cmdInit(['--codex', '--cursor'], fio);
+    assert.equal(code, 0, `init should succeed; stderr: ${fio.stderrText()}`);
+    const gi = fio.files()[`${ROOT}/.gitignore`];
+    assert.ok(gi, '.gitignore exists');
+    for (const line of ['.handoff/', '.codex/hooks.json', '.cursor/hooks.json']) {
+      assert.ok(gi.includes(line), `.gitignore covers ${line} — got:\n${gi}`);
+    }
+  });
+
+  it('a second full init is a byte-identical no-op (gitignore lines are not duplicated)', async () => {
+    const fio = makeIo({ files: { ...realTemplates, ...BASE_TEMPLATES, [`${ROOT}/package.json`]: '{}' }, execResults: GIT_CLEAN, env: { HOME: '/home/u' }, execPath: FAKE_NODE });
+    await cmdInit(['--codex', '--cursor'], fio);
+    const after = fio.files();
+    await cmdInit(['--codex', '--cursor'], fio);
+    assert.deepEqual(fio.files(), after, 'second run mutates nothing');
+  });
+});
 
 for (const [plat, flag] of [['codex', 'codex'], ['cursor', 'cursor']]) {
   describe(`baton init --${flag} — hook commands are absolute (PATH-independent)`, () => {

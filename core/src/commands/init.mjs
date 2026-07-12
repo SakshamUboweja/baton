@@ -31,11 +31,27 @@ export async function cmdInit(args, io) {
   /** @type {ReturnType<typeof planInit>} */
   let actions;
   try {
+    const base = planInit(root, { force: flags.force === true }, io);
+    // Feed the harness writer the gitignore text AS THE BASE SCAFFOLD LEAVES IT
+    // (planned write, else current file) so its own ignore lines chain on top —
+    // two independent reads would make the later write clobber the earlier one.
+    const gi = base.find((a) => a.id === 'gitignore');
+    /** @type {string | null} */
+    let gitignoreBase = null;
+    if (gi?.op === 'write') {
+      gitignoreBase = /** @type {string} */ (gi.preview);
+    } else {
+      try {
+        gitignoreBase = io.fs.readFileSync(`${root}/.gitignore`, 'utf8');
+      } catch {
+        gitignoreBase = null;
+      }
+    }
     actions = [
-      ...planInit(root, { force: flags.force === true }, io),
+      ...base,
       ...planHarnessInit(
         root,
-        { codex: flags.codex === true, cursor: flags.cursor === true, withLegacyPrompts: flags['with-legacy-prompts'] === true },
+        { codex: flags.codex === true, cursor: flags.cursor === true, withLegacyPrompts: flags['with-legacy-prompts'] === true, gitignoreBase },
         io,
       ),
     ];
