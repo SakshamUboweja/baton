@@ -100,7 +100,12 @@ describe('structural rejection of chained overlapping quantified ATOMS (iter-4 I
   ];
   for (const [label, pattern] of REJECTED) {
     it(`loadSignatures rejects a chained overlapping quantifier: ${label}`, () => {
-      assert.throws(() => loadWith({ matcher: { kind: 'regex', pattern } }), /ov/);
+      const started = Date.now();
+      // The message must be the STRUCTURAL one — NOT the probe-timeout message —
+      // so this test pins the load-time scanner, not the 1000ms probe backstop
+      // (which would still "reject" a reverted scanner, just slowly).
+      assert.throws(() => loadWith({ matcher: { kind: 'regex', pattern } }), /chained overlapping unbounded quantifiers|backtrack super-linearly/);
+      assert.ok(Date.now() - started < 500, 'rejection is structural + immediate, well under the 1000ms probe deadline (proves the scanner, not the probe, rejected)');
     });
   }
 

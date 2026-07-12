@@ -141,6 +141,19 @@ describe('finalize — seals the bundle', () => {
     assert.equal(snap.git.dirty, false);
   });
 
+  it('(iter-4 I2 sibling) git-refresh FAILURE seals git=null, never the stale prior snapshot', async () => {
+    // A seal must not carry a stale HEAD/dirty as current — the receive audits
+    // the seal's git against live state and would emit false "HEAD moved"
+    // warnings. On refresh failure finalize clears git to explicit unavailable.
+    const bundle = mkBundle();
+    bundle.git = { branch: 'main', headSha: 'OLDSHA', dirty: false, dirtySummary: [], contentDigest: 'old', summaryTruncated: false };
+    const io = seedIo({ bundle, execResults: {} }); // no git fixtures → gitSnapshot returns null
+    const code = await cmdFinalize(['--reason', "You've hit your session limit", '--to', 'codex'], io);
+    assert.equal(code, 0);
+    assert.equal(readSnapshot(io).git, null, 'stale git is cleared, not sealed as current');
+    assert.match(io.stderrText(), /git.*unavailable/i, 'a git-unavailable warning is surfaced');
+  });
+
   it('(F9) rotates the journal kind "finalize": sealed freeze + journal pair, marker cleared, live journal emptied', async () => {
     const io = seedIo();
     // A pending journal entry that must ride into the rotated history journal.

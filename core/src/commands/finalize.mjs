@@ -53,14 +53,18 @@ export async function cmdFinalize(args, io) {
   }
 
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
-  if (git === null) io.stderr.write('baton finalize: git state unavailable — sealing without a git refresh\n');
+  if (git === null) io.stderr.write('baton finalize: git state unavailable — sealing with git marked unavailable (not the stale prior snapshot)\n');
 
   const reasonClass =
     typeof flags['reason-class'] === 'string' ? flags['reason-class'] : inferReasonClass(reason, bundle.origin.platform, io);
 
   const sealed = {
     ...bundle,
-    git: git ?? bundle.git,
+    // NEVER seal the stale prior git snapshot (iter-4 I2 sibling): a receive
+    // audits the seal's git against live state, so stale HEAD/dirty would emit
+    // false "HEAD moved"/"dirty mismatch" warnings. On refresh failure seal an
+    // explicit unavailable (null) git; receive re-derives it live regardless.
+    git,
     updatedAt: io.now(),
     handoff: {
       ...bundle.handoff,

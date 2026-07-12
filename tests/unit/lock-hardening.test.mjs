@@ -137,6 +137,27 @@ describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
     assert.equal(io.fs.existsSync('/repo/.handoff/lock'), true, 'the live lock is left intact');
   });
 
+  it('a takeover journalNote failure does NOT abort acquisition or leak the lock (iter-4 I7)', () => {
+    // journalNote runs after publishOwner but before the token returns to
+    // withLock. Without the try/catch, a throw there escapes acquire() → the
+    // release finally never runs → the lock leaks with a live owner. Make the
+    // note append THROW and assert acquisition still completes and releases.
+    const io = makeIo({ files: { [OWNER]: deadOwner, '/repo/.handoff/bundle.json': '{"journalSeq":0}' } });
+    const realAppend = io.fs.appendFileSync.bind(io.fs);
+    io.fs.appendFileSync = (p, data) => {
+      if (String(p).endsWith('/journal.ndjson') && /took over stale lock/.test(String(data))) {
+        throw new Error('simulated disk-full on the audit note');
+      }
+      return realAppend(p, data);
+    };
+    let token;
+    assert.doesNotThrow(() => {
+      token = withLock('/repo', io, (t) => t);
+    }, 'a note-write failure must not abort the reclaim');
+    assert.ok(token, 'the token is returned despite the note failure');
+    assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'the lock is released (no leak)');
+  });
+
   it('after release the lock is free and the next acquisition mints its own token', () => {
     const io = makeIo({ files: { [OWNER]: deadOwner } });
     const first = withLock('/repo', io, (t) => t);

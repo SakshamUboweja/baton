@@ -253,6 +253,17 @@ describe('doctor — envelope + check aggregation', () => {
     const s2 = findCheck(envelope(io2), /codex-hooks/).states;
     assert.equal(s2.observed, true, 'a codex-sourced journal entry is the observed canary');
   });
+
+  it('reports the four states for the cursor hook surface too (iter-4 I5)', async () => {
+    // Same shared reporter, but pin cursor explicitly so a future divergence is caught.
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.cursor/hooks.json`]: '{"version":1,"hooks":{"stop":"node baton.mjs checkpoint"}}' } });
+    await cmdDoctor(['--json'], io);
+    const s = findCheck(envelope(io), /cursor-hooks/).states;
+    assert.equal(s.installed, true);
+    assert.equal(s.enabled, true);
+    assert.equal(s.trusted, 'unknown');
+    assert.equal(s.observed, false);
+  });
 });
 
 // ===========================================================================
