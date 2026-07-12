@@ -1,5 +1,6 @@
 import { atomicWriteText, safeReadJson, backupThenWrite, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
 import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+import { checkHandoffTree, assertHandoffTreeSafe } from '../util/jail.mjs';
 import { emptyBundle, validateBundle } from './schema.mjs';
 import { applyEvent } from './merge.mjs';
 import { renderHandoffMd } from './render.mjs';
@@ -97,15 +98,21 @@ function resolveBase(io, p, warnings) {
 
 /**
  * Load the active bundle with full crash recovery. Read path — not lock-gated;
- * rotation-marker reconciliation is part of load.
+ * rotation-marker reconciliation is part of load. A managed tree that fails
+ * the symlink/realpath jail (gate-2 fix 6) is refused outright: bundle null,
+ * `unsafe: true`, and the problem in warnings — callers must not treat this as
+ * "no bundle yet" and seed through the link.
  * @param {string} root @param {any} io
- * @returns {{bundle: any | null, warnings: string[]}}
+ * @returns {{bundle: any | null, warnings: string[], unsafe?: boolean}}
  */
 export function loadBundle(root, io) {
   const p = bundlePaths(root);
   /** @type {string[]} */
   const warnings = [];
   if (!io.fs.existsSync(p.dir)) return { bundle: null, warnings };
+
+  const safe = checkHandoffTree(root, io);
+  if (!safe.ok) return { bundle: null, warnings: [safe.problem], unsafe: true };
 
   reconcileMarker(io, p, warnings);
 
@@ -134,6 +141,7 @@ export function loadBundle(root, io) {
 export function writeSnapshotIn(root, bundle, io, token) {
   const p = bundlePaths(root);
   return guardedWrite(root, io, token, () => {
+    assertHandoffTreeSafe(root, io);
     ensureDir(io.fs, p.dir);
     backupThenWrite(io.fs, p.snapshot, JSON.stringify(bundle, null, 2) + '\n');
     atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bundle));
@@ -159,6 +167,7 @@ export function appendJournal(root, entry, io) {
   const p = bundlePaths(root);
   return withLock(root, io, (token) =>
     guardedWrite(root, io, token, () => {
+      assertHandoffTreeSafe(root, io);
       ensureDir(io.fs, p.dir);
       let seq = entry.seq;
       let toAppend = entry;
@@ -198,6 +207,7 @@ export function rotateJournal(root, kind, io) {
 export function rotateJournalIn(root, kind, io, token) {
   const p = bundlePaths(root);
   return guardedWrite(root, io, token, () => {
+    assertHandoffTreeSafe(root, io);
     ensureDir(io.fs, p.dir);
     const startedAt = io.now();
     const stem = `${tsForFile(startedAt)}.${kind}`;

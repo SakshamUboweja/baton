@@ -1,6 +1,7 @@
 import { bundlePaths } from '../bundle/store.mjs';
 import { withLock, LockHeldError } from '../bundle/lock.mjs';
 import { atomicWriteText, atomicWriteJson } from '../util/fsx.mjs';
+import { checkHandoffTree } from '../util/jail.mjs';
 import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 /**
@@ -22,14 +23,21 @@ function stripTranscript(v) {
   return v;
 }
 
-/** @param {any} io @param {string} dir @returns {string[]} */
+/**
+ * lstat walk (gate-2 fix 6): never follows links. The tree was jail-checked
+ * before the lock, but a symlink appearing mid-walk still throws rather than
+ * letting the scrub rewrite bytes outside the repository.
+ * @param {any} io @param {string} dir @returns {string[]}
+ */
 function walk(io, dir) {
   /** @type {string[]} */
   const out = [];
   if (!io.fs.existsSync(dir)) return out;
   for (const name of io.fs.readdirSync(dir)) {
     const p = `${dir}/${name}`;
-    if (io.fs.statSync(p).isDirectory()) out.push(...walk(io, p));
+    const st = io.fs.lstatSync(p);
+    if (st.isSymbolicLink()) throw new Error(`${p} is a symlink — refusing to purge through links (managed-tree jail)`);
+    if (st.isDirectory()) out.push(...walk(io, p));
     else out.push(p);
   }
   return out;
@@ -93,6 +101,15 @@ export async function cmdPurgeTranscript(args, io) {
     if (flags.json) emitEnvelope(io, { ok: true, data: { purged: 0, note: 'no .handoff directory — nothing to purge' } });
     else io.stdout.write('purge-transcript: no .handoff directory — nothing to purge\n');
     return 0;
+  }
+
+  // Jail check BEFORE the lock: acquiring the lock mkdirs inside .handoff, so
+  // a symlinked tree must be refused before any write lands through the link.
+  const safe = checkHandoffTree(root, io);
+  if (!safe.ok) {
+    if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'unsafe-tree', msg: safe.problem } });
+    else io.stderr.write(`baton purge-transcript: ${safe.problem}\n`);
+    return 1;
   }
 
   try {

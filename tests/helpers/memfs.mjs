@@ -172,12 +172,25 @@ export function makeMemfs(initialFiles = {}) {
       const np = normalize(p);
       if (store.has(np)) {
         const size = Buffer.byteLength(store.get(np));
-        return { isFile: () => true, isDirectory: () => false, size, mtimeMs: mtimes.get(np) || 0 };
+        return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, size, mtimeMs: mtimes.get(np) || 0 };
       }
       if (dirs.has(np)) {
-        return { isFile: () => false, isDirectory: () => true, size: 0, mtimeMs: mtimes.get(np) || 0 };
+        return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false, size: 0, mtimeMs: mtimes.get(np) || 0 };
       }
       throw fsError('ENOENT', 'stat', np);
+    },
+
+    // The fake cannot represent symlinks, so lstat === stat and realpath is
+    // normalization. Symlink-refusal behavior is proven over the real fs in
+    // tests/integration/symlink-escape.test.mjs.
+    lstatSync(p) {
+      return fs.statSync(p);
+    },
+
+    realpathSync(p) {
+      const np = normalize(p);
+      if (!store.has(np) && !dirs.has(np)) throw fsError('ENOENT', 'realpath', np);
+      return np;
     },
 
     copyFileSync(src, dest) {

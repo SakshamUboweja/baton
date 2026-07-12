@@ -61,8 +61,16 @@ function run(flags, platform, io) {
   const events = normalizeHookPayload(raw, platform, session);
   if (events.length === 0) return 0;
 
-  const { bundle, warnings } = loadBundle(root, io);
+  const { bundle, warnings, unsafe } = loadBundle(root, io);
   for (const w of warnings) io.stderr.write(`baton checkpoint: ${w}\n`);
+
+  // An unsafe managed tree (symlinked .handoff — gate-2 fix 6) is NOT "no
+  // bundle yet": seeding here would write through the link. Refuse everything;
+  // hook-safety keeps the refusal soft outside --strict.
+  if (unsafe === true) {
+    io.stderr.write('baton checkpoint: managed tree failed the symlink/realpath jail — nothing written\n');
+    return strict ? 1 : 0;
+  }
 
   let active = bundle;
   let mustRewrite = false;
