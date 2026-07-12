@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { loadBundle, writeSnapshot, rotateJournal } from '../bundle/store.mjs';
+import { loadBundle, writeSnapshotIn, rotateJournalIn } from '../bundle/store.mjs';
+import { withLock } from '../bundle/lock.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
 import { renderResumePrompt } from './prompt.mjs';
@@ -43,6 +44,11 @@ function deriveToken(root, bundle, opts, io) {
   return dedupeKey({
     generation: bundle.generation,
     journalSeq: bundle.journalSeq,
+    // The seal state is a bound input too (gate-2 fix): a competing receiver
+    // that lands between this token's derivation and its commit changes
+    // status/receive_log, so the loser's token cannot re-derive.
+    handoffStatus: bundle.handoff?.status ?? null,
+    receives: Array.isArray(bundle.handoff?.receive_log) ? bundle.handoff.receive_log.length : 0,
     origin: opts.origin,
     reason: opts.reason,
     configDigest,
@@ -123,6 +129,17 @@ export function prepare(root, opts, io) {
  * @returns {{adopted: boolean, generation: number, archivedTo: string}}
  */
 export function commit(root, token, opts, io) {
+  // ONE operation-scoped lock across revalidation and every mutation (gate-2
+  // fix: reviewers a#1/b#11): two competing receivers serialize here, and the
+  // loser's re-derivation sees the winner's generation/status/receive_log.
+  return withLock(root, io, (fence) => commitLocked(root, token, opts, io, fence));
+}
+
+/**
+ * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io @param {string} fence
+ * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+ */
+function commitLocked(root, token, opts, io, fence) {
   const { bundle } = loadBundle(root, io);
   if (bundle === null) throw new Error(`no handoff bundle under ${root}/.handoff — nothing to receive; run receive --prepare first`);
 
@@ -158,9 +175,10 @@ export function commit(root, token, opts, io) {
   };
 
   // Freeze order: the received seal is written first so the 'receive' rotation
-  // archives exactly that state (never the pre-commit bundle).
-  writeSnapshot(root, receivedSeal, io);
-  const archivedTo = rotateJournal(root, 'receive', io);
+  // archives exactly that state (never the pre-commit bundle). All three
+  // mutations run under the SAME lock acquisition, fence-checked per write.
+  writeSnapshotIn(root, receivedSeal, io, fence);
+  const archivedTo = rotateJournalIn(root, 'receive', io, fence);
 
   const { config } = loadConfig(root, io);
   const next = {
@@ -174,7 +192,7 @@ export function commit(root, token, opts, io) {
     },
     handoff: { ...receivedSeal.handoff, status: 'open' },
   };
-  writeSnapshot(root, next, io);
+  writeSnapshotIn(root, next, io, fence);
 
   return { adopted: true, generation: next.generation, archivedTo };
 }

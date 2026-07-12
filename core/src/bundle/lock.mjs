@@ -1,5 +1,6 @@
 import { atomicWriteJson } from '../util/fsx.mjs';
-import { appendEntry } from '../util/jsonl.mjs';
+import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+import { dedupeKey } from '../util/ids.mjs';
 
 /**
  * Operation-scoped mutation lock (plan §Concurrency, Lock model).
@@ -61,9 +62,31 @@ function inspect(io, p) {
 /** @param {any} io @param {ReturnType<typeof lockPaths>} p @param {string} text */
 function journalNote(io, p, text) {
   io.fs.mkdirSync(p.dir, { recursive: true });
+  // Allocate seq + dedupeKey like every other journal entry (gate-2 fix,
+  // reviewer-b finding 2): a keyless, seq-less note poisons journalSeq to NaN
+  // on replay and dedupes every later keyless event. We are already inside the
+  // lock here, so reading the tail for allocation is race-free.
+  let tailSeq = 0;
+  try {
+    const snap = JSON.parse(io.fs.readFileSync(`${p.dir}/bundle.json`, 'utf8'));
+    if (typeof snap?.journalSeq === 'number') tailSeq = snap.journalSeq;
+  } catch {
+    // no snapshot yet — journal tail below still counts
+  }
+  try {
+    for (const e of readAllTolerant(io.fs, p.journal).entries) {
+      if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+    }
+  } catch {
+    // no journal yet
+  }
+  const ts = io.now();
   appendEntry(io.fs, p.journal, {
-    ts: io.now(),
+    seq: tailSeq + 1,
+    ts,
     type: 'note',
+    dedupeKey: dedupeKey({ ts, type: 'note', source: 'lock', text }),
+    writerId: ['lock', io.host, io.pid].join('-'),
     source: 'lock',
     payload: { text },
   });

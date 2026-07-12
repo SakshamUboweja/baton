@@ -3,7 +3,7 @@ import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
 import { emptyBundle, validateBundle } from './schema.mjs';
 import { applyEvent } from './merge.mjs';
 import { renderHandoffMd } from './render.mjs';
-import { withLock } from './lock.mjs';
+import { withLock, guardedWrite } from './lock.mjs';
 
 const RETAIN_PER_KIND = 10;
 
@@ -126,17 +126,27 @@ export function loadBundle(root, io) {
 }
 
 /**
+ * Lock-context snapshot write: caller already holds the repo lock and passes
+ * its fencing token; the write is fence-checked immediately before landing
+ * (the fast-abort layer — gate-2 fix, reviewer-b finding 12).
+ * @param {string} root @param {any} bundle @param {any} io @param {string} token
+ */
+export function writeSnapshotIn(root, bundle, io, token) {
+  const p = bundlePaths(root);
+  return guardedWrite(root, io, token, () => {
+    ensureDir(io.fs, p.dir);
+    backupThenWrite(io.fs, p.snapshot, JSON.stringify(bundle, null, 2) + '\n');
+    atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bundle));
+  });
+}
+
+/**
  * Persist a snapshot: back up the previous good one, write atomically, render
  * HANDOFF.md alongside. Mutation — runs under the repo lock.
  * @param {string} root @param {any} bundle @param {any} io
  */
 export function writeSnapshot(root, bundle, io) {
-  const p = bundlePaths(root);
-  return withLock(root, io, () => {
-    ensureDir(io.fs, p.dir);
-    backupThenWrite(io.fs, p.snapshot, JSON.stringify(bundle, null, 2) + '\n');
-    atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bundle));
-  });
+  return withLock(root, io, (token) => writeSnapshotIn(root, bundle, io, token));
 }
 
 /**
@@ -147,25 +157,27 @@ export function writeSnapshot(root, bundle, io) {
  */
 export function appendJournal(root, entry, io) {
   const p = bundlePaths(root);
-  return withLock(root, io, () => {
-    ensureDir(io.fs, p.dir);
-    let seq = entry.seq;
-    let toAppend = entry;
-    if (typeof seq !== 'number') {
-      const snap = safeReadJson(io.fs, p.snapshot);
-      const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
-      let tailSeq = 0;
-      if (io.fs.existsSync(p.journal)) {
-        for (const e of readAllTolerant(io.fs, p.journal).entries) {
-          if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+  return withLock(root, io, (token) =>
+    guardedWrite(root, io, token, () => {
+      ensureDir(io.fs, p.dir);
+      let seq = entry.seq;
+      let toAppend = entry;
+      if (typeof seq !== 'number') {
+        const snap = safeReadJson(io.fs, p.snapshot);
+        const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+        let tailSeq = 0;
+        if (io.fs.existsSync(p.journal)) {
+          for (const e of readAllTolerant(io.fs, p.journal).entries) {
+            if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+          }
         }
+        seq = Math.max(snapSeq, tailSeq) + 1;
+        toAppend = { ...entry, seq };
       }
-      seq = Math.max(snapSeq, tailSeq) + 1;
-      toAppend = { ...entry, seq };
-    }
-    appendEntry(io.fs, p.journal, toAppend);
-    return seq;
-  });
+      appendEntry(io.fs, p.journal, toAppend);
+      return seq;
+    }),
+  );
 }
 
 /**
@@ -175,8 +187,17 @@ export function appendJournal(root, entry, io) {
  * @returns {string} the history stem for this rotation
  */
 export function rotateJournal(root, kind, io) {
+  return withLock(root, io, (token) => rotateJournalIn(root, kind, io, token));
+}
+
+/**
+ * Lock-context rotation: caller holds the lock and passes its fencing token.
+ * @param {string} root @param {'finalize'|'takeover'|'receive'} kind @param {any} io @param {string} token
+ * @returns {string} the history stem for this rotation
+ */
+export function rotateJournalIn(root, kind, io, token) {
   const p = bundlePaths(root);
-  return withLock(root, io, () => {
+  return guardedWrite(root, io, token, () => {
     ensureDir(io.fs, p.dir);
     const startedAt = io.now();
     const stem = `${tsForFile(startedAt)}.${kind}`;

@@ -62,9 +62,14 @@ export function applyEvent(bundle, event) {
   }
 
   out.updatedAt = ts;
-  out.journalSeq = Math.max(out.journalSeq, seq);
-  out.dedupeRing.push(event.dedupeKey);
-  if (out.dedupeRing.length > RING_CAP) out.dedupeRing.splice(0, out.dedupeRing.length - RING_CAP);
+  // Harden against foreign/keyless entries (gate-2 fix): a missing seq must
+  // never poison journalSeq to NaN, and an absent dedupeKey must never enter
+  // the ring (undefined in the ring dedupes every later keyless event).
+  if (typeof seq === 'number' && Number.isFinite(seq)) out.journalSeq = Math.max(out.journalSeq, seq);
+  if (typeof event.dedupeKey === 'string' && event.dedupeKey.length > 0) {
+    out.dedupeRing.push(event.dedupeKey);
+    if (out.dedupeRing.length > RING_CAP) out.dedupeRing.splice(0, out.dedupeRing.length - RING_CAP);
+  }
 
   return out;
 }

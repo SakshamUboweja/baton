@@ -6,7 +6,7 @@ if (major < 20) {
 }
 
 const fs = await import('node:fs');
-const { execFile } = await import('node:child_process');
+const { execFile, execFileSync } = await import('node:child_process');
 const { promisify } = await import('node:util');
 const { run } = await import('../src/cli.mjs');
 
@@ -30,13 +30,28 @@ const code = await run(process.argv.slice(2), {
   now: () => new Date().toISOString(),
   host: (await import('node:os')).hostname(),
   pid: process.pid,
-  startTime: null,
-  processAlive: (/** @type {number} */ pid) => {
+  // Epoch ms of THIS process's start — comparable against `ps` output when a
+  // later checker verifies whether our recorded pid was reused (gate-2 fix).
+  startTime: Math.round(performance.timeOrigin),
+  processAlive: (/** @type {number} */ pid, /** @type {number | null} */ startTime) => {
     try {
       process.kill(pid, 0);
-      return true;
+    } catch (err) {
+      // EPERM proves the process EXISTS (another user's live process) — never
+      // read a permission error as provably dead (gate-2 reviewer-b finding 13).
+      return /** @type {any} */ (err)?.code === 'EPERM';
+    }
+    if (typeof startTime !== 'number') return true;
+    // The pid is alive — verify it is the SAME process (pid reuse check): a
+    // wildly different OS start time means the recorded owner is gone.
+    try {
+      const out = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8', timeout: 2000 }).trim();
+      if (out === '') return false;
+      const started = Date.parse(out);
+      if (!Number.isFinite(started)) return true; // unparseable — stay conservative: treat as alive
+      return Math.abs(started - startTime) < 10_000;
     } catch {
-      return false;
+      return true; // unverifiable — never steal on uncertainty
     }
   },
   newFencingToken: () => `tok-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
