@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import { bundlePaths, loadBundle, writeSnapshot, rotateJournal } from '../bundle/store.mjs';
+import { bundlePaths, loadBundle, writeSnapshotIn, rotateJournalIn } from '../bundle/store.mjs';
+import { withLock } from '../bundle/lock.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
@@ -52,37 +53,55 @@ export async function cmdFinalize(args, io) {
     return 1;
   }
 
+  // Capture git BEFORE the lock — it is async and must not straddle the lock.
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
   if (git === null) io.stderr.write('baton finalize: git state unavailable — sealing with git marked unavailable (not the stale prior snapshot)\n');
 
-  const reasonClass =
-    typeof flags['reason-class'] === 'string' ? flags['reason-class'] : inferReasonClass(reason, bundle.origin.platform, io);
+  // ONE atomic locked span (iter-5 A2): the seal, snapshot write, and journal
+  // rotation run under a SINGLE lock acquisition + fence, and the bundle is
+  // RELOADED inside the lock. The old code loaded before the async git await
+  // then sealed + wrote + rotated through separate locks, so a decision appended
+  // during the await was sealed from a stale bundle and survived only in the
+  // rotated journal. Reloading inside the lock includes it in the seal.
+  const sealed = withLock(root, io, (token) => {
+    const current = loadBundle(root, io).bundle;
+    if (current === null) return null; // deleted concurrently between the checks
+    const reasonClass =
+      typeof flags['reason-class'] === 'string' ? flags['reason-class'] : inferReasonClass(reason, current.origin.platform, io);
+    const s = {
+      ...current,
+      // NEVER seal the stale prior git snapshot (iter-4 I2 sibling): a receive
+      // audits the seal's git against live state, so stale HEAD/dirty would emit
+      // false "HEAD moved"/"dirty mismatch" warnings. On refresh failure seal an
+      // explicit unavailable (null) git; receive re-derives it live regardless.
+      git,
+      updatedAt: io.now(),
+      handoff: {
+        ...current.handoff,
+        status: 'sealed',
+        reason,
+        reasonClass,
+        toPlatformHint: typeof flags.to === 'string' ? flags.to : null,
+        finalizedAt: io.now(),
+      },
+    };
+    writeSnapshotIn(root, s, io, token);
+    rotateJournalIn(root, 'finalize', io, token);
+    return s;
+  });
 
-  const sealed = {
-    ...bundle,
-    // NEVER seal the stale prior git snapshot (iter-4 I2 sibling): a receive
-    // audits the seal's git against live state, so stale HEAD/dirty would emit
-    // false "HEAD moved"/"dirty mismatch" warnings. On refresh failure seal an
-    // explicit unavailable (null) git; receive re-derives it live regardless.
-    git,
-    updatedAt: io.now(),
-    handoff: {
-      ...bundle.handoff,
-      status: 'sealed',
-      reason,
-      reasonClass,
-      toPlatformHint: typeof flags.to === 'string' ? flags.to : null,
-      finalizedAt: io.now(),
-    },
-  };
-
-  writeSnapshot(root, sealed, io);
-  rotateJournal(root, 'finalize', io);
+  if (sealed === null) {
+    const error = { code: 'no-bundle', msg: `handoff bundle vanished during finalize at ${paths.snapshot}` };
+    if (flags.json) emitEnvelope(io, { ok: false, error });
+    else io.stderr.write(`baton finalize: ${error.msg}\n`);
+    return 1;
+  }
 
   if (flags.json) {
     emitEnvelope(io, { ok: true, data: { bundlePath: paths.snapshot, handoffMdPath: paths.handoffMd } });
   } else {
-    io.stdout.write(`sealed — reason: ${reason}${reasonClass ? ` (${reasonClass})` : ''}${sealed.handoff.toPlatformHint ? ` — next: ${sealed.handoff.toPlatformHint}` : ''}\n`);
+    const rc = sealed.handoff.reasonClass;
+    io.stdout.write(`sealed — reason: ${reason}${rc ? ` (${rc})` : ''}${sealed.handoff.toPlatformHint ? ` — next: ${sealed.handoff.toPlatformHint}` : ''}\n`);
   }
   return 0;
 }

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { cmdFinalize } from '../../core/src/commands/finalize.mjs';
-import { bundlePaths } from '../../core/src/bundle/store.mjs';
+import { bundlePaths, appendJournal } from '../../core/src/bundle/store.mjs';
 import { readAllTolerant } from '../../core/src/util/jsonl.mjs';
 
 // ---------------------------------------------------------------------------
@@ -139,6 +139,30 @@ describe('finalize — seals the bundle', () => {
     assert.equal(snap.git.branch, 'main');
     assert.equal(snap.git.headSha, 'a1b2c3d4e5f6a7b8c9d0');
     assert.equal(snap.git.dirty, false);
+  });
+
+  it('(iter-5 A2) a decision appended DURING the git await lands in the seal (reload inside the lock)', async () => {
+    // The seal is built from a reload INSIDE the lock, after the async git
+    // capture. Simulate a concurrent process appending a decision to the journal
+    // during the git await: it must appear in the sealed bundle, not survive only
+    // in the rotated journal (the old load-before-await code stranded it).
+    const io = seedIo();
+    const realExec = io.execFile;
+    let raced = false;
+    io.execFile = (/** @type {string} */ cmd, /** @type {string[]} */ args, /** @type {any} */ opts) => {
+      if (cmd === 'git' && !raced) {
+        raced = true;
+        appendJournal('/repo', { ts: NOW, type: 'decision', payload: { summary: 'raced-in decision' }, dedupeKey: 'raced-1', writerId: 'other-1' }, io);
+      }
+      return realExec(cmd, args, opts);
+    };
+    const code = await cmdFinalize(['--reason', "You've hit your session limit", '--to', 'codex'], io);
+    assert.equal(code, 0);
+    const snap = readSnapshot(io);
+    assert.ok(
+      (snap.decisions ?? []).some((/** @type {any} */ d) => d.summary === 'raced-in decision'),
+      'the decision appended during the git await is included in the seal, not lost to the rotation',
+    );
   });
 
   it('(iter-4 I2 sibling) git-refresh FAILURE seals git=null, never the stale prior snapshot', async () => {

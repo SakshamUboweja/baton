@@ -51,6 +51,32 @@ describe('checkpoint — bounded git refresh on important checkpoints', () => {
     assert.ok(snap.decisions.some((/** @type {any} */ d) => d.summary === 'chose approach A'));
   });
 
+  it('(iter-5 A1) a takeover landing DURING the git await is not clobbered by the snapshot rewrite', async () => {
+    // The rewrite captures git (async) then reloads UNDER the lock. Simulate a
+    // concurrent --take-over to codex that writes a fresh bundle while git is
+    // awaited: the reload-inside-lock must pick it up, not overwrite it with the
+    // stale pre-await (claude-code) bundle. The OLD load-outside-lock code rolled
+    // the origin back to claude-code and lost the new owner's state.
+    const io = makeIo({ files: { '/repo/.handoff/bundle.json': bundleJson() }, stdin: importantEvent, now: T0 });
+    const takeover = JSON.parse(bundleJson());
+    takeover.bundleId = 'b_takeover000000';
+    takeover.origin = { platform: 'codex', model: 'gpt-5.6-sol', sessionHint: 'codex-s', unstable: false };
+    let wrote = false;
+    io.execFile = async (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+      if (cmd === 'git' && !wrote) {
+        wrote = true; // the concurrent takeover lands mid-await, before the lock is taken
+        io.fs.writeFileSync('/repo/.handoff/bundle.json', JSON.stringify(takeover, null, 2) + '\n');
+      }
+      const sub = args[0];
+      if (sub === 'rev-parse') return { stdout: args.includes('--abbrev-ref') ? 'main\n' : 'abc123\n', stderr: '' };
+      return { stdout: '', stderr: '' };
+    };
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(snap.origin.platform, 'codex', 'the concurrent takeover survives — rewrite reloaded inside the lock, did not clobber');
+    assert.equal(snap.bundleId, 'b_takeover000000', 'the new owner bundle is preserved');
+  });
+
   it('git refresh FAILURE clears a prior git section, never presents stale (iter-4 I2/F5)', async () => {
     // A bundle that already carries a git snapshot, then a checkpoint where git
     // is unavailable (no execResults). The stale HEAD/dirty must NOT survive —

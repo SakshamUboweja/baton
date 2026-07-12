@@ -1,4 +1,4 @@
-import { bundlePaths, loadBundle, writeSnapshot, appendJournal, rotateJournal } from '../bundle/store.mjs';
+import { bundlePaths, loadBundle, writeSnapshot, writeSnapshotIn, appendJournal, rotateJournal } from '../bundle/store.mjs';
 import { withLock } from '../bundle/lock.mjs';
 import { emptyBundle } from '../bundle/schema.mjs';
 import { normalizeHookPayload } from '../bundle/normalize.mjs';
@@ -291,31 +291,34 @@ async function run(flags, platform, io) {
 
   let rewritten = false;
   if (mustRewrite || important || elapsed || accreted >= THROTTLE_EVENT_COUNT) {
-    const merged = loadBundle(root, io).bundle;
-    if (merged) {
-      // Bounded git refresh on EVERY snapshot rewrite (gate-2 iter-2 M1): a
-      // mechanical checkpoint is defined to carry branch/HEAD/dirty, so any
-      // rewrite — routine Stop that cleared the throttle included, not only
-      // "important" events — refreshes git; unavailability degrades to the
-      // previous git state (or null), never a failure.
-      const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+    // Bounded git refresh on EVERY snapshot rewrite (gate-2 iter-2 M1): a
+    // mechanical checkpoint carries branch/HEAD/dirty. Capture git BEFORE the
+    // lock — it is async and must not straddle the lock — then do ONE atomic
+    // read-modify-write UNDER the lock (iter-5 A1): reload the bundle inside the
+    // lock, apply git, and write with the fencing token. The old code loaded
+    // outside the lock, awaited git (yielding the event loop), then wrote the
+    // stale bundle, so a concurrent --take-over during the await was clobbered
+    // (origin rolled back, the new owner's event lost). Reloading inside the
+    // lock guarantees the write is built from current state.
+    const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+    rewritten = withLock(root, io, (token) => {
+      const merged = loadBundle(root, io).bundle;
+      if (!merged) return false;
       if (git !== null) {
         merged.git = git;
       } else {
         // git refresh failed/timed out (iter-4 I2/F5): NEVER retain the prior
         // snapshot — stale HEAD/dirty presented as current corrupts the
-        // receive-side evidence audit (plan §Root discovery & degraded modes).
-        // Clear to an explicit unavailable (null) state and warn; receive
-        // re-derives git live. A repo that was never git (git already null)
-        // warns nothing — there is no stale state to clear.
+        // receive-side evidence audit. Clear to explicit unavailable (null) and
+        // warn; a repo that was never git (already null) warns nothing.
         if (merged.git !== null) {
           io.stderr.write('baton checkpoint: git refresh failed — clearing stale git state (marked unavailable; receive re-derives it live)\n');
         }
         merged.git = null;
       }
-      writeSnapshot(root, merged, io);
-      rewritten = true;
-    }
+      writeSnapshotIn(root, merged, io, token);
+      return true;
+    });
   }
   return finish({ ok: true, data: { events: events.length, rewritten } }, 0);
 }
