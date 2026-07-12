@@ -57,13 +57,33 @@ export function checkHandoffTree(root, io) {
     if (dirReal !== `${rootReal}/.handoff`) {
       return { ok: false, problem: `.handoff resolves outside the repository root (${dirReal}) — refusing` };
     }
+    // Walk is race-tolerant (gate-2 iter-2): under concurrent atomic writes
+    // the tree churns — tmp files, the lock dir, and rotated journals appear
+    // and vanish between readdir and lstat. An entry that disappears mid-walk
+    // (ENOENT) is normal concurrency, NOT a symlink attack, so it is skipped;
+    // only a POSITIVELY observed symlink refuses. The stable top-level checks
+    // above (.handoff itself a symlink / realpath escape) stay strict.
     /** @type {string[]} */
     const stack = [dir];
     while (stack.length > 0) {
       const d = /** @type {string} */ (stack.pop());
-      for (const name of io.fs.readdirSync(d)) {
+      /** @type {string[]} */
+      let names;
+      try {
+        names = io.fs.readdirSync(d);
+      } catch (e) {
+        if (/** @type {any} */ (e)?.code === 'ENOENT') continue; // subdir removed mid-walk
+        throw e;
+      }
+      for (const name of names) {
         const p = `${d}/${name}`;
-        const st = io.fs.lstatSync(p);
+        let st;
+        try {
+          st = io.fs.lstatSync(p);
+        } catch (e) {
+          if (/** @type {any} */ (e)?.code === 'ENOENT') continue; // entry vanished mid-walk
+          throw e;
+        }
         if (st.isSymbolicLink()) return { ok: false, problem: `${p} is a symlink — refusing (managed-tree jail)` };
         if (st.isDirectory()) stack.push(p);
       }
