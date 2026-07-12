@@ -180,12 +180,16 @@ function acquire(io, p) {
       // Journal the takeover only now — we HOLD the lock (fresh dir + published
       // owner), so the note's seq is allocated while holding it (plan
       // §Concurrency "sequence numbers are allocated under the lock"), never
-      // racing a free-path competitor's concurrent append (iter-3 F2).
-      // Journaling at the earlier rename win ran WITHOUT the lock and could
-      // collide seq with a real event → replay drops one. The note is therefore
-      // best-effort (0-or-1: lost only when we lose the fresh-mkdir race and
-      // throw above); the reclaim itself stays exactly-once via the atomic rename.
-      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+      // racing a free-path competitor's concurrent append (iter-3 F2). The note
+      // is best-effort (0-or-1) and MUST NOT abort acquisition (iter-4 I7): if it
+      // threw here — after publishOwner, before the token is returned to withLock
+      // — the release finally would never run and the lock would leak with a live
+      // owner. Swallow it; the reclaim already succeeded.
+      try {
+        journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+      } catch {
+        // audit note is best-effort
+      }
       return token;
     }
     /* c8 ignore next 2 */
@@ -299,20 +303,23 @@ export function recoverLock(root, io, opts = {}) {
     case 'free':
       return { recovered: true, refusedReason: null };
     case 'dead': {
-      // Provably-dead owner: removal is justified by the verified state itself,
-      // not by holding the fence (there is no live holder to fence against).
-      io.fs.rmSync(p.lockDir, { recursive: true, force: true });
-      // Journal the recovery under a fresh acquisition of the now-free lock so
-      // its seq is allocated while holding the lock (iter-3 F2) — journaling
-      // right after the bare rmSync ran without the lock and could collide seq
-      // with a writer that acquired in the gap. Best-effort: the recovery has
-      // already succeeded, so a note-write failure must not fail it.
-      const deadPid = s.owner.pid;
+      // Reclaim atomically via a single acquire() attempt + release, NOT an
+      // inspect-then-rmSync (iter-4 I1): the old bare rmSync had a TOCTOU — a
+      // competitor could win the rename-arbitrated dead-reclaim between this
+      // inspect() and the rmSync, publish a LIVE owner, and recovery would then
+      // delete a lock whose owner is alive. acquire() re-inspects atomically and
+      // shares the SAME rename arbitration, so recovery and a concurrent takeover
+      // are mutually exclusive: acquire either reclaims a still-dead lock (and
+      // journals the takeover under the lock) or throws because it is now
+      // live/torn — in which case we refuse rather than steal. release() then
+      // leaves the slot clear.
+      let token;
       try {
-        withLock(root, io, () => journalNote(io, p, `lock recovery: cleared stale lock of dead pid ${deadPid}`));
-      } catch {
-        /* audit note is best-effort */
+        token = acquire(io, p);
+      } catch (err) {
+        return { recovered: false, refusedReason: /** @type {any} */ (err)?.message ?? String(err) };
       }
+      release(io, p, token);
       return { recovered: true, refusedReason: null };
     }
     case 'live':

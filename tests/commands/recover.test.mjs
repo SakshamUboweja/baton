@@ -25,7 +25,9 @@ describe('cmdRecover — the one recoverable state', () => {
     // default processAlive: only THIS io's pid/startTime is alive -> 999 is dead
     assert.equal(await cmdRecover([], io), 0);
     assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'stale lock removed');
-    assert.match(io.files()['/repo/.handoff/journal.ndjson'] ?? '', /recovery/i);
+    // recoverLock now clears the dead lock via the atomic acquire path (iter-4
+    // I1), whose audit note records the takeover-of-the-stale-lock.
+    assert.match(io.files()['/repo/.handoff/journal.ndjson'] ?? '', /recovery|took over stale lock/i);
   });
 
   it('live same-host owner: refused with exit 1, EVEN with --force', async () => {

@@ -91,20 +91,50 @@ describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
     assert.equal(heldAtNoteTime, true, 'the takeover note is appended while the lock dir is held');
   });
 
-  it('recoverLock journals its recovery note while HOLDING the lock (iter-3 F2)', () => {
+  it('recoverLock reclaims atomically and journals under the HELD lock (iter-3 F2 / iter-4 I1)', () => {
+    // recoverLock now reuses the atomic acquire (rename-arbitrated dead-reclaim)
+    // rather than a bare rmSync, so its audit note is the takeover note acquire
+    // writes AFTER publishOwner — under the held lock (seq allocated safely).
     const io = makeIo({ files: { [OWNER]: deadOwner, '/repo/.handoff/bundle.json': '{"journalSeq":0}' } });
     const LOCK = '/repo/.handoff/lock';
     let heldAtNoteTime = null;
     const realAppend = io.fs.appendFileSync.bind(io.fs);
     io.fs.appendFileSync = (p, data) => {
-      if (String(p).endsWith('/journal.ndjson') && /lock recovery/.test(String(data))) {
+      if (String(p).endsWith('/journal.ndjson') && /took over stale lock|lock recovery/.test(String(data))) {
         heldAtNoteTime = io.fs.existsSync(LOCK);
       }
       return realAppend(p, data);
     };
     const r = recoverLock('/repo', io, { force: true });
     assert.equal(r.recovered, true, 'a provably-dead lock is recovered');
-    assert.equal(heldAtNoteTime, true, 'the recovery note is appended under a re-acquired lock, not after a bare rmSync');
+    assert.equal(heldAtNoteTime, true, 'the recovery/takeover note is appended while the lock dir is held, never after a bare rmSync');
+    assert.equal(io.fs.existsSync(LOCK), false, 'the lock is released after recovery');
+  });
+
+  it('recoverLock refuses (no steal) when a competitor reclaims the dead lock between inspect and acquire (iter-4 I1)', () => {
+    // TOCTOU guard: recoverLock's outer inspect sees the DEAD owner, but by the
+    // time acquire() re-inspects, a competitor has published a LIVE owner. The
+    // old inspect-then-rmSync would delete that live lock; the acquire-based
+    // path re-inspects atomically, sees live, and refuses. We flip owner.json to
+    // a live pid on acquire's inspect (the SECOND read of owner.json — the first
+    // is recoverLock's own outer inspect).
+    // pid 4242 is alive, 999 (the seeded dead owner) is not — so the outer
+    // inspect sees dead and acquire's re-inspect sees the injected live owner.
+    const io = makeIo({ files: { [OWNER]: deadOwner, '/repo/.handoff/bundle.json': '{"journalSeq":0}' }, processAlive: (pid) => pid === 4242 });
+    const LIVE = JSON.stringify({ host: 'host-A', pid: 4242, startTime: 1, fencingToken: 'LIVE', acquiredAt: 'x', heartbeatAt: 'x' });
+    let ownerReads = 0;
+    const realRead = io.fs.readFileSync.bind(io.fs);
+    io.fs.readFileSync = (p, enc) => {
+      if (String(p).endsWith('/lock/owner.json')) {
+        ownerReads += 1;
+        if (ownerReads >= 2) return LIVE; // acquire's re-inspection sees a live owner
+      }
+      return realRead(p, enc);
+    };
+    const r = recoverLock('/repo', io, { force: true });
+    assert.equal(r.recovered, false, 'a lock that became live during recovery is not stolen');
+    assert.match(r.refusedReason, /live process|held/i);
+    assert.equal(io.fs.existsSync('/repo/.handoff/lock'), true, 'the live lock is left intact');
   });
 
   it('after release the lock is free and the next acquisition mints its own token', () => {
