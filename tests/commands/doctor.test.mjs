@@ -247,12 +247,41 @@ describe('doctor — envelope + check aggregation', () => {
     assert.equal(s1.trusted, 'unknown', 'trust is not externally verifiable');
     assert.equal(s1.observed, false, 'no canary yet');
 
-    // Installed + a codex-sourced journal entry → observed true (fidelity canary).
-    const journal = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', writerId: 'codex-123-s', payload: { text: 'ran' } }) + '\n';
-    const io2 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS, [`${ROOT}/.handoff/journal.ndjson`]: journal } });
+    // Installed + a codex Stop-triggered checkpoint entry → observed true.
+    const stopEntry = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', writerId: 'codex-123-s', payload: { trigger: 'Stop', text: 'ran' } }) + '\n';
+    const io2 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS, [`${ROOT}/.handoff/journal.ndjson`]: stopEntry } });
     await cmdDoctor(['--json'], io2);
     const s2 = findCheck(envelope(io2), /codex-hooks/).states;
-    assert.equal(s2.observed, true, 'a codex-sourced journal entry is the observed canary');
+    assert.equal(s2.observed, true, 'a codex Stop-triggered entry is the observed canary');
+  });
+
+  it('(iter-5 A3) observed requires the Stop trigger — SessionStart/PreCompact/triggerless entries do NOT count', async () => {
+    const CODEX_HOOKS = '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"baton checkpoint --platform codex"}]}]}}';
+    const cases = [
+      ['SessionStart', { trigger: 'SessionStart' }],
+      ['PreCompact', { trigger: 'PreCompact' }],
+      ['triggerless', { text: 'ran' }],
+    ];
+    for (const [label, payload] of cases) {
+      const journal = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', writerId: 'codex-1-s', payload }) + '\n';
+      const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS, [`${ROOT}/.handoff/journal.ndjson`]: journal } });
+      await cmdDoctor(['--json'], io);
+      const s = findCheck(envelope(io), /codex-hooks/).states;
+      assert.equal(s.observed, false, `a ${label} entry must NOT be treated as the Stop canary`);
+    }
+    // Positive control: a Stop-triggered entry DOES count.
+    const ok = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', writerId: 'codex-1-s', payload: { trigger: 'Stop' } }) + '\n';
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS, [`${ROOT}/.handoff/journal.ndjson`]: ok } });
+    await cmdDoctor(['--json'], io);
+    assert.equal(findCheck(envelope(io), /codex-hooks/).states.observed, true);
+  });
+
+  it('(iter-5 A3) enabled keys on a command field, not a matcher/comment mentioning baton', async () => {
+    // baton appears only in a matcher string, never as a command → NOT enabled.
+    const fake = '{"hooks":{"Stop":[{"matcher":"run baton checkpoint here","hooks":[{"type":"command","command":"echo noop"}]}]}}';
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: fake } });
+    await cmdDoctor(['--json'], io);
+    assert.equal(findCheck(envelope(io), /codex-hooks/).states.enabled, false, 'a matcher mention is not a command invocation');
   });
 
   it('(iter-5 A3) installed but the Stop hook does NOT invoke checkpoint → enabled false', async () => {

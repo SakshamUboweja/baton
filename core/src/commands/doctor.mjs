@@ -72,15 +72,36 @@ function versionCheck(platform, v) {
 }
 
 /**
+ * Recursively collect every `command`/`commandWindows` STRING under a hook
+ * definition (codex nests hooks[].hooks[].command; cursor is [].command). Only
+ * real command fields — never matchers, comments, or serialized metadata — so
+ * enablement keys on an actual invocation (iter-5 A3).
+ * @param {any} def @returns {string[]}
+ */
+function hookCommands(def) {
+  /** @type {string[]} */
+  const out = [];
+  const walk = (/** @type {any} */ node) => {
+    if (Array.isArray(node)) {
+      for (const n of node) walk(n);
+    } else if (node && typeof node === 'object') {
+      if (typeof node.command === 'string') out.push(node.command);
+      if (typeof node.commandWindows === 'string') out.push(node.commandWindows);
+      if (Array.isArray(node.hooks)) walk(node.hooks);
+    }
+  };
+  walk(def);
+  return out;
+}
+
+/**
  * Codex/Cursor hook surface: installed / enabled / trusted / observed-executing.
  * `installed` = the hooks file references baton at all; `enabled` = the
  * mechanical-checkpoint hook (the `checkpointEvent` key: codex `Stop`, cursor
- * `stop`) actually DECLARES a `baton checkpoint` invocation (iter-5 A3 — not
- * merely that the file mentions baton somewhere); `trusted` is not externally
- * verifiable (Codex per-hash trust / Cursor workspace trust) → 'unknown';
- * `observed` = a mechanical checkpoint sourced from this platform is in the
- * journal (the canary the checkpoint hook actually ran). The ≤1-turn
- * mechanical-staleness fidelity claim is gated on enabled AND observed.
+ * `stop`) declares a `baton checkpoint` COMMAND (iter-5 A3); `trusted` is not
+ * externally verifiable → 'unknown'; `observed` = a platform-sourced checkpoint
+ * whose payload.trigger is the checkpointEvent (the per-turn Stop canary). The
+ * ≤1-turn fidelity claim is gated on enabled AND observed.
  * @param {any} io @param {string} root @param {any} p bundlePaths
  * @param {string} platform @param {string} relPath @param {string} checkpointEvent @param {string} trustNote
  */
@@ -102,23 +123,27 @@ function hookSurfaceCheck(io, root, p, platform, relPath, checkpointEvent, trust
     };
   }
   // enabled: the checkpoint hook itself is declared with a `baton checkpoint`
-  // command — a file that mentions baton only in (say) a session-start hook is
-  // installed but NOT checkpoint-enabled.
+  // COMMAND (iter-5 A3) — inspect the actual command/commandWindows fields, not
+  // the serialized blob (a matcher/comment mentioning baton must not count). A
+  // file that references baton only in a session-start hook is installed but NOT
+  // checkpoint-enabled.
   let enabled = false;
   try {
     const cfg = JSON.parse(/** @type {string} */ (text));
-    const hookDef = cfg?.hooks?.[checkpointEvent];
-    enabled = hookDef !== undefined && /baton\s+checkpoint/.test(JSON.stringify(hookDef));
+    enabled = hookCommands(cfg?.hooks?.[checkpointEvent]).some((c) => /baton\s+checkpoint/.test(c));
   } catch {
     enabled = false;
   }
-  // observed: a mechanical checkpoint sourced from THIS platform is recorded
-  // (writerId `${platform}-…`; lock notes are `lock-…` and excluded), i.e. the
-  // checkpoint hook actually executed.
+  // observed: a mechanical checkpoint from THIS platform's CHECKPOINT hook is
+  // recorded — the journal entry must be platform-sourced AND carry
+  // payload.trigger === checkpointEvent (iter-5 A3). normalize stamps the hook
+  // event name as payload.trigger, so a SessionStart/PreCompact/triggerless
+  // entry no longer masquerades as the per-turn Stop canary.
   let observed = false;
   try {
     for (const e of readAllTolerant(io.fs, p.journal).entries) {
-      if (String(e?.writerId ?? '').startsWith(`${platform}-`) || e?.source === platform) {
+      const mine = String(e?.writerId ?? '').startsWith(`${platform}-`) || e?.source === platform;
+      if (mine && e?.payload?.trigger === checkpointEvent) {
         observed = true;
         break;
       }
