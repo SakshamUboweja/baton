@@ -94,6 +94,19 @@ export function applyEvent(bundle, event) {
       if (payload === null || typeof payload === 'object') out.git = payload;
       else out.decisions.push({ seq, ts, summary: refusalNote('git.update', payload) });
       break;
+    case 'transcript.set':
+      // Opt-in transcript tail (plan §Transcript policy): stored under the
+      // literal property name `transcript` so purge-transcript strips it from
+      // every retained copy. Render never includes it.
+      if (payload?.transcript !== null && typeof payload?.transcript === 'object' && typeof payload.transcript.tail === 'string') {
+        out.transcript = {
+          capturedAt: typeof payload.transcript.capturedAt === 'string' ? payload.transcript.capturedAt : ts,
+          tail: payload.transcript.tail,
+        };
+      } else {
+        out.decisions.push({ seq, ts, summary: refusalNote('transcript.set', 'malformed payload') });
+      }
+      break;
     default:
       out.decisions.push({ seq, ts, summary: `[unhandled event type '${type}' recorded as note]` });
       break;

@@ -3,6 +3,7 @@ import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
 import { checkHandoffTree, assertHandoffTreeSafe } from '../util/jail.mjs';
 import { emptyBundle, validateBundle } from './schema.mjs';
 import { applyEvent } from './merge.mjs';
+import { compact } from './compact.mjs';
 import { renderHandoffMd } from './render.mjs';
 import { withLock, guardedWrite } from './lock.mjs';
 
@@ -143,8 +144,11 @@ export function writeSnapshotIn(root, bundle, io, token) {
   return guardedWrite(root, io, token, () => {
     assertHandoffTreeSafe(root, io);
     ensureDir(io.fs, p.dir);
-    backupThenWrite(io.fs, p.snapshot, JSON.stringify(bundle, null, 2) + '\n');
-    atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bundle));
+    // Size discipline runs in the write path itself (gate-2 fix 10): every
+    // persisted snapshot is within budget; identity for in-budget bundles.
+    const bounded = compact(bundle);
+    backupThenWrite(io.fs, p.snapshot, JSON.stringify(bounded, null, 2) + '\n');
+    atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bounded));
   });
 }
 

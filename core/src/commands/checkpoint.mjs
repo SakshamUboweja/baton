@@ -1,8 +1,10 @@
 import { bundlePaths, loadBundle, writeSnapshot, appendJournal, rotateJournal } from '../bundle/store.mjs';
 import { emptyBundle } from '../bundle/schema.mjs';
 import { normalizeHookPayload } from '../bundle/normalize.mjs';
+import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { safeReadJson } from '../util/fsx.mjs';
+import { redactSecrets } from '../util/redact.mjs';
 import { parseFlags, resolveRoot } from './shared.mjs';
 
 // Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
@@ -11,6 +13,44 @@ import { parseFlags, resolveRoot } from './shared.mjs';
 const ROUTINE_TYPES = new Set(['note', 'file.touch']);
 const THROTTLE_WINDOW_MS = 30_000;
 const THROTTLE_EVENT_COUNT = 10;
+
+// Transcript tail bounds (plan §Transcript policy): last 10 messages, 8 KB cap,
+// opt-in via baton.config.json capture.transcriptTail, PreCompact only.
+const TAIL_MESSAGES = 10;
+const TAIL_BYTES = 8192;
+
+/**
+ * Opt-in transcript-tail capture (gate-2 fix 10). Returns the bounded,
+ * redacted tail or null when the gate is closed: config off (the default),
+ * not a PreCompact payload, no usable transcript_path, or an unreadable /
+ * symlinked file. The path comes from an untrusted hook payload — it is read
+ * only under explicit opt-in, must lstat as a regular file, and its content
+ * passes the secret-redaction filter before storage.
+ * @param {string} root @param {any} raw parsed hook payload @param {any} io
+ * @returns {string | null}
+ */
+function captureTranscriptTail(root, raw, io) {
+  const cfg = safeReadJson(io.fs, `${root}/baton.config.json`);
+  if (!cfg.ok || cfg.value?.capture?.transcriptTail !== true) return null;
+
+  const eventName = raw && typeof raw === 'object' ? (raw.hook_event_name ?? raw.event) : null;
+  if (typeof eventName !== 'string' || !/precompact/i.test(eventName)) return null;
+  const path = raw.transcript_path;
+  if (typeof path !== 'string' || path.length === 0) return null;
+
+  try {
+    if (!io.fs.lstatSync(path).isFile()) return null;
+    const text = io.fs.readFileSync(path, 'utf8');
+    const lines = text.split('\n').filter((/** @type {string} */ l) => l.trim() !== '');
+    let tail = lines.slice(-TAIL_MESSAGES).join('\n');
+    if (Buffer.byteLength(tail) > TAIL_BYTES) {
+      tail = Buffer.from(tail).subarray(-TAIL_BYTES).toString('utf8');
+    }
+    return redactSecrets(tail);
+  } catch {
+    return null; // unreadable transcript is never a checkpoint failure
+  }
+}
 
 /**
  * `baton checkpoint` — mechanical checkpoint from a hook payload on stdin.
@@ -29,7 +69,7 @@ export async function cmdCheckpoint(args, io) {
   }
 
   try {
-    return run(flags, platform, io);
+    return await run(flags, platform, io);
   } catch (err) {
     const msg = /** @type {any} */ (err)?.message ?? String(err);
     io.stderr.write(`baton checkpoint: ${msg}\n`);
@@ -41,9 +81,9 @@ export async function cmdCheckpoint(args, io) {
  * @param {Record<string, string | boolean>} flags
  * @param {string} platform
  * @param {any} io
- * @returns {number}
+ * @returns {Promise<number>}
  */
-function run(flags, platform, io) {
+async function run(flags, platform, io) {
   const strict = flags.strict === true;
   const root = resolveRoot(io, flags);
   const paths = bundlePaths(root);
@@ -60,6 +100,20 @@ function run(flags, platform, io) {
   const session = { host: io.host, pid: io.pid, startTime: io.startTime };
   const events = normalizeHookPayload(raw, platform, session);
   if (events.length === 0) return 0;
+
+  // Opt-in transcript tail (gate-2 fix 10): rides the journal as its own
+  // IMPORTANT event so the snapshot rewrite below persists it, and purge can
+  // strip it from every retained copy by its property name.
+  const tail = captureTranscriptTail(root, raw, io);
+  if (tail !== null) {
+    events.push({
+      type: 'transcript.set',
+      payload: { transcript: { capturedAt: io.now(), tail } },
+      source: platform,
+      sessionHint: events[0]?.sessionHint,
+      unstable: events[0]?.unstable ?? true,
+    });
+  }
 
   const { bundle, warnings, unsafe } = loadBundle(root, io);
   for (const w of warnings) io.stderr.write(`baton checkpoint: ${w}\n`);
@@ -157,7 +211,16 @@ function run(flags, platform, io) {
 
   if (mustRewrite || important || elapsed || accreted >= THROTTLE_EVENT_COUNT) {
     const merged = loadBundle(root, io).bundle;
-    if (merged) writeSnapshot(root, merged, io);
+    if (merged) {
+      // Bounded git refresh on important checkpoints (gate-2 fix 10): the
+      // mechanical checkpoint carries branch/HEAD/dirty; unavailability
+      // degrades to the bundle's previous git state, never a failure.
+      if (important) {
+        const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+        if (git !== null) merged.git = git;
+      }
+      writeSnapshot(root, merged, io);
+    }
   }
   return 0;
 }
