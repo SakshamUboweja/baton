@@ -84,20 +84,20 @@ describe('.bak validate-before-backup + journal seed events', () => {
     assert.match(io.files()['/repo/.handoff/bundle.json.bak'], new RegExp(first.bundleId));
   });
 
-  it('auto-seed writes a journal seed record so a journal-only rebuild keeps the origin facts', async () => {
+  it('auto-seed writes a self-applying seed event so a journal-only rebuild restores the origin facts', async () => {
     const io = makeIo({ stdin: EVENT('first-work'), now: T0 });
     assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--model', 'claude-fable-5'], io), 0);
-    assert.match(io.files()['/repo/.handoff/journal.ndjson'], /seed/i);
+    assert.match(io.files()['/repo/.handoff/journal.ndjson'], /bundle\.seed/, 'the seed is a replayable bundle.seed event, not a bare note');
+    const seededId = JSON.parse(io.files()['/repo/.handoff/bundle.json']).bundleId;
 
-    // Kill snapshot AND backup: the journal alone must still tell the story.
+    // Kill snapshot AND backup: the journal alone must restore identity+origin.
     io.fs.unlinkSync('/repo/.handoff/bundle.json');
     io.fs.rmSync('/repo/.handoff/bundle.json.bak', { force: true });
     const { bundle } = loadBundle('/repo', io);
     assert.ok(bundle, 'journal-only rebuild works');
-    assert.ok(
-      bundle.decisions.some((/** @type {any} */ d) => /seed/i.test(d.summary) && /claude-code/.test(d.summary)),
-      'the seed record survives replay and names the seeding platform',
-    );
+    assert.equal(bundle.origin.platform, 'claude-code', 'origin platform restored (not "unknown")');
+    assert.equal(bundle.origin.model, 'claude-fable-5', 'origin model restored');
+    assert.equal(bundle.bundleId, seededId, 'bundle identity survives the journal-only rebuild');
   });
 });
 

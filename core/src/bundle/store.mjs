@@ -145,6 +145,13 @@ export function loadBundle(root, io) {
       warnings.push(`journal line ${w.line}: ${w.kind}${w.kind === 'seq-order' ? ` (prev ${w.prev}, got ${w.seq})` : ''}`);
     }
     for (const e of entries) {
+      // Envelope guard (gate-2 iter-2 B4): a parseable but non-object line
+      // (null, number, bare string) is not an event — skip it with a warning
+      // rather than crash replay on `e.seq` / `e.dedupeKey`.
+      if (e === null || typeof e !== 'object' || Array.isArray(e)) {
+        warnings.push('skipped a malformed journal line (not an event envelope)');
+        continue;
+      }
       if (typeof e.seq === 'number' && e.seq <= bundle.journalSeq) continue;
       bundle = applyEvent(bundle, e);
     }

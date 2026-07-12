@@ -17,6 +17,11 @@ const refusalNote = (/** @type {string} */ type, /** @type {any} */ detail) =>
  * @param {{seq: number, ts: string, type: string, dedupeKey: string, writerId?: string, source?: string, payload: any}} event
  */
 export function applyEvent(bundle, event) {
+  // Journal lines are untrusted (gate-2 iter-2 B4): a parseable null/number/
+  // string is a valid JSON line but not an event envelope — degrade to a
+  // no-op rather than crash replay. The store's load loop also pre-filters and
+  // warns; this is the last-line guard for any direct caller.
+  if (event === null || typeof event !== 'object' || Array.isArray(event)) return bundle;
   if (bundle.dedupeRing.includes(event.dedupeKey)) return bundle;
 
   const out = structuredClone(bundle);
@@ -93,6 +98,30 @@ export function applyEvent(bundle, event) {
     case 'git.update':
       if (payload === null || typeof payload === 'object') out.git = payload;
       else out.decisions.push({ seq, ts, summary: refusalNote('git.update', payload) });
+      break;
+    case 'bundle.seed':
+      // Self-applying identity (gate-2 iter-2 B6): the auto-seed emits this as
+      // the journal's first event so a journal-only rebuild (snapshot + .bak
+      // both gone) restores the bundle's identity/origin/task instead of the
+      // "unknown" placeholder resolveBase seeds. Replayed first (lowest seq),
+      // so later events layer on top; on normal replay its seq is below the
+      // snapshot's journalSeq and it is skipped.
+      if (payload && typeof payload === 'object') {
+        if (typeof payload.bundleId === 'string') out.bundleId = payload.bundleId;
+        if (typeof payload.generation === 'number') out.generation = payload.generation;
+        if (typeof payload.createdAt === 'string') out.createdAt = payload.createdAt;
+        // Restore identity ONLY (platform/model) — never sessionHint/unstable.
+        // Session ownership is adopted AFTER the seed (a snapshot-only mutation),
+        // so replaying the seed must not clobber a later-adopted hint back to
+        // its seed-time null (gate-2 iter-2: caught by the adoption test).
+        if (payload.origin && typeof payload.origin === 'object') {
+          if (typeof payload.origin.platform === 'string') out.origin.platform = payload.origin.platform;
+          if (typeof payload.origin.model === 'string') out.origin.model = payload.origin.model;
+        }
+        if (payload.task && typeof payload.task === 'object' && typeof payload.task.goal === 'string') {
+          out.task.goal = payload.task.goal;
+        }
+      }
       break;
     case 'transcript.set':
       // Opt-in transcript tail (plan §Transcript policy): stored under the

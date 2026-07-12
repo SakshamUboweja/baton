@@ -117,6 +117,13 @@ export function validateBundle(obj) {
     err('roles', 'must be an object');
   } else if (obj.roles.assignments === null || typeof obj.roles.assignments !== 'object' || Array.isArray(obj.roles.assignments)) {
     err('roles.assignments', 'must be an object');
+  } else {
+    // Each assignment value is consumed by renderHandoffMd (reads .platform,
+    // .model, .mode) — a null/non-object value passed validation and crashed
+    // render (gate-2 iter-2 B4). Every value must be a plain object.
+    for (const [role, a] of Object.entries(obj.roles.assignments)) {
+      if (a === null || typeof a !== 'object' || Array.isArray(a)) err(`roles.assignments.${role}`, 'must be an object');
+    }
   }
   if (obj.compaction === null || typeof obj.compaction !== 'object') err('compaction', 'must be an object');
 

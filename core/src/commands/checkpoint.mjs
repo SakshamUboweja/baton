@@ -189,16 +189,25 @@ async function run(flags, platform, io) {
       io.now(),
     );
     writeSnapshot(root, active, io);
-    // Journal seed record (gate-2 major 15): a journal-only rebuild loses the
-    // snapshot's origin facts unless the seed itself is a replayable event.
+    // Self-applying seed event (gate-2 iter-2 B6): a journal-only rebuild
+    // (snapshot + .bak both lost) must restore the bundle's identity, not the
+    // "unknown" placeholder resolveBase seeds. bundle.seed carries bundleId,
+    // origin, task, and generation and is applied on replay.
     appendJournal(
       root,
       {
         ts: io.now(),
-        type: 'note',
-        payload: { text: `[seed] auto-seeded a new bundle on ${platform} (model ${active.origin.model})`, seed: { platform, model: active.origin.model } },
+        type: 'bundle.seed',
+        payload: {
+          bundleId: active.bundleId,
+          generation: active.generation,
+          createdAt: active.createdAt,
+          origin: active.origin,
+          task: { goal: active.task.goal },
+          text: `[seed] auto-seeded a new bundle on ${platform} (model ${active.origin.model})`,
+        },
         writerId: [platform, io.pid, 'seed'].join('-'),
-        dedupeKey: dedupeKey({ ts: io.now(), type: 'seed', platform, model: active.origin.model }),
+        dedupeKey: dedupeKey({ ts: io.now(), type: 'bundle.seed', bundleId: active.bundleId }),
       },
       io,
     );
