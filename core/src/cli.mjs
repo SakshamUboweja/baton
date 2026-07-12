@@ -6,6 +6,9 @@ import { cmdRemap } from './commands/remap.mjs';
 import { cmdCheckpoint } from './commands/checkpoint.mjs';
 import { cmdFinalize } from './commands/finalize.mjs';
 import { cmdReceive } from './commands/receive.mjs';
+import { cmdInit } from './commands/init.mjs';
+import { cmdDoctor } from './commands/doctor.mjs';
+import { cmdPurgeTranscript } from './commands/purge-transcript.mjs';
 
 const COMMANDS = [
   'checkpoint',
@@ -114,6 +117,9 @@ export function run(argv, io) {
   if (cmd === 'checkpoint') return cmdCheckpoint(rest, io);
   if (cmd === 'finalize') return cmdFinalize(rest, io);
   if (cmd === 'receive') return cmdReceive(rest, io);
+  if (cmd === 'init') return cmdInit(rest, io);
+  if (cmd === 'doctor') return cmdDoctor(rest, io);
+  if (cmd === 'purge-transcript') return cmdPurgeTranscript(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {

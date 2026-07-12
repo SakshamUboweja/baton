@@ -120,8 +120,19 @@ function acquire(io, p) {
   }
 }
 
-/** @param {any} io @param {ReturnType<typeof lockPaths>} p */
-function release(io, p) {
+/**
+ * Fence-guarded release: the lock dir is removed only while owner.json still
+ * carries OUR token. A holder that paused past a takeover must not delete the
+ * competitor's lock on its way out — release is a write like any other.
+ * @param {any} io @param {ReturnType<typeof lockPaths>} p @param {string} token
+ */
+function release(io, p, token) {
+  try {
+    const current = JSON.parse(io.fs.readFileSync(p.owner, 'utf8'));
+    if (current.fencingToken !== token) return; // a competitor took over — their lock, not ours
+  } catch {
+    return; // owner metadata gone or torn mid-hold — never guess; leave it for recovery
+  }
   io.fs.rmSync(p.lockDir, { recursive: true, force: true });
 }
 
@@ -136,7 +147,7 @@ export function withLock(root, io, fn) {
   try {
     return fn(token);
   } finally {
-    release(io, p);
+    release(io, p, token);
   }
 }
 
@@ -175,7 +186,9 @@ export function recoverLock(root, io, opts = {}) {
     case 'free':
       return { recovered: true, refusedReason: null };
     case 'dead':
-      release(io, p);
+      // Provably-dead owner: removal is justified by the verified state itself,
+      // not by holding the fence (there is no live holder to fence against).
+      io.fs.rmSync(p.lockDir, { recursive: true, force: true });
       journalNote(io, p, `lock recovery: cleared stale lock of dead pid ${s.owner.pid}`);
       return { recovered: true, refusedReason: null };
     case 'live':
