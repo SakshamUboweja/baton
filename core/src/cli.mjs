@@ -62,20 +62,38 @@ function emitEnvelope(io, env) {
  */
 export function run(argv, io) {
   const args = argv.filter((a) => a !== '');
-  if (args.length === 0 || args[0] === '--help') {
-    io.stdout.write(USAGE);
-    return args.length === 0 ? 2 : 0;
-  }
-  if (args[0] === '--version') {
-    io.stdout.write(version() + '\n');
-    return 0;
+  // Global --json intent is parsed BEFORE dispatch (gate-2 iter-2 M6): a
+  // top-level `--json` with no command, or --help/--version, must still emit
+  // exactly one envelope rather than raw text.
+  const jsonWanted = args.includes('--json');
+  const cmdIndex = args.findIndex((a) => !a.startsWith('--'));
+  const cmd = cmdIndex === -1 ? undefined : args[cmdIndex];
+
+  if (cmd === undefined) {
+    // No command — just flags (or nothing).
+    if (args.includes('--version')) {
+      if (jsonWanted) emitEnvelope(io, { ok: true, data: { version: version() } });
+      else io.stdout.write(version() + '\n');
+      return 0;
+    }
+    if (args.includes('--help')) {
+      if (jsonWanted) emitEnvelope(io, { ok: true, data: { usage: USAGE.trim() } });
+      else io.stdout.write(USAGE);
+      return 0;
+    }
+    // Bare invocation (or a lone --json): a usage error.
+    if (jsonWanted) emitEnvelope(io, { ok: false, error: { code: 'usage', msg: 'no command given' } });
+    else io.stdout.write(USAGE);
+    return 2;
   }
 
-  const cmd = args[0];
-  const rest = args.slice(1);
+  // All flags (before and after the command token) reach the command; only the
+  // command token itself is stripped, so a leading `--json` isn't lost.
+  const rest = args.filter((_, i) => i !== cmdIndex);
 
-  // Usage errors honor the --json envelope contract too (gate-2 fix 11).
-  const wantsJson = rest.includes('--json');
+  // Usage errors honor the --json envelope contract too (gate-2 fix 11 + M6:
+  // global --json counts, wherever it sits).
+  const wantsJson = jsonWanted;
   if (cmd === 'wrap') {
     if (wantsJson) emitEnvelope(io, { ok: false, error: { code: 'usage', msg: 'baton wrap is reserved for a future release (PTY supervisor); not available in v1' } });
     else io.stderr.write(`baton wrap is reserved for a future release (PTY supervisor); not available in v1.\n${USAGE}`);

@@ -61,7 +61,10 @@ export async function cmdReceive(args, io) {
   }
 
   if (flags['print-prompt'] === true) {
-    io.stdout.write(prepared.prompt);
+    // --json wraps the prompt in the envelope (gate-2 iter-2 M6); the bare
+    // form stays raw markdown — the adapter hook fallback path is unchanged.
+    if (flags.json) emitEnvelope(io, { ok: true, data: { prompt: prepared.prompt, warnings: prepared.warnings } });
+    else io.stdout.write(prepared.prompt);
     return 0;
   }
 
