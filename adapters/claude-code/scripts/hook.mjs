@@ -3,8 +3,39 @@
 // (never re-implement it) and to stay fail-open: a hook must never break the
 // host session, so every path returns 0.
 
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
 /** @param {any} io */
 const batonBin = (io) => `${io.env?.CLAUDE_PLUGIN_ROOT ?? '.'}/core/bin/baton.mjs`;
+
+/**
+ * execFile-shaped spawn that supports {input}: async execFile has no input
+ * option, and a child reading stdin would otherwise block forever (gate-2
+ * reviewer-b finding 1). The io contract for this adapter is therefore
+ * "promise execFile honoring opts.input as the child's stdin".
+ * @param {string} cmd @param {string[]} args @param {{cwd?: string, input?: string, timeout?: number}} [opts]
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+function execFileWithInput(cmd, args = [], opts = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd: opts.cwd, timeout: opts.timeout ?? 25_000 });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) return resolve({ stdout, stderr });
+      const e = Object.assign(new Error(`Command failed: ${cmd}`), { code, stdout, stderr });
+      reject(e);
+    });
+    if (typeof opts.input === 'string' && child.stdin) child.stdin.write(opts.input);
+    child.stdin?.end();
+  });
+}
 
 /**
  * Run a core baton command as a child process, forwarding the raw hook payload
@@ -86,4 +117,38 @@ export async function runHook(args, io) {
   } catch {
     return 0;
   }
+}
+
+// Main entry: hooks.json executes this file directly (`node …/hook.mjs <Event>`),
+// so a real invocation must build the real io and run — an export alone is a
+// production no-op (gate-2 reviewer-b finding 1).
+const isMain = (() => {
+  try {
+    return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  let stdin = '';
+  try {
+    if (!process.stdin.isTTY) stdin = readFileSync(0, 'utf8');
+  } catch {
+    stdin = '';
+  }
+  const io = {
+    cwd: process.cwd(),
+    env: process.env,
+    stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    fs: nodeFs,
+    execFile: execFileWithInput,
+    now: () => new Date().toISOString(),
+  };
+  runHook(process.argv.slice(2), io).then(
+    (code) => process.exit(code),
+    () => process.exit(0),
+  );
 }
