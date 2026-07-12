@@ -21,13 +21,18 @@ export async function cmdReceive(args, io) {
 
   const root = io.cwd;
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+  const hasSession = typeof flags.session === 'string';
   const opts = {
     platform,
     origin: typeof flags.origin === 'string' ? flags.origin : 'unknown',
     reason: typeof flags.reason === 'string' ? flags.reason : 'unspecified',
     gitSnapshot: git,
     probes: null,
-    sessionHint: typeof flags.session === 'string' ? flags.session : `cli:${io.host}`,
+    sessionHint: hasSession ? /** @type {string} */ (flags.session) : `cli:${io.host}`,
+    // A defaulted host-derived hint is NOT the harness session id — mark it
+    // unstable so the receiving session's first real hook checkpoint adopts
+    // ownership instead of being rejected as foreign (gate-2 fix 2).
+    sessionUnstable: !hasSession,
   };
 
   if (typeof flags.commit === 'string') {

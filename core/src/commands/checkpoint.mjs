@@ -113,6 +113,18 @@ function run(flags, platform, io) {
     mustRewrite = true;
   }
 
+  // Ownership adoption (gate-2 fix 2): a bundle whose owner is unverified — a
+  // fresh seed (null hint) or a receive that defaulted to an unstable hint —
+  // adopts the first STABLE same-platform session as its owner, so semantic
+  // isolation engages from then on instead of never.
+  const ownerUnverified = active.origin.sessionHint === null || active.origin.unstable === true;
+  if (ownerUnverified && stableIncoming && active.origin.platform === platform) {
+    active = { ...active, origin: { ...active.origin, sessionHint: stableIncoming.sessionHint, unstable: false } };
+    writeSnapshot(root, active, io);
+    io.stderr.write(`baton checkpoint: adopted ${platform}/${stableIncoming.sessionHint} as the bundle owner (first verified session)\n`);
+    mustRewrite = true;
+  }
+
   let lastSeq = 0;
   for (const ev of events) {
     const ts = typeof ev.ts === 'string' ? ev.ts : io.now();

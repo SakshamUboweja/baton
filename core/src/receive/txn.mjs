@@ -11,7 +11,7 @@ import { dedupeKey } from '../util/ids.mjs';
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
 
-/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string}} ReceiveOpts */
+/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string, sessionUnstable?: boolean}} ReceiveOpts */
 
 /**
  * @param {string} reason @param {string} originPlatform @param {any} io
@@ -97,8 +97,14 @@ export function prepare(root, opts, io) {
   /** @type {Record<string, any>} */
   let assignments = {};
   if (config) {
-    const reasonClass = classifyReason(opts.reason, opts.origin, io);
-    const avoid = reasonClass === 'usage-limit' ? [opts.origin] : [];
+    // The dead origin comes from the BUNDLE first (its sealed reasonClass and
+    // recorded origin platform); typed intake only fills the gaps — a user
+    // should not need to retype the verbatim limit string to keep roles off
+    // the platform that died (gate-2 reviewer-b finding 4).
+    const reasonClass = bundle.handoff?.reasonClass ?? classifyReason(opts.reason, opts.origin, io);
+    const deadOrigin =
+      typeof bundle.origin?.platform === 'string' && bundle.origin.platform !== 'unknown' ? bundle.origin.platform : opts.origin;
+    const avoid = reasonClass === 'usage-limit' ? [deadOrigin] : [];
     assignments = resolveRoles({ config, to: opts.platform, avoid, nativeOnly: false, probes: opts.probes ?? null }).assignments;
   } else {
     warnings.push(`role matrix unavailable (${errors.map((e) => e.msg).join('; ')}) — no role table in this prompt`);
@@ -164,7 +170,7 @@ export function commit(root, token, opts, io) {
       platform: opts.platform,
       model: config?.defaults?.[opts.platform] ?? 'unknown',
       sessionHint: opts.sessionHint,
-      unstable: false,
+      unstable: opts.sessionUnstable === true,
     },
     handoff: { ...receivedSeal.handoff, status: 'open' },
   };
