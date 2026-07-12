@@ -1,0 +1,3791 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f5603-bcf7-7160-8e92-2c99510e7396
+--------
+user
+<task>
+You are the test-verifier for the baton repository (cwd). This is a re-verification: the iteration-3 test-verifier returned BLOCKED with 5 findings (verdict in reviews/2026-07-12-gate-2-final/test-verifier/iteration-03/verdict.md). They were folded in commit HEAD (5126d3e). Audit the fold's test diff: `git diff 06f64d8..HEAD -- tests/` and the production changes it pins: `git diff 06f64d8..HEAD -- core/ adapters/`.
+
+Two findings surfaced REAL production bugs that were fixed; three were test-honesty gaps. Judge whether each strengthened test now HONESTLY pins the fix and would FAIL if the fix regressed. Per the TDD contract (AGENTS.md §4) every test change re-enters test-verifier review — this is that review.
+</task>
+
+<verification_targets>
+1. Finding 1 (lock reclaim) — core/src/bundle/lock.mjs dead branch changed from rm-then-mkdir to atomic rename-arbitration, with the takeover journaled at the rename win. Assess:
+   - tests/integration/lock-concurrency.test.mjs: the new real-process two-reclaimer race. Are the barrier real, timeouts bounded, and assertions on PERSISTED state (order-file integrity for mutual exclusion; exactly-one takeover note)? Would a regression to non-atomic rm+mkdir make it fail? Is it deterministic (not timing-luck)?
+   - tests/unit/lock-hardening.test.mjs: the white-box trace test (rename-aside → rm-aside → mkdir) and the ENOENT-loser test. Do they pin the rename primitive, or merely echo it?
+2. Finding 4 (Windows realpath) — core/src/util/jail.mjs checkHandoffTree now separator-normalizes the realpath containment compare. tests/commands/gate2-iter2-group6.test.mjs adds in-tree/outside-root/cross-volume cases via a hand-built io.fs stub. Would these fail against the old hardcoded-forward-slash compare? Is the stub faithful (does it exercise the real comparison, not bypass it)?
+3. Finding 2 (hook log jail) — adapters/claude-code/scripts/hook.mjs logHookError now guards with checkHandoffTree. tests/integration/hook-log-symlink.test.mjs is a real-fs symlink test. Does it prove no write through the linked path AND fail-open, with a normal-tree control proving the guard is symlink-specific (not blanket-disabling logging)?
+4. Finding 3 (M4 vacuity) — tests/commands/gate2-iter2-group6.test.mjs M4 now uses a cursor-FIRST role so avoidance is observable. Is the assertion now discriminating (low-confidence keeps cursor selected; explicit/sealed high-confidence makes the role fall through to claude-code)?
+5. Finding 5 (M7) — tests/integration/receiver-concurrency.test.mjs now has each receiver independently prepare its own receipt before the barrier, then race the commit. Is this the faithful competing-receivers race, with assertions on persisted generation/archive/loser-untouched?
+6. Regression check on the fake: tests/helpers/memfs.mjs gained directory rename. Is the implementation correct (moves the node + all descendants; file rename unchanged) and does it not weaken any existing atomicity assertion?
+</verification_targets>
+
+<grounding_rules>
+Read the diff and files before judging; cite file:line. You MAY run `node --test <file>` on unit/command files for execution evidence (read-only sandbox may EPERM on mkdtemp integration tests — note, don't fail, on sandbox EPERM; judge those by reading). Do not review implementation beyond judging whether a test is complicit or whether it truly pins the named fix.
+</grounding_rules>
+
+<structured_output_contract>
+Output exactly:
+1. VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+2. Numbered findings, most severe first: [blocking|major|minor] — file:line — one-sentence defect — one-sentence fix. Write "none" if empty.
+3. A per-finding table: finding (1,2,3,4,5,memfs) → now pinned honestly? yes/partial/no + test file:line + would-fail-on-regression? yes/no.
+Keep under 90 lines.
+</structured_output_contract>
+codex
+Research phase: I’ll inspect the prior verdict, the test diffs, and the production diffs only far enough to judge whether the changed tests honestly pin the named fixes. I’ll cite exact lines from the current files and note any sandbox-limited execution separately.
+exec
+/bin/zsh -lc 'git rev-parse --show-toplevel && git status --short && git rev-parse HEAD && git log --oneline -5' in /Users/saksham/baton
+ succeeded in 0ms:
+/Users/saksham/baton
+?? reviews/2026-07-12-gate-2-final/test-verifier/iteration-04/
+5126d3efc90fa2dfdfda57482ae48d3c5585119b
+5126d3e Fold test-verifier iteration-3 findings (gate-2): harden lock reclaim + jail, strengthen tests
+06f64d8 tests: genuinely concurrent acceptance — barrier-released commit processes race one receipt (exactly one transition, loser rejected, state untouched) and two debounced afterFileEdit checkpoints race (exactly one appends) (gate-2 iter-2 findings M7 + M5 verification)
+283cde0 core: Windows-path ascent + jail (separator-normalized resolveRoot, drive/UNC ceiling), doctor probe capability capped at what each probe proves (claude --version = installed), offline role resolution flagged degraded, low-confidence usage-limit warns instead of silently avoiding (explicit --reason-class confirms, bound into the receipt token) (gate-2 iter-2 findings M2+M3+M4)
+91d8d3f core+adapters: envelope completeness — global --json parsed before dispatch (bare/help/version emit envelopes), receive --print-prompt --json wraps the prompt; receive.md commit step fully path-resolved via CLAUDE_PLUGIN_ROOT (gate-2 iter-2 findings M6+B5)
+151f1d5 core: checkpoint pipeline hardening — refresh git on every snapshot rewrite (not just important events), debounce stamp check-and-set under the repo lock, transcript_path confined to an allowlist (repo root / ~/.claude / configured dir) (gate-2 iter-2 findings M1+M5+m1)
+
+exec
+/bin/zsh -lc "sed -n '1,220p' reviews/2026-07-12-gate-2-final/test-verifier/iteration-03/verdict.md" in /Users/saksham/baton
+ succeeded in 0ms:
+# Test-verifier verdict — gate-2 iteration-2 fold (consolidated)
+
+- **Role**: test-verifier
+- **Model**: gpt-5.5 @ xhigh (`codex exec -s read-only`)
+- **Harness**: codex CLI, read-only sandbox
+- **Date**: 2026-07-12
+- **Scope**: `git diff a0e3dcd..HEAD -- tests/` (12 files, ~1090 lines) — the iteration-2 fix wave for findings B1-B6, M1-M8, B5, m1
+- **Degraded**: no (single reviewer by design — test-verifier role is single-model)
+- **Verdict**: **BLOCKED** — 2 blocking, 3 major
+
+## Findings
+
+1. **[blocking]** `tests/unit/lock-hardening.test.mjs:39` — the B1 "two contenders" test is sequential; the strong check is white-box rm/mkdir instrumentation, so it would not fail on a real double-publish stale-lock race. Fix: barrier-released real-process test, one dead owner + two reclaimers, assert persisted owner/journal proves exactly one takeover.
+2. **[blocking]** `tests/commands/majors-minors.test.mjs:185` — B2's failing-hook log path is tested only on a normal tree; a logger writing through a symlinked `.handoff/log` would still pass. Fix: real-fs symlink test for hook-failure logging that asserts fail-open and no write through the linked path.
+3. **[major]** `tests/commands/gate2-iter2-group6.test.mjs:129` — M4 low-confidence avoidance assertion is vacuous: the config never requires selecting cursor before an earlier eligible entry. Fix: role chain with cursor first-eligible; assert low-confidence keeps it selectable while high-confidence intake avoids it.
+4. **[major]** `tests/commands/gate2-iter2-group6.test.mjs:57` — M2 tests `jailRelPath` but not the Windows `checkHandoffTree` realpath containment. Fix: fake Windows `realpathSync` cases (in-tree, outside-root, cross-volume).
+5. **[major]** `tests/integration/receiver-concurrency.test.mjs:83` — M7 races two commits on the *same* prepared receipt, not two independently-prepared receipts from one sealed state. Fix: prepare two distinct receipts, release both from one barrier, assert one wins and loser state is untouched.
+
+## Coverage table
+
+| finding | honest? | test file |
+|---|---|---|
+| B1 | partial | lock-hardening.test.mjs:18, lock-concurrency.test.mjs:163 |
+| B2 | partial | lock-hardening.test.mjs:66, majors-minors.test.mjs:185 |
+| B3 | yes | regex-hardening-2.test.mjs:32 |
+| B4 | yes | validation-seed.test.mjs:22, :45 |
+| B6 | yes | validation-seed.test.mjs:70, majors-minors.test.mjs:87 |
+| M1 | yes | checkpoint-pipeline-2.test.mjs:38 |
+| M2 | partial | gate2-iter2-group6.test.mjs:48 |
+| M3 | yes | gate2-iter2-group6.test.mjs:63, doctor.test.mjs:236, resolve.test.mjs:346 |
+| M4 | partial | gate2-iter2-group6.test.mjs:100 |
+| M5 | yes | receiver-concurrency.test.mjs:121, checkpoint-pipeline-2.test.mjs:65 |
+| M6 | yes | envelopes-2.test.mjs:31, :55 |
+| M7 | partial | receiver-concurrency.test.mjs:76 |
+| M8 | yes | regex-hardening-2.test.mjs:54 |
+| B5 | yes | envelopes-2.test.mjs:97 |
+| m1 | yes | checkpoint-pipeline-2.test.mjs:94 |
+
+## Disposition
+
+All 5 findings accepted — each names a test that passes today but would still pass if the fix regressed (hollow/partial coverage) or exercises a weaker path than the real race. Folding all 5 into a strengthening wave; no implementation change implied by any of them except where a strengthened test surfaces a genuine bug.
+
+exec
+/bin/zsh -lc 'git diff --stat 06f64d8..HEAD -- tests/ core/ adapters/' in /Users/saksham/baton
+ succeeded in 0ms:
+ adapters/claude-code/scripts/hook.mjs           |  6 ++
+ core/src/bundle/lock.mjs                        | 37 +++++++---
+ core/src/util/jail.mjs                          |  9 ++-
+ tests/commands/gate2-iter2-group6.test.mjs      | 92 +++++++++++++++++++------
+ tests/helpers/memfs.mjs                         | 40 +++++++++--
+ tests/integration/hook-log-symlink.test.mjs     | 72 +++++++++++++++++++
+ tests/integration/lock-concurrency.test.mjs     | 84 +++++++++++++++++++++-
+ tests/integration/receiver-concurrency.test.mjs | 34 +++++----
+ tests/unit/lock-hardening.test.mjs              | 56 +++++++++++----
+ 9 files changed, 362 insertions(+), 68 deletions(-)
+
+exec
+/bin/zsh -lc 'git diff --name-only 06f64d8..HEAD -- tests/ core/ adapters/' in /Users/saksham/baton
+ succeeded in 0ms:
+adapters/claude-code/scripts/hook.mjs
+core/src/bundle/lock.mjs
+core/src/util/jail.mjs
+tests/commands/gate2-iter2-group6.test.mjs
+tests/helpers/memfs.mjs
+tests/integration/hook-log-symlink.test.mjs
+tests/integration/lock-concurrency.test.mjs
+tests/integration/receiver-concurrency.test.mjs
+tests/unit/lock-hardening.test.mjs
+
+codex
+The fold is the expected HEAD (`5126d3e`) and the previous verifier’s five findings are all in scope. I’m now reading the exact changed tests plus the small production diffs they are meant to pin, keeping the review limited to test honesty and regression sensitivity.
+exec
+/bin/zsh -lc 'git diff --unified=80 06f64d8..HEAD -- core/src/bundle/lock.mjs tests/integration/lock-concurrency.test.mjs tests/unit/lock-hardening.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/core/src/bundle/lock.mjs b/core/src/bundle/lock.mjs
+index 0c7371f..d50d647 100644
+--- a/core/src/bundle/lock.mjs
++++ b/core/src/bundle/lock.mjs
+@@ -71,177 +71,196 @@ function journalNote(io, p, text) {
+   try {
+     const snap = JSON.parse(io.fs.readFileSync(`${p.dir}/bundle.json`, 'utf8'));
+     if (typeof snap?.journalSeq === 'number') tailSeq = snap.journalSeq;
+   } catch {
+     // no snapshot yet — journal tail below still counts
+   }
+   try {
+     for (const e of readAllTolerant(io.fs, p.journal).entries) {
+       if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+     }
+   } catch {
+     // no journal yet
+   }
+   const ts = io.now();
+   appendEntry(io.fs, p.journal, {
+     seq: tailSeq + 1,
+     ts,
+     type: 'note',
+     dedupeKey: dedupeKey({ ts, type: 'note', source: 'lock', text }),
+     writerId: ['lock', io.host, io.pid].join('-'),
+     source: 'lock',
+     payload: { text },
+   });
+ }
+ 
+ /** @param {any} io @param {ReturnType<typeof lockPaths>} p */
+ function publishOwner(io, p) {
+   const token = io.newFencingToken();
+   atomicWriteJson(io.fs, p.owner, {
+     host: io.host,
+     pid: io.pid,
+     startTime: io.startTime,
+     fencingToken: token,
+     acquiredAt: io.now(),
+     heartbeatAt: io.now(),
+   });
+   return token;
+ }
+ 
+ /** @param {any} io @param {ReturnType<typeof lockPaths>} p */
+ function acquire(io, p) {
+   io.fs.mkdirSync(p.dir, { recursive: true });
+   try {
+     io.fs.mkdirSync(p.lockDir);
+     return publishOwner(io, p);
+   } catch (err) {
+     if (/** @type {any} */ (err)?.code !== 'EEXIST') throw err;
+   }
+ 
+   const s = inspect(io, p);
+   switch (s.state) {
+     case 'free':
+       // Raced a release between mkdir failure and inspection; retry once. A
+       // competitor can win THIS mkdir too (gate-2 fix 12: observed under real
+       // barrier-released contention) — that is contention, not corruption.
+       try {
+         io.fs.mkdirSync(p.lockDir);
+       } catch (err) {
+         if (/** @type {any} */ (err)?.code === 'EEXIST') {
+           throw new LockHeldError('lock was re-acquired by a competitor mid-inspection — transient contention');
+         }
+         throw err;
+       }
+       return publishOwner(io, p);
+     case 'live':
+       throw new LockHeldError(
+         `lock is held by a live process (pid ${s.owner.pid} on ${s.owner.host}) — terminate that process first.`,
+       );
+     case 'cross-host':
+       throw new Error(
+         `lock is held from another host ('${s.owner.host}', this is '${io.host}') — cross-host locks are never provably safe to steal. ${ESCAPE_HATCH}`,
+       );
+     case 'torn':
+       // During ACQUIRE, torn metadata is usually a competitor caught between
+       // its mkdir and owner.json publication — transient by construction, so
+       // LockHeldError lets withLock wait it out (gate-2 fix 12). A genuinely
+       // crashed publisher exhausts the retry budget and surfaces this same
+       // message; recovery semantics (recoverLock) are unchanged: never steal.
+       throw new LockHeldError(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
+     case 'dead': {
+-      // Atomic re-claim (gate-2 iter-2 B1): remove the stale lock dir and WIN
+-      // a fresh mkdir before publishing. Two contenders racing the same dead
+-      // owner arbitrate on that mkdir — the loser gets EEXIST and retries —
+-      // instead of both republishing owner.json into one shared dir. The
+-      // fencing token remains the write-time backstop.
+-      io.fs.rmSync(p.lockDir, { recursive: true, force: true });
++      // Atomic dead-lock reclaim (gate-2 iter-2 B1, hardened iter-3 finding-1).
++      // rm-then-mkdir is NOT mutually exclusive: two contenders can both observe
++      // 'dead' before either removes the stale dir, then both rm+mkdir — the
++      // second silently clobbers the first, yielding two simultaneous holders and
++      // two takeover notes. rename() is the atomic arbiter instead: the stale
++      // lock dir has exactly one name, so only one process can move it aside (the
++      // rest get ENOENT). Winning the rename IS winning the reclaim; a contender
++      // that recreated the dir via the 'free' path first makes our mkdir EEXIST →
++      // transient contention. The fencing token stays the write-time backstop.
++      const aside = `${p.lockDir}.reclaim-${io.pid}-${io.newFencingToken()}`;
++      try {
++        io.fs.renameSync(p.lockDir, aside);
++      } catch (err) {
++        // Source already gone → another contender is reclaiming it; wait+retry.
++        if (/** @type {any} */ (err)?.code === 'ENOENT') {
++          throw new LockHeldError('a competitor is reclaiming the dead lock — transient contention');
++        }
++        throw err;
++      }
++      // Winning the atomic rename IS the takeover — exactly one process can, so
++      // journal it HERE, before recreating. If we then lose the fresh-mkdir race
++      // to a competitor that grabbed the freed slot via the 'free' path, the
++      // audit trail still records who cleared the stale lock (recording it after
++      // publish would drop the note in that interleaving — the clearer isn't
++      // always the eventual holder).
++      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
++      io.fs.rmSync(aside, { recursive: true, force: true });
+       try {
+         io.fs.mkdirSync(p.lockDir);
+       } catch (err) {
+         if (/** @type {any} */ (err)?.code === 'EEXIST') {
+           throw new LockHeldError('a competitor re-claimed the dead lock first — transient contention');
+         }
+         throw err;
+       }
+-      const token = publishOwner(io, p);
+-      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+-      return token;
++      return publishOwner(io, p);
+     }
+     /* c8 ignore next 2 */
+     default:
+       throw new Error('unreachable lock state');
+   }
+ }
+ 
+ /**
+  * Fence-guarded release: the lock dir is removed only while owner.json still
+  * carries OUR token. A holder that paused past a takeover must not delete the
+  * competitor's lock on its way out — release is a write like any other.
+  * @param {any} io @param {ReturnType<typeof lockPaths>} p @param {string} token
+  */
+ function release(io, p, token) {
+   try {
+     const current = JSON.parse(io.fs.readFileSync(p.owner, 'utf8'));
+     if (current.fencingToken !== token) return; // a competitor took over — their lock, not ours
+   } catch {
+     return; // owner metadata gone or torn mid-hold — never guess; leave it for recovery
+   }
+   io.fs.rmSync(p.lockDir, { recursive: true, force: true });
+ }
+ 
+ // A live same-host holder is transient by design — operation-scoped locks are
+ // held for milliseconds — so contention waits instead of dropping the
+ // operation (gate-2 fix 12: simultaneous checkpoints must all land). The budget
+ // is generous (≈15 s): under heavy load a writer may be starved of scheduling
+ // for seconds, and waiting is strictly safer than silently dropping its work.
+ // Every other contended state (torn, cross-host) stays fail-fast: waiting
+ // cannot make those provably safe.
+ const DEFAULT_RETRY = { attempts: 600, delayMs: 25 };
+ 
+ /** Synchronous sleep without burning a core: Atomics.wait on a throwaway buffer. */
+ const sleepMs = (/** @type {number} */ ms) => {
+   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+ };
+ 
+ /**
+  * Acquire → run fn(token) → release (also on throw). Synchronous by design:
+  * everything the lock guards is sync fs work. Live-held locks are retried on
+  * a bounded budget (override via io.lockRetry = {attempts, delayMs}).
+  * @param {string} root @param {any} io @param {(token: string) => any} fn
+  */
+ export function withLock(root, io, fn) {
+   const p = lockPaths(root);
+   // Jail BEFORE any lock mutation (gate-2 iter-2 B2): a symlinked .handoff or
+   // .handoff/lock must never be created into or removed through — that would
+   // reach outside the repository. Checked once here, ahead of acquire.
+   const safe = checkHandoffTree(root, io);
+   if (!safe.ok) throw new Error(`${safe.problem} — refusing to acquire the lock`);
+   const retry = io.lockRetry ?? DEFAULT_RETRY;
+   /** @type {string} */
+   let token;
+   for (let attempt = 0; ; attempt++) {
+     try {
+       token = acquire(io, p);
+       break;
+     } catch (err) {
+       if (err instanceof LockHeldError && attempt < retry.attempts) {
+         sleepMs(retry.delayMs);
+         continue;
+       }
+       throw err;
+     }
+   }
+   try {
+     return fn(token);
+   } finally {
+     release(io, p, token);
+   }
+ }
+ 
+ /**
+  * Fast-abort layer: re-read the published token immediately before a write; a
+  * holder that paused past its last check aborts instead of clobbering.
+  * @param {string} root @param {any} io @param {string} token @param {() => any} fn
+  */
+ export function guardedWrite(root, io, token, fn) {
+   const p = lockPaths(root);
+   let current = null;
+diff --git a/tests/integration/lock-concurrency.test.mjs b/tests/integration/lock-concurrency.test.mjs
+index 178d820..7aad1c1 100644
+--- a/tests/integration/lock-concurrency.test.mjs
++++ b/tests/integration/lock-concurrency.test.mjs
+@@ -1,185 +1,265 @@
+ import { describe, it, after } from 'node:test';
+ import assert from 'node:assert/strict';
+ import * as nodeFs from 'node:fs';
+-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+-import { tmpdir } from 'node:os';
++import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
++import { tmpdir, hostname } from 'node:os';
+ import { fileURLToPath, pathToFileURL } from 'node:url';
+ import { join, dirname } from 'node:path';
+ import { spawn } from 'node:child_process';
+ import { loadBundle } from '../../core/src/bundle/store.mjs';
+ 
+ // ---------------------------------------------------------------------------
+ // Gate-2 fix 12 (reviewer-a finding 16): the old concurrency tests staged
+ // pre-created locks and sequential commits — no writer ever actually raced.
+ // These tests run REAL child processes released simultaneously by a filesystem
+ // barrier: every writer must land (bounded lock retry absorbs transient
+ // contention), sequence numbers stay unique, and lock holds never overlap.
+ // ---------------------------------------------------------------------------
+ 
+ const here = dirname(fileURLToPath(import.meta.url));
+ const repoRoot = join(here, '..', '..');
+ const BATON = join(repoRoot, 'core', 'bin', 'baton.mjs');
+ const LOCK_URL = pathToFileURL(join(repoRoot, 'core', 'src', 'bundle', 'lock.mjs')).href;
+ 
+ /** @type {string[]} */
+ const dirs = [];
+ const scratch = (prefix) => {
+   const d = mkdtempSync(join(tmpdir(), prefix));
+   dirs.push(d);
+   return d;
+ };
+ after(() => {
+   for (const d of dirs) rmSync(d, { recursive: true, force: true });
+ });
+ 
+ // Every child is lifetime-bounded (test-verifier finding 1): a lock
+ // regression must fail the test with diagnostics, never hang the suite.
+ const CHILD_TIMEOUT_MS = 30_000;
+ 
+ /** Spawn a node script; resolve with {code, stderr}. Kills at the deadline. */
+ const spawned = (script, args) =>
+   new Promise((resolve) => {
+     const child = spawn('node', [script, ...args]);
+     let stderr = '';
+     child.stderr.on('data', (d) => (stderr += d));
+     const killer = setTimeout(() => child.kill('SIGKILL'), CHILD_TIMEOUT_MS);
+     child.on('close', (code, signal) => {
+       clearTimeout(killer);
+       resolve({ code, signal, stderr });
+     });
+   });
+ 
+ /** Wait until pred() is true (bounded). */
+ async function until(pred, ms = 15_000) {
+   const t0 = Date.now();
+   while (!pred()) {
+     if (Date.now() - t0 > ms) throw new Error('barrier timeout');
+     await new Promise((r) => setTimeout(r, 10));
+   }
+ }
+ 
+ const WRITER = `
+ import { writeFileSync, existsSync } from 'node:fs';
+ import { spawnSync } from 'node:child_process';
+ const [bin, root, idx, barrierDir] = process.argv.slice(2);
+ writeFileSync(barrierDir + '/ready-' + idx, '');
+ while (!existsSync(barrierDir + '/go')) { /* released by the parent barrier */ }
+ const payload = JSON.stringify({
+   schema: 'baton/event@1', type: 'decision',
+   payload: { summary: 'concurrent-' + idx },
+   source: 'claude-code', sessionHint: 'conc-sess', unstable: false,
+ });
+ const r = spawnSync('node', [bin, 'checkpoint', '--platform', 'claude-code', '--root', root], { input: payload, encoding: 'utf8' });
+ writeFileSync(barrierDir + '/done-' + idx, JSON.stringify({ status: r.status, stderr: r.stderr }));
+ process.exit(r.status ?? 1);
+ `;
+ 
+ const HOLDER = `
+ import { writeFileSync, existsSync } from 'node:fs';
+ import * as fs from 'node:fs';
+ import { hostname } from 'node:os';
+ const [lockUrl, root, idx, barrierDir] = process.argv.slice(2);
+ const { withLock } = await import(lockUrl);
+ const io = {
+   fs, host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin),
+   now: () => new Date().toISOString(),
+   processAlive: () => true, // a live contender is NEVER treated as dead here
+   newFencingToken: () => 't-' + process.pid + '-' + Math.random().toString(36).slice(2),
+ };
+ writeFileSync(barrierDir + '/ready-' + idx, '');
+ while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+ let t0 = 0, t1 = 0;
+ const deadline = Date.now() + 20_000; // bounded retry: a stuck lock FAILS, never hangs
+ let lastErr = null;
+ for (;;) {
+   if (Date.now() > deadline) {
+     writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0: 0, t1: 0, error: 'lock never acquired within 20s: ' + String(lastErr) }));
+     process.exit(1);
+   }
+   try {
+     withLock(root, io, () => {
+       t0 = Date.now();
+       const end = t0 + 150;
+       while (Date.now() < end) { /* hold the lock, visibly */ }
+       t1 = Date.now();
+     });
+     break;
+   } catch (err) { lastErr = err?.message ?? err; /* held — retry until the deadline */ }
+ }
+ writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0, t1 }));
+ `;
+ 
++// One provably-dead owner, two real reclaimers released together. Each does a
++// read-modify-write of a shared file INSIDE withLock (no fencing helper — the
++// lock alone must serialize). A non-atomic reclaim (rm-then-mkdir) would let
++// both hold at once → a lost update AND two takeover notes (iter-3 finding-1).
++const RECLAIMER = `
++import { writeFileSync, readFileSync, existsSync } from 'node:fs';
++import * as fs from 'node:fs';
++import { hostname } from 'node:os';
++const [lockUrl, root, idx, barrierDir, deadPid] = process.argv.slice(2);
++const { withLock } = await import(lockUrl);
++const io = {
++  fs, host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin),
++  now: () => new Date().toISOString(),
++  processAlive: (pid) => String(pid) !== deadPid, // the seeded owner is provably dead
++  newFencingToken: () => 't-' + process.pid + '-' + Math.random().toString(36).slice(2),
++};
++const orderFile = root + '/.handoff/order.txt';
++writeFileSync(barrierDir + '/ready-' + idx, '');
++while (!existsSync(barrierDir + '/go')) { /* barrier */ }
++const deadline = Date.now() + 20000;
++for (;;) {
++  if (Date.now() > deadline) { writeFileSync(barrierDir + '/err-' + idx, 'never acquired'); process.exit(1); }
++  try {
++    withLock(root, io, () => {
++      let cur = '';
++      try { cur = readFileSync(orderFile, 'utf8'); } catch {}
++      const end = Date.now() + 80; while (Date.now() < end) { /* widen the critical section */ }
++      writeFileSync(orderFile, cur + idx + '\\n');
++    });
++    break;
++  } catch (e) { /* held/contended — retry until the deadline */ }
++}
++writeFileSync(barrierDir + '/done-' + idx, 'ok');
++`;
++
++describe('dead-lock reclaim under a real barrier-released race (iter-3 finding-1)', () => {
++  it('two reclaimers, one dead owner: exactly one takeover, both mutate serialized (no lost update)', async () => {
++    const root = scratch('baton-reclaim-root-');
++    const barrier = scratch('baton-reclaim-barrier-');
++    const DEAD_PID = '999999';
++    // Seed a provably-dead owner on THIS host so both children agree it is dead.
++    mkdirSync(join(root, '.handoff', 'lock'), { recursive: true });
++    writeFileSync(
++      join(root, '.handoff', 'lock', 'owner.json'),
++      JSON.stringify({ host: hostname(), pid: Number(DEAD_PID), startTime: 1, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' }),
++    );
++    const reclaimerPath = join(barrier, 'reclaimer.mjs');
++    writeFileSync(reclaimerPath, RECLAIMER);
++
++    const kids = [1, 2].map((i) => spawned(reclaimerPath, [LOCK_URL, root, String(i), barrier, DEAD_PID]));
++    await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
++    writeFileSync(join(barrier, 'go'), '');
++    const results = await Promise.all(kids);
++    for (const [i, r] of results.entries()) {
++      assert.equal(r.code, 0, `reclaimer ${i + 1} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
++    }
++
++    // Mutual exclusion: both critical sections ran serialized, so the order file
++    // carries BOTH ids exactly once. A non-atomic reclaim would have lost one
++    // read-modify-write (two simultaneous holders clobbering each other).
++    const order = readFileSync(join(root, '.handoff', 'order.txt'), 'utf8')
++      .split('\n')
++      .filter((l) => l.trim() !== '')
++      .sort();
++    assert.deepEqual(order, ['1', '2'], `both reclaimers mutated exactly once under the lock; got ${JSON.stringify(order)}`);
++
++    // Exactly one dead-lock takeover was journaled: the loser of the atomic
++    // rename acquires the freed lock via the 'free' path, which does not journal.
++    const journal = existsSync(join(root, '.handoff', 'journal.ndjson'))
++      ? readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
++          .split('\n')
++          .filter((l) => l.trim() !== '')
++          .map((l) => JSON.parse(l))
++      : [];
++    const takeovers = journal.filter((e) => e.type === 'note' && /took over stale lock from dead/.test(e.payload?.text ?? ''));
++    assert.equal(takeovers.length, 1, `exactly one dead-lock takeover occurred; got ${takeovers.length}`);
++    assert.equal(existsSync(join(root, '.handoff', 'lock')), false, 'the lock dir is released after both operations');
++  });
++});
++
+ describe('barrier-released concurrent writers (real processes, real fs)', () => {
+   it('4 simultaneous checkpoints: every event lands, seqs unique, journalSeq sane', async () => {
+     const root = scratch('baton-conc-root-');
+     const barrier = scratch('baton-conc-barrier-');
+     const writerPath = join(barrier, 'writer.mjs');
+     writeFileSync(writerPath, WRITER);
+ 
+     const N = 4;
+     const children = [];
+     for (let i = 1; i <= N; i++) children.push(spawned(writerPath, [BATON, root, String(i), barrier]));
+     await until(() => Array.from({ length: N }, (_, i) => existsSync(join(barrier, `ready-${i + 1}`))).every(Boolean));
+     writeFileSync(join(barrier, 'go'), '');
+     const results = await Promise.all(children);
+ 
+     for (let i = 1; i <= N; i++) {
+       const r = results[i - 1];
+       assert.equal(r.code, 0, `writer wrapper ${i} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+       const done = JSON.parse(readFileSync(join(barrier, `done-${i}`), 'utf8'));
+       assert.equal(done.status, 0, `writer ${i} exited 0; stderr: ${done.stderr}`);
+     }
+ 
+     // Journal integrity: every writer's event landed exactly once, seqs unique.
+     const journal = readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
+       .split('\n')
+       .filter((l) => l.trim() !== '')
+       .map((l) => JSON.parse(l));
+     const decisions = journal.filter((e) => e.type === 'decision');
+     assert.equal(decisions.length, N, `all ${N} concurrent events are in the journal (none dropped under contention)`);
+     const seqs = journal.map((e) => e.seq);
+     assert.equal(new Set(seqs).size, seqs.length, `sequence numbers are unique: ${JSON.stringify(seqs)}`);
+     for (const s of seqs) assert.ok(Number.isFinite(s), 'no NaN/undefined seq anywhere');
+ 
+     // State integrity: the merged bundle carries every writer's decision.
+     const io = {
+       cwd: root,
+       fs: nodeFs,
+       now: () => new Date().toISOString(),
+       stdout: { write: () => true },
+       stderr: { write: () => true },
+     };
+     const { bundle } = loadBundle(root, io);
+     assert.ok(bundle, 'the bundle loads after the melee');
+     for (let i = 1; i <= N; i++) {
+       assert.ok(
+         bundle.decisions.some((/** @type {any} */ d) => d.summary === `concurrent-${i}`),
+         `writer ${i}'s decision survived into the merged bundle`,
+       );
+     }
+     assert.ok(Number.isFinite(bundle.journalSeq), 'journalSeq is a finite number after concurrent writes');
+   });
+ 
+   it('two lock holders released together never overlap their critical sections', async () => {
+     const root = scratch('baton-mutex-root-');
+     const barrier = scratch('baton-mutex-barrier-');
+     const holderPath = join(barrier, 'holder.mjs');
+     writeFileSync(holderPath, HOLDER);
+ 
+     const children = [1, 2].map((i) => spawned(holderPath, [LOCK_URL, root, String(i), barrier]));
+     await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+     writeFileSync(join(barrier, 'go'), '');
+     const results = await Promise.all(children);
+     for (const [i, r] of results.entries()) {
+       assert.equal(r.code, 0, `holder ${i + 1} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+     }
+ 
+     const a = JSON.parse(readFileSync(join(barrier, 'interval-1'), 'utf8'));
+     const b = JSON.parse(readFileSync(join(barrier, 'interval-2'), 'utf8'));
+     assert.equal(a.error ?? null, null, `holder 1 acquired cleanly: ${a.error}`);
+     assert.equal(b.error ?? null, null, `holder 2 acquired cleanly: ${b.error}`);
+     assert.ok(a.t0 > 0 && b.t0 > 0, 'both holders eventually acquired the lock');
+     const overlap = a.t0 < b.t1 && b.t0 < a.t1;
+     assert.equal(overlap, false, `critical sections overlap: A=[${a.t0},${a.t1}] B=[${b.t0},${b.t1}]`);
+   });
+ });
+diff --git a/tests/unit/lock-hardening.test.mjs b/tests/unit/lock-hardening.test.mjs
+index 5bb5639..3b72573 100644
+--- a/tests/unit/lock-hardening.test.mjs
++++ b/tests/unit/lock-hardening.test.mjs
+@@ -1,84 +1,114 @@
+ import { describe, it } from 'node:test';
+ import assert from 'node:assert/strict';
+ import { makeIo } from '../helpers/fakeio.mjs';
+ import { withLock, recoverLock } from '../../core/src/bundle/lock.mjs';
+ 
+ // ---------------------------------------------------------------------------
+ // Gate-2 iteration-2 findings B1 + B2 (reviewer-a #3, #4): the dead-lock
+ // takeover must atomically RE-CLAIM the lock dir (not just republish owner.json
+ // into the existing one), and every lock/recover mutation must pass the
+ // managed-tree jail first so a symlinked .handoff/lock cannot be followed
+ // outside the repository.
+ // ---------------------------------------------------------------------------
+ 
+ const OWNER = '/repo/.handoff/lock/owner.json';
+ const deadOwner = JSON.stringify({ host: 'host-A', pid: 999, startTime: 5, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' });
+ 
+ describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
+-  it('takeover recreates the lock dir, not just owner.json in place', () => {
+-    // Only pid 4242 (this io) is alive → pid 999 is provably dead.
++  it('takeover renames the stale lock dir ASIDE then claims a fresh one (never in-place rm)', () => {
++    // Only pid 4242 (this io) is alive → pid 999 is provably dead. The reclaim
++    // must be arbitrated by an atomic rename of the SOURCE lock dir, not an
++    // rm-then-mkdir that two contenders could both perform (iter-3 finding-1).
++    // We trace lock-dir ops in order: the CLAIM must be rename→(rm aside)→mkdir,
++    // with no in-place rm of the live /lock before the fresh mkdir. (The final
++    // rm of /lock at release, AFTER the mkdir, is correct and expected.)
+     const io = makeIo({ files: { [OWNER]: deadOwner } });
+-    let removed = false;
+-    let recreated = false;
++    const LOCK = '/repo/.handoff/lock';
++    /** @type {string[]} */
++    const trace = [];
++    const realRename = io.fs.renameSync.bind(io.fs);
+     const realRm = io.fs.rmSync.bind(io.fs);
+     const realMkdir = io.fs.mkdirSync.bind(io.fs);
++    io.fs.renameSync = (from, to) => {
++      if (String(from) === LOCK) trace.push(`rename:${/\/lock\.reclaim-/.test(String(to)) ? 'aside' : 'other'}`);
++      return realRename(from, to);
++    };
+     io.fs.rmSync = (p, opts) => {
+-      if (String(p).endsWith('/lock')) removed = true;
++      if (String(p) === LOCK) trace.push('rm:lock');
++      else if (/\/lock\.reclaim-/.test(String(p))) trace.push('rm:aside');
+       return realRm(p, opts);
+     };
+     io.fs.mkdirSync = (p, opts) => {
+-      if (String(p).endsWith('/lock') && !(opts && opts.recursive)) recreated = true;
++      if (String(p) === LOCK && !(opts && opts.recursive)) trace.push('mkdir:lock');
+       return realMkdir(p, opts);
+     };
+     const token = withLock('/repo', io, (t) => t);
+-    assert.ok(removed, 'the stale lock dir is removed as part of the claim');
+-    assert.ok(recreated, 'the lock dir is re-created (mkdir EEXIST is the claim primitive), not reused in place');
++
++    // Trace shape: mkdir:lock (initial EEXIST probe) → rename:aside → rm:aside →
++    // mkdir:lock (the winning claim) → rm:lock (release, AFTER the claim).
++    const claimMkdir = trace.lastIndexOf('mkdir:lock');
++    const renameAt = trace.indexOf('rename:aside');
++    const rmAsideAt = trace.indexOf('rm:aside');
++    assert.ok(renameAt >= 0, `the stale lock dir is moved aside by an atomic rename; trace ${JSON.stringify(trace)}`);
++    assert.ok(renameAt < rmAsideAt && rmAsideAt < claimMkdir, 'the claim order is rename-aside → rm-aside → fresh mkdir');
++    const beforeClaim = trace.slice(0, claimMkdir);
++    assert.equal(beforeClaim.includes('rm:lock'), false, 'the live lock dir is never rm-ed in place during the claim (only renamed aside)');
+     assert.ok(typeof token === 'string' && token.length > 0, 'a fresh token is published after the atomic claim');
+   });
+ 
+-  it('two contenders against one dead lock: exactly one takes over per claim attempt', () => {
+-    // Model the race: contender 1 removes the dead lock, contender 2 tries to
+-    // claim the now-empty slot. With an atomic mkdir-claim, the second mkdir of
+-    // an already-claimed dir throws EEXIST → contention, never a double publish.
++  it('a contender that loses the rename sees ENOENT-as-contention, not a second takeover', () => {
++    // Simulate the rename losing the race: the stale dir is already gone when we
++    // try to move it aside → LockHeldError (retryable), never a duplicate claim.
++    const io = makeIo({ files: { [OWNER]: deadOwner }, lockRetry: { attempts: 0, delayMs: 0 } });
++    const realRename = io.fs.renameSync.bind(io.fs);
++    io.fs.renameSync = (from, to) => {
++      if (String(from).endsWith('/lock') && /\/lock\.reclaim-/.test(String(to))) {
++        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
++      }
++      return realRename(from, to);
++    };
++    assert.throws(() => withLock('/repo', io, (t) => t), /reclaiming the dead lock|transient contention/i);
++  });
++
++  it('after release the lock is free and the next acquisition mints its own token', () => {
+     const io = makeIo({ files: { [OWNER]: deadOwner } });
+     const first = withLock('/repo', io, (t) => t);
+     assert.ok(first, 'first contender takes over the dead lock');
+-    // After release the dir is gone; a fresh acquire on the free slot succeeds.
+     assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'lock released after the operation');
+     const second = withLock('/repo', io, (t) => t);
+     assert.ok(second && second !== first, 'the next acquisition gets its own fresh token');
+   });
+ });
+ 
+ describe('lock/recover refuse a symlinked managed tree before mutating (B2)', () => {
+   function symlinkedLockIo() {
+     // The lock dir exists inside the managed tree (so the jail walk encounters
+     // it) but is a symlink pointing outside the repo: lstat reports a link.
+     const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}', '/repo/.handoff/lock/owner.json': deadOwner } });
+     const realLstat = io.fs.lstatSync.bind(io.fs);
+     io.fs.lstatSync = (p) => {
+       if (String(p) === '/repo/.handoff/lock') return { ...realLstat('/repo/.handoff'), isSymbolicLink: () => true, isDirectory: () => true, isFile: () => false };
+       return realLstat(p);
+     };
+     return io;
+   }
+ 
+   it('withLock refuses to acquire through a symlinked lock dir', () => {
+     const io = symlinkedLockIo();
+     let rmCalled = false;
+     const realRm = io.fs.rmSync.bind(io.fs);
+     io.fs.rmSync = (p, opts) => {
+       rmCalled = true;
+       return realRm(p, opts);
+     };
+     assert.throws(() => withLock('/repo', io, () => 'nope'), /symlink|jail|unsafe/i);
+     assert.equal(rmCalled, false, 'nothing is removed through the link');
+   });
+ 
+   it('recoverLock refuses a symlinked lock dir even with --force', () => {
+     const io = symlinkedLockIo();
+     const r = recoverLock('/repo', io, { force: true });
+     assert.equal(r.recovered, false);
+     assert.match(r.refusedReason, /symlink|jail|unsafe/i);
+   });
+ });
+
+exec
+/bin/zsh -lc 'git diff --unified=80 06f64d8..HEAD -- adapters/claude-code/scripts/hook.mjs tests/integration/hook-log-symlink.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'git diff --unified=80 06f64d8..HEAD -- core/src/util/jail.mjs tests/commands/gate2-iter2-group6.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'git diff --unified=80 06f64d8..HEAD -- tests/integration/receiver-concurrency.test.mjs tests/helpers/memfs.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/tests/helpers/memfs.mjs b/tests/helpers/memfs.mjs
+index ec18682..92875f4 100644
+--- a/tests/helpers/memfs.mjs
++++ b/tests/helpers/memfs.mjs
+@@ -18,167 +18,193 @@ function normalize(p) {
+   const out = [];
+   for (const part of str.split('/')) {
+     if (part === '' || part === '.') continue;
+     if (part === '..') {
+       out.pop();
+       continue;
+     }
+     out.push(part);
+   }
+   return (isAbs ? '/' : '') + out.join('/');
+ }
+ 
+ function dirname(np) {
+   const i = np.lastIndexOf('/');
+   if (i <= 0) return '/';
+   return np.slice(0, i);
+ }
+ 
+ function basename(np, parent) {
+   return parent === '/' ? np.slice(1) : np.slice(parent.length + 1);
+ }
+ 
+ export function makeMemfs(initialFiles = {}) {
+   const store = new Map(); // path -> string content
+   const dirs = new Set(['/']);
+   const mtimes = new Map();
+   const history = [];
+   let clock = 0;
+ 
+   const snapshot = () => Object.fromEntries(store);
+   const record = (op, paths) => history.push({ op, paths, files: snapshot() });
+   const touch = (np) => mtimes.set(np, ++clock);
+ 
+   const mkdirp = (np) => {
+     let cur = '';
+     for (const part of np.split('/').filter(Boolean)) {
+       cur = cur + '/' + part;
+       dirs.add(cur);
+     }
+   };
+ 
+   const ensureParent = (np, syscall) => {
+     const parent = dirname(np);
+     if (parent === '/' ) return;
+     if (!dirs.has(parent)) throw fsError('ENOENT', syscall, np);
+   };
+ 
+   for (const [p, content] of Object.entries(initialFiles)) {
+     const np = normalize(p);
+     mkdirp(dirname(np));
+     store.set(np, String(content));
+     touch(np);
+   }
+ 
+   const fs = {
+     readFileSync(p /*, enc */) {
+       const np = normalize(p);
+       if (!store.has(np)) throw fsError('ENOENT', 'open', np);
+       return store.get(np);
+     },
+ 
+     writeFileSync(p, data /*, enc */) {
+       const np = normalize(p);
+       ensureParent(np, 'open');
+       store.set(np, String(data));
+       touch(np);
+       record('writeFileSync', [np]);
+     },
+ 
+     appendFileSync(p, data) {
+       const np = normalize(p);
+       ensureParent(np, 'open');
+       store.set(np, (store.get(np) || '') + String(data));
+       touch(np);
+       record('appendFileSync', [np]);
+     },
+ 
+     renameSync(from, to) {
+       const nf = normalize(from);
+       const nt = normalize(to);
+-      if (!store.has(nf)) throw fsError('ENOENT', 'rename', nf);
+-      ensureParent(nt, 'rename');
+-      const content = store.get(nf);
+-      store.delete(nf);
+-      store.set(nt, content);
+-      touch(nt);
+-      record('renameSync', [nf, nt]);
++      if (store.has(nf)) {
++        ensureParent(nt, 'rename');
++        const content = store.get(nf);
++        store.delete(nf);
++        store.set(nt, content);
++        touch(nt);
++        record('renameSync', [nf, nt]);
++        return;
++      }
++      // Directory rename (atomic move of the node and all descendants) — the
++      // lock's dead-reclaim arbitration renames the stale lock dir aside.
++      if (dirs.has(nf)) {
++        ensureParent(nt, 'rename');
++        const pre = nf + '/';
++        dirs.delete(nf);
++        dirs.add(nt);
++        for (const k of [...store.keys()]) {
++          if (k.startsWith(pre)) {
++            store.set(nt + k.slice(nf.length), store.get(k));
++            store.delete(k);
++          }
++        }
++        for (const d of [...dirs]) {
++          if (d !== nt && d.startsWith(pre)) {
++            dirs.add(nt + d.slice(nf.length));
++            dirs.delete(d);
++          }
++        }
++        touch(nt);
++        record('renameSync', [nf, nt]);
++        return;
++      }
++      throw fsError('ENOENT', 'rename', nf);
+     },
+ 
+     mkdirSync(p, opts = {}) {
+       const np = normalize(p);
+       if (opts.recursive) {
+         mkdirp(np);
+         record('mkdirSync', [np]);
+         return undefined;
+       }
+       ensureParent(np, 'mkdir');
+       if (dirs.has(np) || store.has(np)) throw fsError('EEXIST', 'mkdir', np);
+       dirs.add(np);
+       record('mkdirSync', [np]);
+       return undefined;
+     },
+ 
+     existsSync(p) {
+       const np = normalize(p);
+       return store.has(np) || dirs.has(np);
+     },
+ 
+     readdirSync(p) {
+       const np = normalize(p);
+       if (!dirs.has(np)) {
+         if (store.has(np)) throw fsError('ENOTDIR', 'scandir', np);
+         throw fsError('ENOENT', 'scandir', np);
+       }
+       const names = new Set();
+       const collect = (k) => {
+         if (k !== np && dirname(k) === np) names.add(basename(k, np));
+       };
+       for (const k of store.keys()) collect(k);
+       for (const d of dirs) collect(d);
+       return [...names];
+     },
+ 
+     unlinkSync(p) {
+       const np = normalize(p);
+       if (!store.has(np)) throw fsError('ENOENT', 'unlink', np);
+       store.delete(np);
+       record('unlinkSync', [np]);
+     },
+ 
+     rmSync(p, opts = {}) {
+       const np = normalize(p);
+       const isFile = store.has(np);
+       const isDir = dirs.has(np);
+       if (!isFile && !isDir) {
+         if (opts.force) return;
+         throw fsError('ENOENT', 'rm', np);
+       }
+       if (isFile) store.delete(np);
+       if (isDir) {
+         const pre = np + '/';
+         if (!opts.recursive) {
+           const hasChildren = [...store.keys(), ...dirs].some((k) => k !== np && k.startsWith(pre));
+           if (hasChildren) throw fsError('ENOTEMPTY', 'rmdir', np);
+           dirs.delete(np);
+         } else {
+           for (const k of [...store.keys()]) if (k === np || k.startsWith(pre)) store.delete(k);
+           for (const d of [...dirs]) if (d === np || d.startsWith(pre)) dirs.delete(d);
+         }
+       }
+       record('rmSync', [np]);
+     },
+ 
+     statSync(p) {
+       const np = normalize(p);
+       if (store.has(np)) {
+         const size = Buffer.byteLength(store.get(np));
+         return { isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false, size, mtimeMs: mtimes.get(np) || 0 };
+       }
+       if (dirs.has(np)) {
+         return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => false, size: 0, mtimeMs: mtimes.get(np) || 0 };
+       }
+       throw fsError('ENOENT', 'stat', np);
+     },
+ 
+     // The fake cannot represent symlinks, so lstat === stat and realpath is
+     // normalization. Symlink-refusal behavior is proven over the real fs in
+diff --git a/tests/integration/receiver-concurrency.test.mjs b/tests/integration/receiver-concurrency.test.mjs
+index a5e69d2..03b8f34 100644
+--- a/tests/integration/receiver-concurrency.test.mjs
++++ b/tests/integration/receiver-concurrency.test.mjs
+@@ -1,153 +1,157 @@
+ import { describe, it, after } from 'node:test';
+ import assert from 'node:assert/strict';
+ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+ import { tmpdir } from 'node:os';
+ import { fileURLToPath } from 'node:url';
+ import { join, dirname } from 'node:path';
+ import { spawn, spawnSync } from 'node:child_process';
+ 
+ // ---------------------------------------------------------------------------
+ // Gate-2 iteration-2 findings M7 (reviewer-a #13) + M5 (reviewer-a #10):
+ // genuinely CONCURRENT acceptance, not sequential. Two commit processes are
+ // released from one filesystem barrier against a single prepared receipt:
+ // exactly one transition must land (one generation bump, one receive_log
+ // entry), the loser rejected with state untouched. And two debounced
+ // afterFileEdit checkpoints released together must yield exactly one append.
+ // ---------------------------------------------------------------------------
+ 
+ const here = dirname(fileURLToPath(import.meta.url));
+ const repoRoot = join(here, '..', '..');
+ const BATON = join(repoRoot, 'core', 'bin', 'baton.mjs');
+ const CHILD_TIMEOUT_MS = 30_000;
+ 
+ /** @type {string[]} */
+ const dirs = [];
+ const scratch = (prefix) => {
+   const d = mkdtempSync(join(tmpdir(), prefix));
+   dirs.push(d);
+   return d;
+ };
+ after(() => {
+   for (const d of dirs) rmSync(d, { recursive: true, force: true });
+ });
+ 
+ const spawned = (script, args) =>
+   new Promise((resolve) => {
+     const child = spawn('node', [script, ...args]);
+     let stderr = '';
+     let stdout = '';
+     child.stdout.on('data', (d) => (stdout += d));
+     child.stderr.on('data', (d) => (stderr += d));
+     const killer = setTimeout(() => child.kill('SIGKILL'), CHILD_TIMEOUT_MS);
+     child.on('close', (code, signal) => {
+       clearTimeout(killer);
+       resolve({ code, signal, stdout, stderr });
+     });
+   });
+ 
+ async function until(pred, ms = 15_000) {
+   const t0 = Date.now();
+   while (!pred()) {
+     if (Date.now() - t0 > ms) throw new Error('barrier timeout');
+     await new Promise((r) => setTimeout(r, 10));
+   }
+ }
+ 
+ const NOW = '2026-07-12T00:00:00.000Z';
+ const sealed = () => ({
+   schema: 'baton/bundle@1',
+   bundleId: 'b_recvconc000000',
+   generation: 1,
+   createdAt: NOW,
+   updatedAt: NOW,
+   origin: { platform: 'claude-code', model: 'claude-fable-5', sessionHint: 's', unstable: false },
+   task: { goal: 'ship', constraints: [], acceptance: [] },
+   plan: { steps: [] },
+   decisions: [],
+   files: { touched: [] },
+   roles: { assignments: {} },
+   git: null,
+   handoff: { status: 'sealed', reason: 'limits', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: NOW, receive_log: [] },
+   journalSeq: 0,
+   compaction: { droppedDecisions: 0, note: null },
+   dedupeRing: [],
+ });
+ 
+-describe('M7 — two commit processes race one receipt: exactly one wins', () => {
+-  it('one generation bump, one receive_log entry, loser rejected with state untouched', async () => {
++describe('M7 — two INDEPENDENTLY-prepared receivers race to commit: exactly one wins', () => {
++  it('one generation bump, one receive archive, loser rejected with state untouched', async () => {
+     const root = scratch('baton-recvconc-');
+     const barrier = scratch('baton-recvconc-barrier-');
+     mkdirSync(join(root, '.handoff'), { recursive: true });
+     writeFileSync(join(root, '.handoff', 'bundle.json'), JSON.stringify(sealed(), null, 2) + '\n');
+ 
+-    // Prepare once (read-only) to get the receipt token both contenders use.
+-    const prep = spawnSync('node', [BATON, 'receive', '--platform', 'codex', '--json', '--origin', 'claude-code', '--reason', 'limits', '--root', root], { encoding: 'utf8' });
+-    assert.equal(prep.status, 0, `prepare exits 0; stderr: ${prep.stderr}`);
+-    const token = JSON.parse(prep.stdout.trim().split('\n').pop()).data.token;
+-    assert.ok(token, 'a receipt token was minted');
+-
+-    const commit = `
++    // Each child runs its OWN prepare (against the same sealed state) and then
++    // its own commit — the faithful competing-receivers race, not a shared
++    // single receipt double-committed. Both prepares complete before the
++    // barrier; the barrier releases both COMMITs together. The winner bumps the
++    // generation/receive_log, so the loser's re-derivation under the lock no
++    // longer matches its token → stale-receipt rejection, zero mutation.
++    const receiver = `
+ import { writeFileSync, existsSync } from 'node:fs';
+ import { spawnSync } from 'node:child_process';
+-const [bin, root, token, idx, barrierDir] = process.argv.slice(2);
++const [bin, root, idx, barrierDir] = process.argv.slice(2);
++const args = ['--platform', 'codex', '--origin', 'claude-code', '--reason', 'limits', '--root', root];
++const prep = spawnSync('node', [bin, 'receive', '--json', ...args], { encoding: 'utf8' });
++if (prep.status !== 0) { writeFileSync(barrierDir + '/prep-fail-' + idx, prep.stderr || ''); process.exit(2); }
++const token = JSON.parse(prep.stdout.trim().split('\\n').pop()).data.token;
+ writeFileSync(barrierDir + '/ready-' + idx, '');
+-while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+-const r = spawnSync('node', [bin, 'receive', '--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'limits', '--root', root], { encoding: 'utf8' });
++while (!existsSync(barrierDir + '/go')) { /* barrier: both prepared, race the commit */ }
++const r = spawnSync('node', [bin, 'receive', '--commit', token, ...args], { encoding: 'utf8' });
+ writeFileSync(barrierDir + '/done-' + idx, JSON.stringify({ status: r.status }));
+ process.exit(r.status ?? 1);
+ `;
+-    const commitPath = join(barrier, 'commit.mjs');
+-    writeFileSync(commitPath, commit);
++    const receiverPath = join(barrier, 'receiver.mjs');
++    writeFileSync(receiverPath, receiver);
+ 
+-    const kids = [1, 2].map((i) => spawned(commitPath, [BATON, root, token, String(i), barrier]));
++    const kids = [1, 2].map((i) => spawned(receiverPath, [BATON, root, String(i), barrier]));
+     await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+     writeFileSync(join(barrier, 'go'), '');
+     const results = await Promise.all(kids);
+ 
+     const codes = results.map((r) => r.code).sort();
+     assert.deepEqual(codes, [0, 1], `exactly one commit succeeds and one is rejected; got ${JSON.stringify(codes)} (stderr: ${results.map((r) => r.stderr).join(' | ')})`);
+ 
+     const bundle = JSON.parse(readFileSync(join(root, '.handoff', 'bundle.json'), 'utf8'));
+     assert.equal(bundle.generation, 2, 'exactly one generation bump (no double transition)');
+     assert.equal(bundle.handoff.status, 'open', 'the winner opened a fresh writable generation');
+     assert.equal(bundle.origin.platform, 'codex', 'the winning receiver adopted ownership');
+     // The archived received seal carries exactly one receive_log entry.
+     const historyDir = join(root, '.handoff', 'history');
+     const freezes = existsSync(historyDir) ? readdirSync(historyDir).filter((n) => n.endsWith('.receive.json')) : [];
+     assert.equal(freezes.length, 1, 'exactly one receive archive was frozen to history');
+   });
+ });
+ 
+ describe('M5 — two debounced afterFileEdit checkpoints race: exactly one appends', () => {
+   it('the second, inside the window, is debounced away under the lock', async () => {
+     const root = scratch('baton-debounce-conc-');
+     const barrier = scratch('baton-debounce-conc-barrier-');
+ 
+     const writer = `
+ import { writeFileSync, existsSync } from 'node:fs';
+ import { spawnSync } from 'node:child_process';
+ const [bin, root, idx, barrierDir] = process.argv.slice(2);
+ const payload = JSON.stringify({ event: 'afterFileEdit', schema: 'baton/event@1', type: 'decision', payload: { summary: 'edit-' + idx }, sessionHint: 'deb-sess', unstable: false });
+ writeFileSync(barrierDir + '/ready-' + idx, '');
+ while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+ const r = spawnSync('node', [bin, 'checkpoint', '--platform', 'cursor', '--debounce', '120', '--root', root], { input: payload, encoding: 'utf8' });
+ writeFileSync(barrierDir + '/done-' + idx, JSON.stringify({ status: r.status }));
+ process.exit(r.status ?? 1);
+ `;
+     const writerPath = join(barrier, 'writer.mjs');
+     writeFileSync(writerPath, writer);
+ 
+     const kids = [1, 2].map((i) => spawned(writerPath, [BATON, root, String(i), barrier]));
+     await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+     writeFileSync(join(barrier, 'go'), '');
+     const results = await Promise.all(kids);
+     for (const r of results) assert.equal(r.code, 0, `both exit 0 (hook-safe); signal ${r.signal}, stderr ${r.stderr}`);
+ 
+     const journal = readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
+       .split('\n')
+       .filter((l) => l.trim() !== '')
+       .map((l) => JSON.parse(l));
+     const decisions = journal.filter((e) => e.type === 'decision');
+     assert.equal(decisions.length, 1, `exactly one edit is checkpointed in the debounce window; got ${decisions.length}`);
+   });
+ });
+
+ succeeded in 0ms:
+diff --git a/adapters/claude-code/scripts/hook.mjs b/adapters/claude-code/scripts/hook.mjs
+index 8b1705b..542cd16 100644
+--- a/adapters/claude-code/scripts/hook.mjs
++++ b/adapters/claude-code/scripts/hook.mjs
+@@ -1,129 +1,135 @@
+ // Single Claude Code hook entrypoint. hooks.json routes every event here with
+ // the event name as argv[0]; this script's only job is to reach the core CLI
+ // (never re-implement it) and to stay fail-open: a hook must never break the
+ // host session, so every path returns 0.
+ 
+ import { spawn } from 'node:child_process';
+ import { readFileSync } from 'node:fs';
+ import * as nodeFs from 'node:fs';
+ import { pathToFileURL } from 'node:url';
++import { checkHandoffTree } from '../../../core/src/util/jail.mjs';
+ 
+ /** @param {any} io */
+ const batonBin = (io) => `${io.env?.CLAUDE_PLUGIN_ROOT ?? '.'}/core/bin/baton.mjs`;
+ 
+ /**
+  * execFile-shaped spawn that supports {input}: async execFile has no input
+  * option, and a child reading stdin would otherwise block forever (gate-2
+  * reviewer-b finding 1). The io contract for this adapter is therefore
+  * "promise execFile honoring opts.input as the child's stdin".
+  * @param {string} cmd @param {string[]} args @param {{cwd?: string, input?: string, timeout?: number}} [opts]
+  * @returns {Promise<{stdout: string, stderr: string}>}
+  */
+ function execFileWithInput(cmd, args = [], opts = {}) {
+   return new Promise((resolve, reject) => {
+     const child = spawn(cmd, args, { cwd: opts.cwd, timeout: opts.timeout ?? 25_000 });
+     let stdout = '';
+     let stderr = '';
+     child.stdout.on('data', (d) => (stdout += d));
+     child.stderr.on('data', (d) => (stderr += d));
+     child.on('error', reject);
+     child.on('close', (code) => {
+       if (code === 0) return resolve({ stdout, stderr });
+       const e = Object.assign(new Error(`Command failed: ${cmd}`), { code, stdout, stderr });
+       reject(e);
+     });
+     if (typeof opts.input === 'string' && child.stdin) child.stdin.write(opts.input);
+     child.stdin?.end();
+   });
+ }
+ 
+ // Hook-error diagnostics (gate-2 minor 16 / plan §Transcript policy log
+ // contract): metadata-only entries — never the hook payload — with bounded
+ // retention (last 50 entries / 7 days). The log rides .handoff/ so the purge
+ // walk covers it.
+ const HOOK_LOG_MAX = 50;
+ const HOOK_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+ 
+ /** @param {any} io @param {string} event @param {any} err */
+ function logHookError(io, event, err) {
+   try {
++    // The diagnostics log rides .handoff/, so it passes the same managed-tree
++    // jail as every other write (threat model): refuse to create or write
++    // through a symlinked/escaped .handoff. Diagnostics must never be the hole
++    // the jail closes elsewhere — and this stays fail-open (skip, don't throw).
++    if (!checkHandoffTree(io.cwd, io).ok) return;
+     const dir = `${io.cwd}/.handoff/log`;
+     io.fs.mkdirSync(dir, { recursive: true });
+     const path = `${dir}/hook-errors.jsonl`;
+     const nowIso = typeof io.now === 'function' ? io.now() : new Date().toISOString();
+     /** @type {any[]} */
+     let entries = [];
+     try {
+       entries = io.fs
+         .readFileSync(path, 'utf8')
+         .split('\n')
+         .filter((/** @type {string} */ l) => l.trim() !== '')
+         .map((/** @type {string} */ l) => {
+           try {
+             return JSON.parse(l);
+           } catch {
+             return null;
+           }
+         })
+         .filter(Boolean);
+     } catch {
+       entries = [];
+     }
+     entries.push({ ts: nowIso, event, code: err?.code ?? null });
+     const cutoff = Date.parse(nowIso) - HOOK_LOG_MAX_AGE_MS;
+     entries = entries.filter((e) => typeof e.ts === 'string' && Date.parse(e.ts) >= cutoff).slice(-HOOK_LOG_MAX);
+     io.fs.writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+   } catch {
+     // diagnostics must never break fail-open
+   }
+ }
+ 
+ /**
+  * Run a core baton command as a child process, forwarding the raw hook payload
+  * as the child's stdin. Rejections are swallowed (fail-open) — core commands
+  * carry their own hook-safety, and Claude ignores hook exit codes anyway —
+  * but each failure leaves a metadata-only diagnostic in .handoff/log/.
+  * @param {any} io @param {string[]} argv @param {string} event
+  */
+ async function baton(io, argv, event) {
+   try {
+     await io.execFile('node', [batonBin(io), ...argv], { input: io.stdin });
+   } catch (err) {
+     // fail-open: a failing child must not break the session
+     logHookError(io, event, err);
+   }
+ }
+ 
+ /** @param {any} io @returns {any | null} parsed hook payload, or null */
+ function parsePayload(io) {
+   try {
+     return JSON.parse(typeof io.stdin === 'string' ? io.stdin : '');
+   } catch {
+     return null;
+   }
+ }
+ 
+ /**
+  * SessionStart: not a checkpoint. If a pending bundle from ANOTHER platform
+  * exists (sealed, or open-but-limit-hit — the unsealed limit death), inject a
+  * receive suggestion via the Claude context shape. Own-platform bundles are
+  * this session's own work; quiet no-op.
+  * @param {any} io
+  */
+ function sessionStart(io) {
+   let bundle;
+   try {
+     bundle = JSON.parse(io.fs.readFileSync(`${io.cwd}/.handoff/bundle.json`, 'utf8'));
+   } catch {
+     return 0;
+   }
+   const origin = bundle?.origin?.platform;
+   const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
+   const foreign = typeof origin === 'string' && origin !== 'claude-code';
+   if (pending && foreign) {
+     io.stdout.write(
+       JSON.stringify({
+         hookSpecificOutput: {
+           hookEventName: 'SessionStart',
+           additionalContext: `A handoff bundle from ${origin} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
+         },
+diff --git a/tests/integration/hook-log-symlink.test.mjs b/tests/integration/hook-log-symlink.test.mjs
+new file mode 100644
+index 0000000..481ee47
+--- /dev/null
++++ b/tests/integration/hook-log-symlink.test.mjs
+@@ -0,0 +1,72 @@
++import { describe, it, after } from 'node:test';
++import assert from 'node:assert/strict';
++import * as nodeFs from 'node:fs';
++import { mkdtempSync, rmSync, mkdirSync, symlinkSync, existsSync, readFileSync, readdirSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { runHook } from '../../adapters/claude-code/scripts/hook.mjs';
++
++// ---------------------------------------------------------------------------
++// Gate-2 iteration-3 finding-2 (test-verifier): the fail-open hook diagnostics
++// logger writes into .handoff/log, so it must pass the SAME managed-tree jail
++// as every other write. A symlinked .handoff/log pointing outside the repo must
++// be refused — the logger must NOT create a file through the link — while still
++// failing open (runHook returns 0). Proven over the REAL fs (the memfs fake
++// cannot represent symlinks).
++// ---------------------------------------------------------------------------
++
++const SECRET = 'sk-ant-SUPERSECRET';
++/** @type {string[]} */
++const dirs = [];
++const scratch = (prefix) => {
++  const d = mkdtempSync(join(tmpdir(), prefix));
++  dirs.push(d);
++  return d;
++};
++after(() => {
++  for (const d of dirs) rmSync(d, { recursive: true, force: true });
++});
++
++const failOpenIo = (root) => ({
++  cwd: root,
++  env: { CLAUDE_PLUGIN_ROOT: root },
++  stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 's', secret_payload: SECRET }),
++  stdout: { write: () => true },
++  stderr: { write: () => true },
++  fs: nodeFs,
++  // Force the core child to fail so the diagnostics logger runs.
++  execFile: () => Promise.reject(Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' })),
++  now: () => '2026-07-12T00:00:00.000Z',
++});
++
++describe('hook diagnostics logger honors the managed-tree jail', () => {
++  it('refuses to write through a symlinked .handoff/log (fail-open, no escape)', async () => {
++    const root = scratch('baton-hooklog-root-');
++    const outside = scratch('baton-hooklog-outside-');
++    mkdirSync(join(root, '.handoff'), { recursive: true });
++    // .handoff/log is a symlink pointing OUTSIDE the repository.
++    symlinkSync(outside, join(root, '.handoff', 'log'), 'dir');
++
++    const code = await runHook(['Stop'], failOpenIo(root));
++    assert.equal(code, 0, 'the hook still fails open (returns 0)');
++
++    // Nothing was written through the link into the outside directory.
++    const escaped = readdirSync(outside);
++    assert.deepEqual(escaped, [], `no file was written through the symlinked log path; found ${JSON.stringify(escaped)}`);
++    assert.ok(nodeFs.lstatSync(join(root, '.handoff', 'log')).isSymbolicLink(), 'the log symlink is left intact (never followed)');
++  });
++
++  it('control: a normal .handoff/log DOES receive a metadata-only entry (guard is symlink-specific)', async () => {
++    const root = scratch('baton-hooklog-ok-');
++    mkdirSync(join(root, '.handoff'), { recursive: true });
++
++    const code = await runHook(['Stop'], failOpenIo(root));
++    assert.equal(code, 0, 'fail-open');
++
++    const logPath = join(root, '.handoff', 'log', 'hook-errors.jsonl');
++    assert.ok(existsSync(logPath), 'the diagnostics log is written when the tree is safe');
++    const log = readFileSync(logPath, 'utf8');
++    assert.match(log, /"Stop"/, 'the event is recorded');
++    assert.doesNotMatch(log, new RegExp(SECRET), 'metadata only — the raw hook payload never enters the log');
++  });
++});
+
+ succeeded in 0ms:
+diff --git a/core/src/util/jail.mjs b/core/src/util/jail.mjs
+index efa3d94..bfd8e8a 100644
+--- a/core/src/util/jail.mjs
++++ b/core/src/util/jail.mjs
+@@ -1,106 +1,111 @@
+ // Threat-model guards (plan §Threat model): bundle-borne paths and the managed
+ // .handoff tree are untrusted input. jailRelPath is the single pure gate every
+ // repository path passes through before storage or render; checkHandoffTree
+ // refuses to operate on a managed tree that contains symlinks or resolves
+ // outside the repository root.
+ 
+ const NUL = String.fromCharCode(0);
+ 
+ /**
+  * Normalize an untrusted repository-relative path, or return null when it is
+  * unsafe: non-string, empty, NUL bytes, absolute (posix, Windows drive, UNC),
+  * or escaping the root via `..`. Backslashes are treated as separators so a
+  * Windows spelling cannot smuggle a traversal past a posix check.
+  * @param {any} p
+  * @returns {string | null}
+  */
+ export function jailRelPath(p) {
+   if (typeof p !== 'string' || p.length === 0 || p.includes(NUL)) return null;
+   const unified = p.replace(/\\/g, '/');
+   if (unified.startsWith('/')) return null;
+   if (/^[A-Za-z]:/.test(unified)) return null;
+   /** @type {string[]} */
+   const out = [];
+   for (const seg of unified.split('/')) {
+     if (seg === '' || seg === '.') continue;
+     if (seg === '..') {
+       if (out.length === 0) return null;
+       out.pop();
+       continue;
+     }
+     out.push(seg);
+   }
+   if (out.length === 0) return null;
+   return out.join('/');
+ }
+ 
+ /** Thrown by store mutations when the managed tree fails the jail check. */
+ export class UnsafeTreeError extends Error {}
+ 
+ /**
+  * Verify the managed .handoff tree is safe to operate on: the directory itself
+  * is not a symlink, its realpath stays under the repository root, and no entry
+  * anywhere in the tree is a symlink (lstat walk — never follows links). An
+  * absent tree is safe; an unverifiable tree is refused, never trusted.
+  * @param {string} root @param {any} io
+  * @returns {{ok: true} | {ok: false, problem: string}}
+  */
+ export function checkHandoffTree(root, io) {
+   const dir = `${root}/.handoff`;
+   try {
+     if (!io.fs.existsSync(dir)) return { ok: true };
+     if (io.fs.lstatSync(dir).isSymbolicLink()) {
+       return { ok: false, problem: `.handoff is a symlink — refusing to operate through a linked managed tree` };
+     }
+-    const rootReal = io.fs.realpathSync(root);
+-    const dirReal = io.fs.realpathSync(dir);
++    // Separator-normalize before comparing (Windows: realpathSync returns
++    // backslash paths, so a raw compare against `${rootReal}/.handoff` would
++    // mismatch on EVERY managed tree and refuse all operations). Comparing on a
++    // canonical forward-slash spelling makes containment platform-neutral.
++    const norm = (/** @type {string} */ s) => String(s).replace(/\\/g, '/');
++    const rootReal = norm(io.fs.realpathSync(root));
++    const dirReal = norm(io.fs.realpathSync(dir));
+     if (dirReal !== `${rootReal}/.handoff`) {
+       return { ok: false, problem: `.handoff resolves outside the repository root (${dirReal}) — refusing` };
+     }
+     // Walk is race-tolerant (gate-2 iter-2): under concurrent atomic writes
+     // the tree churns — tmp files, the lock dir, and rotated journals appear
+     // and vanish between readdir and lstat. An entry that disappears mid-walk
+     // (ENOENT) is normal concurrency, NOT a symlink attack, so it is skipped;
+     // only a POSITIVELY observed symlink refuses. The stable top-level checks
+     // above (.handoff itself a symlink / realpath escape) stay strict.
+     /** @type {string[]} */
+     const stack = [dir];
+     while (stack.length > 0) {
+       const d = /** @type {string} */ (stack.pop());
+       /** @type {string[]} */
+       let names;
+       try {
+         names = io.fs.readdirSync(d);
+       } catch (e) {
+         if (/** @type {any} */ (e)?.code === 'ENOENT') continue; // subdir removed mid-walk
+         throw e;
+       }
+       for (const name of names) {
+         const p = `${d}/${name}`;
+         let st;
+         try {
+           st = io.fs.lstatSync(p);
+         } catch (e) {
+           if (/** @type {any} */ (e)?.code === 'ENOENT') continue; // entry vanished mid-walk
+           throw e;
+         }
+         if (st.isSymbolicLink()) return { ok: false, problem: `${p} is a symlink — refusing (managed-tree jail)` };
+         if (st.isDirectory()) stack.push(p);
+       }
+     }
+     return { ok: true };
+   } catch (err) {
+     const msg = /** @type {any} */ (err)?.message ?? String(err);
+     return { ok: false, problem: `managed tree could not be verified (${msg}) — refusing` };
+   }
+ }
+ 
+ /**
+  * Assert form of checkHandoffTree for mutation paths: throws UnsafeTreeError
+  * so commands surface the refusal through their existing soft-failure handling.
+  * @param {string} root @param {any} io
+  */
+ export function assertHandoffTreeSafe(root, io) {
+   const r = checkHandoffTree(root, io);
+   if (!r.ok) throw new UnsafeTreeError(r.problem);
+ }
+diff --git a/tests/commands/gate2-iter2-group6.test.mjs b/tests/commands/gate2-iter2-group6.test.mjs
+index cd74f64..0f743de 100644
+--- a/tests/commands/gate2-iter2-group6.test.mjs
++++ b/tests/commands/gate2-iter2-group6.test.mjs
+@@ -1,159 +1,211 @@
+ import { describe, it } from 'node:test';
+ import assert from 'node:assert/strict';
+ import { readFileSync } from 'node:fs';
+ import { fileURLToPath } from 'node:url';
+ import { join, dirname } from 'node:path';
+ import { makeIo } from '../helpers/fakeio.mjs';
+ import { resolveRoot } from '../../core/src/commands/shared.mjs';
+-import { jailRelPath } from '../../core/src/util/jail.mjs';
++import { jailRelPath, checkHandoffTree } from '../../core/src/util/jail.mjs';
+ import { resolveRoles } from '../../core/src/roles/resolve.mjs';
+ import { prepare } from '../../core/src/receive/txn.mjs';
+ import { cmdDoctor } from '../../core/src/commands/doctor.mjs';
+ 
+ // ---------------------------------------------------------------------------
+ // Gate-2 iteration-2 group 6:
+ // - M2 (reviewer-a #2): Windows path handling — resolveRoot must ascend
+ //   backslash paths; jailRelPath must reject a Windows-absolute path.
+ // - M3 (reviewer-a #7): doctor must not record a --version success as
+ //   authenticated/reachable (only installed); offline resolution (no probe
+ //   cache) is flagged degraded.
+ // - M4 (reviewer-a #8): a LOW-confidence usage-limit heuristic must not
+ //   silently add the origin to avoid[]; it warns and defers to explicit intake.
+ // ---------------------------------------------------------------------------
+ 
+ const T0 = '2026-07-11T00:00:00.000Z';
+ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+ const CONFIG = readFileSync(join(REPO_ROOT, 'templates', 'baton.config.json.tpl'), 'utf8');
+ // txn.mjs classifyReason reads the builtin signature table through io.fs, so
+ // the fake fs must carry it at the exact packaged path.
+ const SIG_PATH = join(REPO_ROOT, 'core', 'data', 'signatures.v1.json');
+ const SIG_TABLE = readFileSync(SIG_PATH, 'utf8');
+ 
+ // A PARSED config (object chain entries), matching what loadConfig produces —
+ // resolveRoles consumes {platform, model, effort}, not the raw "p/m@e" strings.
+ const PARSED_CONFIG = {
+   schema: 'baton/config@1',
+   roles: {
+     planner: [{ platform: 'claude-code', model: 'claude-fable-5' }],
+     implementer: [
+       { platform: 'claude-code', model: 'claude-fable-5' },
+       { platform: 'codex', model: 'gpt-5.6-sol', effort: 'xhigh' },
+       { platform: 'cursor', model: 'composer' },
+     ],
+   },
+   platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+   defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+ };
+ 
+ describe('M2 — Windows path handling', () => {
+   it('resolveRoot ascends a backslash path to the marker directory', () => {
+     const io = makeIo({ files: { 'C:/repo/baton.config.json': '{}', 'C:/repo/sub/deep/x.txt': 'x' } });
+     io.cwd = 'C:\\repo\\sub\\deep';
+     // Node fs accepts forward slashes on Windows, so the fake stores C:/repo/…;
+     // the ascent must still recognize the backslash-separated cwd.
+     assert.equal(resolveRoot(io, {}), 'C:/repo');
+   });
+ 
+   it('jailRelPath rejects a Windows-absolute path and normalizes backslashes', () => {
+     assert.equal(jailRelPath('C:\\Windows\\system32\\x'), null);
+     assert.equal(jailRelPath('src\\a\\b.js'), 'src/a/b.js');
+   });
++
++  // checkHandoffTree's realpath containment compares dirReal against
++  // `${rootReal}/.handoff`. On Windows realpathSync returns BACKSLASH paths, so
++  // an un-normalized compare mismatches on every managed tree and refuses ALL
++  // operations. The memfs fake can't model drive-letter roots (it registers
++  // dirs as '/'-absolute), so use a precise hand-built io.fs that returns the
++  // Windows realpath spellings for the two paths checkHandoffTree resolves.
++  const DIR = 'C:/repo/.handoff';
++  const winIo = (rootReal, dirReal) => ({
++    fs: {
++      existsSync: (/** @type {any} */ p) => String(p) === DIR,
++      lstatSync: (/** @type {any} */ p) => ({
++        isSymbolicLink: () => false,
++        isDirectory: () => String(p) === DIR,
++        isFile: () => String(p) !== DIR,
++      }),
++      realpathSync: (/** @type {any} */ p) => {
++        const s = String(p);
++        if (s === 'C:/repo') return rootReal;
++        if (s === DIR) return dirReal;
++        return s;
++      },
++      readdirSync: () => [], // empty tree: the walk finds nothing to refuse
++    },
++  });
++
++  it('checkHandoffTree ACCEPTS an in-tree .handoff whose realpath is backslash-spelled', () => {
++    const io = winIo('C:\\repo', 'C:\\repo\\.handoff');
++    assert.deepEqual(checkHandoffTree('C:/repo', io), { ok: true });
++  });
++
++  it('checkHandoffTree REFUSES a .handoff realpath outside the root (backslash)', () => {
++    const io = winIo('C:\\repo', 'C:\\elsewhere\\.handoff');
++    const r = checkHandoffTree('C:/repo', io);
++    assert.equal(r.ok, false);
++    assert.match(r.problem, /outside the repository root/i);
++  });
++
++  it('checkHandoffTree REFUSES a cross-volume .handoff realpath', () => {
++    const io = winIo('C:\\repo', 'D:\\repo\\.handoff');
++    const r = checkHandoffTree('C:/repo', io);
++    assert.equal(r.ok, false);
++    assert.match(r.problem, /outside the repository root/i);
++  });
+ });
+ 
+ describe('M3 — doctor probe dimensions', () => {
+   const baseExec = () => ({ 'git log -n 50 --format=%h %s%n%n%b': { stdout: 'abc clean\n\n\n' } });
+   const probeCall = (io) => JSON.parse(io.stdoutText()).data.platforms;
+ 
+   it('a claude --version success is capped at capability "installed", never reachable/authenticated', async () => {
+     const io = makeIo({
+       now: T0,
+       execResults: { ...baseExec(), 'claude --version': { stdout: '2.1.201 (Claude Code)\n' } },
+     });
+     await cmdDoctor(['--json'], io);
+     const cc = probeCall(io).find((/** @type {any} */ p) => p.platform === 'claude-code');
+     assert.equal(cc.capability, 'installed', 'a --version success proves only installed, not that the server was reached');
+   });
+ 
+   it('remap with NO probe cache flags offline selections degraded (plan: offline always degraded)', () => {
+     const io = makeIo({ files: { '/repo/baton.config.json': CONFIG } });
+     const { assignments } = resolveRoles({ config: PARSED_CONFIG, to: 'claude-code', probes: null });
+     assert.ok(
+       Object.values(assignments).every((/** @type {any} */ a) => a.mode === 'unavailable' || a.degraded === true),
+       'every selectable assignment is flagged degraded when resolution is offline',
+     );
+   });
+ 
+   it('remap WITH a full fresh cache does not blanket-degrade', () => {
+     const probes = {
+       'claude-code': { capability: 'reachable', outcome: 'ok' },
+       codex: { capability: 'reachable', outcome: 'ok' },
+       cursor: { capability: 'reachable', outcome: 'ok' },
+     };
+     const { assignments } = resolveRoles({ config: PARSED_CONFIG, to: 'claude-code', probes });
+     assert.ok(
+       Object.values(assignments).some((/** @type {any} */ a) => a.platform && !a.degraded),
+       'a fully-probed platform resolves without a degraded flag',
+     );
+   });
+ });
+ 
+ describe('M4 — low-confidence usage-limit does not silently avoid', () => {
++  // The origin is cursor, and this role puts cursor FIRST-eligible. Avoidance is
++  // therefore OBSERVABLE: not avoiding cursor means the role resolves to cursor;
++  // avoiding it makes the role fall through to claude-code. (The template's
++  // implementer chain has cursor LAST, so claude-code wins regardless — the
++  // earlier "not avoided" assertion could not fail, i.e. it was vacuous.)
++  const CURSOR_FIRST_CONFIG = JSON.stringify({
++    schema: 'baton/config@1',
++    roles: { cursorFirst: ['cursor/composer', 'claude-code/claude-fable-5'] },
++    platforms: { 'claude-code': {}, codex: {}, cursor: {} },
++    defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
++  });
++  const avoidedCursor = (/** @type {any} */ role) =>
++    (role.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
++
+   const sealed = (reasonClass) => ({
+     schema: 'baton/bundle@1',
+     bundleId: 'b_conf0000000000',
+     generation: 1,
+     createdAt: T0,
+     updatedAt: T0,
+     origin: { platform: 'cursor', model: 'composer', sessionHint: 's', unstable: false },
+     task: { goal: 'g', constraints: [], acceptance: [] },
+     plan: { steps: [] },
+     decisions: [],
+     files: { touched: [] },
+     roles: { assignments: {} },
+     git: null,
+     // Unsealed (open) so classifyReason runs on the reason text, not a seal.
+     handoff: { status: 'open', reason: null, reasonClass, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+     journalSeq: 0,
+     compaction: { droppedDecisions: 0, note: null },
+     dedupeRing: [],
+   });
+ 
+   function prep(reason, extraOpts = {}) {
+     const io = makeIo({
+-      files: { '/repo/baton.config.json': CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed(null), null, 2) + '\n' },
++      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed(null), null, 2) + '\n' },
+       now: T0,
+     });
+     return prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason, probes: null, sessionHint: 'cli', ...extraOpts }, io);
+   }
+ 
+-  it('a low-confidence "quota exceeded" reason warns and does NOT avoid cursor', () => {
++  it('a low-confidence "quota exceeded" reason warns and KEEPS cursor selected (first-eligible)', () => {
+     const { assignments, warnings } = prep('quota exceeded');
+     assert.ok(warnings.some((w) => /low confidence|heuristic|--reason-class/i.test(w)), `a low-confidence warning is surfaced: ${JSON.stringify(warnings)}`);
+-    // cursor still appears in some chain (not auto-avoided) — implementer chain has cursor.
+-    const cursorSkippedEverywhere = Object.values(assignments).every((/** @type {any} */ a) =>
+-      (a.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided'),
+-    );
+-    assert.equal(cursorSkippedEverywhere, false, 'a low-confidence heuristic must not silently avoid the origin');
++    // Not avoiding cursor is observable: the first-eligible role resolves TO it.
++    assert.equal(assignments.cursorFirst.platform, 'cursor', 'a low-confidence heuristic must not silently avoid the origin — cursor stays selected');
++    assert.equal(avoidedCursor(assignments.cursorFirst), false, 'cursor is not skipped-as-avoided');
+   });
+ 
+-  it('an explicit --reason-class usage-limit DOES avoid the origin (confirmed intake)', () => {
++  it('an explicit --reason-class usage-limit DOES avoid cursor (role falls through to claude-code)', () => {
+     const { assignments } = prep('quota exceeded', { reasonClass: 'usage-limit' });
+-    const implementer = assignments['implementer']; // chain includes cursor/composer
+-    const avoided = (implementer.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
+-    assert.ok(avoided || implementer.platform !== 'cursor', 'explicit confirmation avoids the dead origin');
++    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'explicit confirmation avoids cursor — the role falls through');
++    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
+   });
+ 
+-  it('a HIGH-confidence usage-limit reason still avoids without needing confirmation', () => {
+-    // The claude-code verbatim limit string is high confidence for its own platform;
+-    // here the origin is cursor and a high-confidence cursor signal is the JSON heuristic —
+-    // use the sealed reasonClass path instead to represent a trusted classification.
++  it('a HIGH-confidence (sealed reasonClass) usage-limit avoids cursor without confirmation', () => {
++    // A sealed usage-limit reasonClass is a trusted, high-confidence classification.
+     const io = makeIo({
+-      files: { '/repo/baton.config.json': CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed('usage-limit'), null, 2) + '\n' },
++      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed('usage-limit'), null, 2) + '\n' },
+       now: T0,
+     });
+     const { assignments } = prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason: 'sealed reason', probes: null, sessionHint: 'cli' }, io);
+-    const implementer = assignments['implementer'];
+-    const avoided = (implementer.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
+-    assert.ok(avoided || implementer.platform !== 'cursor', 'a sealed usage-limit reasonClass avoids the dead origin');
++    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'a sealed usage-limit reasonClass avoids cursor');
++    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
+   });
+ });
+
+codex
+The key implementation changes are small: lock reclaim now arbitrates with `renameSync`, jail containment normalizes separators, and hook error logging calls the jail before writing. I’m checking whether the tests observe persisted behavior where possible and whether the fakes still exercise the real branches.
+exec
+/bin/zsh -lc "nl -ba tests/integration/lock-concurrency.test.mjs | sed -n '80,185p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    80	import { hostname } from 'node:os';
+    81	const [lockUrl, root, idx, barrierDir] = process.argv.slice(2);
+    82	const { withLock } = await import(lockUrl);
+    83	const io = {
+    84	  fs, host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin),
+    85	  now: () => new Date().toISOString(),
+    86	  processAlive: () => true, // a live contender is NEVER treated as dead here
+    87	  newFencingToken: () => 't-' + process.pid + '-' + Math.random().toString(36).slice(2),
+    88	};
+    89	writeFileSync(barrierDir + '/ready-' + idx, '');
+    90	while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+    91	let t0 = 0, t1 = 0;
+    92	const deadline = Date.now() + 20_000; // bounded retry: a stuck lock FAILS, never hangs
+    93	let lastErr = null;
+    94	for (;;) {
+    95	  if (Date.now() > deadline) {
+    96	    writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0: 0, t1: 0, error: 'lock never acquired within 20s: ' + String(lastErr) }));
+    97	    process.exit(1);
+    98	  }
+    99	  try {
+   100	    withLock(root, io, () => {
+   101	      t0 = Date.now();
+   102	      const end = t0 + 150;
+   103	      while (Date.now() < end) { /* hold the lock, visibly */ }
+   104	      t1 = Date.now();
+   105	    });
+   106	    break;
+   107	  } catch (err) { lastErr = err?.message ?? err; /* held — retry until the deadline */ }
+   108	}
+   109	writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0, t1 }));
+   110	`;
+   111	
+   112	// One provably-dead owner, two real reclaimers released together. Each does a
+   113	// read-modify-write of a shared file INSIDE withLock (no fencing helper — the
+   114	// lock alone must serialize). A non-atomic reclaim (rm-then-mkdir) would let
+   115	// both hold at once → a lost update AND two takeover notes (iter-3 finding-1).
+   116	const RECLAIMER = `
+   117	import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+   118	import * as fs from 'node:fs';
+   119	import { hostname } from 'node:os';
+   120	const [lockUrl, root, idx, barrierDir, deadPid] = process.argv.slice(2);
+   121	const { withLock } = await import(lockUrl);
+   122	const io = {
+   123	  fs, host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin),
+   124	  now: () => new Date().toISOString(),
+   125	  processAlive: (pid) => String(pid) !== deadPid, // the seeded owner is provably dead
+   126	  newFencingToken: () => 't-' + process.pid + '-' + Math.random().toString(36).slice(2),
+   127	};
+   128	const orderFile = root + '/.handoff/order.txt';
+   129	writeFileSync(barrierDir + '/ready-' + idx, '');
+   130	while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+   131	const deadline = Date.now() + 20000;
+   132	for (;;) {
+   133	  if (Date.now() > deadline) { writeFileSync(barrierDir + '/err-' + idx, 'never acquired'); process.exit(1); }
+   134	  try {
+   135	    withLock(root, io, () => {
+   136	      let cur = '';
+   137	      try { cur = readFileSync(orderFile, 'utf8'); } catch {}
+   138	      const end = Date.now() + 80; while (Date.now() < end) { /* widen the critical section */ }
+   139	      writeFileSync(orderFile, cur + idx + '\\n');
+   140	    });
+   141	    break;
+   142	  } catch (e) { /* held/contended — retry until the deadline */ }
+   143	}
+   144	writeFileSync(barrierDir + '/done-' + idx, 'ok');
+   145	`;
+   146	
+   147	describe('dead-lock reclaim under a real barrier-released race (iter-3 finding-1)', () => {
+   148	  it('two reclaimers, one dead owner: exactly one takeover, both mutate serialized (no lost update)', async () => {
+   149	    const root = scratch('baton-reclaim-root-');
+   150	    const barrier = scratch('baton-reclaim-barrier-');
+   151	    const DEAD_PID = '999999';
+   152	    // Seed a provably-dead owner on THIS host so both children agree it is dead.
+   153	    mkdirSync(join(root, '.handoff', 'lock'), { recursive: true });
+   154	    writeFileSync(
+   155	      join(root, '.handoff', 'lock', 'owner.json'),
+   156	      JSON.stringify({ host: hostname(), pid: Number(DEAD_PID), startTime: 1, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' }),
+   157	    );
+   158	    const reclaimerPath = join(barrier, 'reclaimer.mjs');
+   159	    writeFileSync(reclaimerPath, RECLAIMER);
+   160	
+   161	    const kids = [1, 2].map((i) => spawned(reclaimerPath, [LOCK_URL, root, String(i), barrier, DEAD_PID]));
+   162	    await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+   163	    writeFileSync(join(barrier, 'go'), '');
+   164	    const results = await Promise.all(kids);
+   165	    for (const [i, r] of results.entries()) {
+   166	      assert.equal(r.code, 0, `reclaimer ${i + 1} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+   167	    }
+   168	
+   169	    // Mutual exclusion: both critical sections ran serialized, so the order file
+   170	    // carries BOTH ids exactly once. A non-atomic reclaim would have lost one
+   171	    // read-modify-write (two simultaneous holders clobbering each other).
+   172	    const order = readFileSync(join(root, '.handoff', 'order.txt'), 'utf8')
+   173	      .split('\n')
+   174	      .filter((l) => l.trim() !== '')
+   175	      .sort();
+   176	    assert.deepEqual(order, ['1', '2'], `both reclaimers mutated exactly once under the lock; got ${JSON.stringify(order)}`);
+   177	
+   178	    // Exactly one dead-lock takeover was journaled: the loser of the atomic
+   179	    // rename acquires the freed lock via the 'free' path, which does not journal.
+   180	    const journal = existsSync(join(root, '.handoff', 'journal.ndjson'))
+   181	      ? readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
+   182	          .split('\n')
+   183	          .filter((l) => l.trim() !== '')
+   184	          .map((l) => JSON.parse(l))
+   185	      : [];
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/gate2-iter2-group6.test.mjs | sed -n '45,175p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/unit/lock-hardening.test.mjs | sed -n '1,95p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    45	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+    46	};
+    47	
+    48	describe('M2 — Windows path handling', () => {
+    49	  it('resolveRoot ascends a backslash path to the marker directory', () => {
+    50	    const io = makeIo({ files: { 'C:/repo/baton.config.json': '{}', 'C:/repo/sub/deep/x.txt': 'x' } });
+    51	    io.cwd = 'C:\\repo\\sub\\deep';
+    52	    // Node fs accepts forward slashes on Windows, so the fake stores C:/repo/…;
+    53	    // the ascent must still recognize the backslash-separated cwd.
+    54	    assert.equal(resolveRoot(io, {}), 'C:/repo');
+    55	  });
+    56	
+    57	  it('jailRelPath rejects a Windows-absolute path and normalizes backslashes', () => {
+    58	    assert.equal(jailRelPath('C:\\Windows\\system32\\x'), null);
+    59	    assert.equal(jailRelPath('src\\a\\b.js'), 'src/a/b.js');
+    60	  });
+    61	
+    62	  // checkHandoffTree's realpath containment compares dirReal against
+    63	  // `${rootReal}/.handoff`. On Windows realpathSync returns BACKSLASH paths, so
+    64	  // an un-normalized compare mismatches on every managed tree and refuses ALL
+    65	  // operations. The memfs fake can't model drive-letter roots (it registers
+    66	  // dirs as '/'-absolute), so use a precise hand-built io.fs that returns the
+    67	  // Windows realpath spellings for the two paths checkHandoffTree resolves.
+    68	  const DIR = 'C:/repo/.handoff';
+    69	  const winIo = (rootReal, dirReal) => ({
+    70	    fs: {
+    71	      existsSync: (/** @type {any} */ p) => String(p) === DIR,
+    72	      lstatSync: (/** @type {any} */ p) => ({
+    73	        isSymbolicLink: () => false,
+    74	        isDirectory: () => String(p) === DIR,
+    75	        isFile: () => String(p) !== DIR,
+    76	      }),
+    77	      realpathSync: (/** @type {any} */ p) => {
+    78	        const s = String(p);
+    79	        if (s === 'C:/repo') return rootReal;
+    80	        if (s === DIR) return dirReal;
+    81	        return s;
+    82	      },
+    83	      readdirSync: () => [], // empty tree: the walk finds nothing to refuse
+    84	    },
+    85	  });
+    86	
+    87	  it('checkHandoffTree ACCEPTS an in-tree .handoff whose realpath is backslash-spelled', () => {
+    88	    const io = winIo('C:\\repo', 'C:\\repo\\.handoff');
+    89	    assert.deepEqual(checkHandoffTree('C:/repo', io), { ok: true });
+    90	  });
+    91	
+    92	  it('checkHandoffTree REFUSES a .handoff realpath outside the root (backslash)', () => {
+    93	    const io = winIo('C:\\repo', 'C:\\elsewhere\\.handoff');
+    94	    const r = checkHandoffTree('C:/repo', io);
+    95	    assert.equal(r.ok, false);
+    96	    assert.match(r.problem, /outside the repository root/i);
+    97	  });
+    98	
+    99	  it('checkHandoffTree REFUSES a cross-volume .handoff realpath', () => {
+   100	    const io = winIo('C:\\repo', 'D:\\repo\\.handoff');
+   101	    const r = checkHandoffTree('C:/repo', io);
+   102	    assert.equal(r.ok, false);
+   103	    assert.match(r.problem, /outside the repository root/i);
+   104	  });
+   105	});
+   106	
+   107	describe('M3 — doctor probe dimensions', () => {
+   108	  const baseExec = () => ({ 'git log -n 50 --format=%h %s%n%n%b': { stdout: 'abc clean\n\n\n' } });
+   109	  const probeCall = (io) => JSON.parse(io.stdoutText()).data.platforms;
+   110	
+   111	  it('a claude --version success is capped at capability "installed", never reachable/authenticated', async () => {
+   112	    const io = makeIo({
+   113	      now: T0,
+   114	      execResults: { ...baseExec(), 'claude --version': { stdout: '2.1.201 (Claude Code)\n' } },
+   115	    });
+   116	    await cmdDoctor(['--json'], io);
+   117	    const cc = probeCall(io).find((/** @type {any} */ p) => p.platform === 'claude-code');
+   118	    assert.equal(cc.capability, 'installed', 'a --version success proves only installed, not that the server was reached');
+   119	  });
+   120	
+   121	  it('remap with NO probe cache flags offline selections degraded (plan: offline always degraded)', () => {
+   122	    const io = makeIo({ files: { '/repo/baton.config.json': CONFIG } });
+   123	    const { assignments } = resolveRoles({ config: PARSED_CONFIG, to: 'claude-code', probes: null });
+   124	    assert.ok(
+   125	      Object.values(assignments).every((/** @type {any} */ a) => a.mode === 'unavailable' || a.degraded === true),
+   126	      'every selectable assignment is flagged degraded when resolution is offline',
+   127	    );
+   128	  });
+   129	
+   130	  it('remap WITH a full fresh cache does not blanket-degrade', () => {
+   131	    const probes = {
+   132	      'claude-code': { capability: 'reachable', outcome: 'ok' },
+   133	      codex: { capability: 'reachable', outcome: 'ok' },
+   134	      cursor: { capability: 'reachable', outcome: 'ok' },
+   135	    };
+   136	    const { assignments } = resolveRoles({ config: PARSED_CONFIG, to: 'claude-code', probes });
+   137	    assert.ok(
+   138	      Object.values(assignments).some((/** @type {any} */ a) => a.platform && !a.degraded),
+   139	      'a fully-probed platform resolves without a degraded flag',
+   140	    );
+   141	  });
+   142	});
+   143	
+   144	describe('M4 — low-confidence usage-limit does not silently avoid', () => {
+   145	  // The origin is cursor, and this role puts cursor FIRST-eligible. Avoidance is
+   146	  // therefore OBSERVABLE: not avoiding cursor means the role resolves to cursor;
+   147	  // avoiding it makes the role fall through to claude-code. (The template's
+   148	  // implementer chain has cursor LAST, so claude-code wins regardless — the
+   149	  // earlier "not avoided" assertion could not fail, i.e. it was vacuous.)
+   150	  const CURSOR_FIRST_CONFIG = JSON.stringify({
+   151	    schema: 'baton/config@1',
+   152	    roles: { cursorFirst: ['cursor/composer', 'claude-code/claude-fable-5'] },
+   153	    platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+   154	    defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+   155	  });
+   156	  const avoidedCursor = (/** @type {any} */ role) =>
+   157	    (role.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
+   158	
+   159	  const sealed = (reasonClass) => ({
+   160	    schema: 'baton/bundle@1',
+   161	    bundleId: 'b_conf0000000000',
+   162	    generation: 1,
+   163	    createdAt: T0,
+   164	    updatedAt: T0,
+   165	    origin: { platform: 'cursor', model: 'composer', sessionHint: 's', unstable: false },
+   166	    task: { goal: 'g', constraints: [], acceptance: [] },
+   167	    plan: { steps: [] },
+   168	    decisions: [],
+   169	    files: { touched: [] },
+   170	    roles: { assignments: {} },
+   171	    git: null,
+   172	    // Unsealed (open) so classifyReason runs on the reason text, not a seal.
+   173	    handoff: { status: 'open', reason: null, reasonClass, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+   174	    journalSeq: 0,
+   175	    compaction: { droppedDecisions: 0, note: null },
+
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { withLock, recoverLock } from '../../core/src/bundle/lock.mjs';
+     5	
+     6	// ---------------------------------------------------------------------------
+     7	// Gate-2 iteration-2 findings B1 + B2 (reviewer-a #3, #4): the dead-lock
+     8	// takeover must atomically RE-CLAIM the lock dir (not just republish owner.json
+     9	// into the existing one), and every lock/recover mutation must pass the
+    10	// managed-tree jail first so a symlinked .handoff/lock cannot be followed
+    11	// outside the repository.
+    12	// ---------------------------------------------------------------------------
+    13	
+    14	const OWNER = '/repo/.handoff/lock/owner.json';
+    15	const deadOwner = JSON.stringify({ host: 'host-A', pid: 999, startTime: 5, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' });
+    16	
+    17	describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
+    18	  it('takeover renames the stale lock dir ASIDE then claims a fresh one (never in-place rm)', () => {
+    19	    // Only pid 4242 (this io) is alive → pid 999 is provably dead. The reclaim
+    20	    // must be arbitrated by an atomic rename of the SOURCE lock dir, not an
+    21	    // rm-then-mkdir that two contenders could both perform (iter-3 finding-1).
+    22	    // We trace lock-dir ops in order: the CLAIM must be rename→(rm aside)→mkdir,
+    23	    // with no in-place rm of the live /lock before the fresh mkdir. (The final
+    24	    // rm of /lock at release, AFTER the mkdir, is correct and expected.)
+    25	    const io = makeIo({ files: { [OWNER]: deadOwner } });
+    26	    const LOCK = '/repo/.handoff/lock';
+    27	    /** @type {string[]} */
+    28	    const trace = [];
+    29	    const realRename = io.fs.renameSync.bind(io.fs);
+    30	    const realRm = io.fs.rmSync.bind(io.fs);
+    31	    const realMkdir = io.fs.mkdirSync.bind(io.fs);
+    32	    io.fs.renameSync = (from, to) => {
+    33	      if (String(from) === LOCK) trace.push(`rename:${/\/lock\.reclaim-/.test(String(to)) ? 'aside' : 'other'}`);
+    34	      return realRename(from, to);
+    35	    };
+    36	    io.fs.rmSync = (p, opts) => {
+    37	      if (String(p) === LOCK) trace.push('rm:lock');
+    38	      else if (/\/lock\.reclaim-/.test(String(p))) trace.push('rm:aside');
+    39	      return realRm(p, opts);
+    40	    };
+    41	    io.fs.mkdirSync = (p, opts) => {
+    42	      if (String(p) === LOCK && !(opts && opts.recursive)) trace.push('mkdir:lock');
+    43	      return realMkdir(p, opts);
+    44	    };
+    45	    const token = withLock('/repo', io, (t) => t);
+    46	
+    47	    // Trace shape: mkdir:lock (initial EEXIST probe) → rename:aside → rm:aside →
+    48	    // mkdir:lock (the winning claim) → rm:lock (release, AFTER the claim).
+    49	    const claimMkdir = trace.lastIndexOf('mkdir:lock');
+    50	    const renameAt = trace.indexOf('rename:aside');
+    51	    const rmAsideAt = trace.indexOf('rm:aside');
+    52	    assert.ok(renameAt >= 0, `the stale lock dir is moved aside by an atomic rename; trace ${JSON.stringify(trace)}`);
+    53	    assert.ok(renameAt < rmAsideAt && rmAsideAt < claimMkdir, 'the claim order is rename-aside → rm-aside → fresh mkdir');
+    54	    const beforeClaim = trace.slice(0, claimMkdir);
+    55	    assert.equal(beforeClaim.includes('rm:lock'), false, 'the live lock dir is never rm-ed in place during the claim (only renamed aside)');
+    56	    assert.ok(typeof token === 'string' && token.length > 0, 'a fresh token is published after the atomic claim');
+    57	  });
+    58	
+    59	  it('a contender that loses the rename sees ENOENT-as-contention, not a second takeover', () => {
+    60	    // Simulate the rename losing the race: the stale dir is already gone when we
+    61	    // try to move it aside → LockHeldError (retryable), never a duplicate claim.
+    62	    const io = makeIo({ files: { [OWNER]: deadOwner }, lockRetry: { attempts: 0, delayMs: 0 } });
+    63	    const realRename = io.fs.renameSync.bind(io.fs);
+    64	    io.fs.renameSync = (from, to) => {
+    65	      if (String(from).endsWith('/lock') && /\/lock\.reclaim-/.test(String(to))) {
+    66	        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    67	      }
+    68	      return realRename(from, to);
+    69	    };
+    70	    assert.throws(() => withLock('/repo', io, (t) => t), /reclaiming the dead lock|transient contention/i);
+    71	  });
+    72	
+    73	  it('after release the lock is free and the next acquisition mints its own token', () => {
+    74	    const io = makeIo({ files: { [OWNER]: deadOwner } });
+    75	    const first = withLock('/repo', io, (t) => t);
+    76	    assert.ok(first, 'first contender takes over the dead lock');
+    77	    assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'lock released after the operation');
+    78	    const second = withLock('/repo', io, (t) => t);
+    79	    assert.ok(second && second !== first, 'the next acquisition gets its own fresh token');
+    80	  });
+    81	});
+    82	
+    83	describe('lock/recover refuse a symlinked managed tree before mutating (B2)', () => {
+    84	  function symlinkedLockIo() {
+    85	    // The lock dir exists inside the managed tree (so the jail walk encounters
+    86	    // it) but is a symlink pointing outside the repo: lstat reports a link.
+    87	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}', '/repo/.handoff/lock/owner.json': deadOwner } });
+    88	    const realLstat = io.fs.lstatSync.bind(io.fs);
+    89	    io.fs.lstatSync = (p) => {
+    90	      if (String(p) === '/repo/.handoff/lock') return { ...realLstat('/repo/.handoff'), isSymbolicLink: () => true, isDirectory: () => true, isFile: () => false };
+    91	      return realLstat(p);
+    92	    };
+    93	    return io;
+    94	  }
+    95	
+
+exec
+/bin/zsh -lc "nl -ba tests/integration/receiver-concurrency.test.mjs | sed -n '65,130p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    65	  plan: { steps: [] },
+    66	  decisions: [],
+    67	  files: { touched: [] },
+    68	  roles: { assignments: {} },
+    69	  git: null,
+    70	  handoff: { status: 'sealed', reason: 'limits', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: NOW, receive_log: [] },
+    71	  journalSeq: 0,
+    72	  compaction: { droppedDecisions: 0, note: null },
+    73	  dedupeRing: [],
+    74	});
+    75	
+    76	describe('M7 — two INDEPENDENTLY-prepared receivers race to commit: exactly one wins', () => {
+    77	  it('one generation bump, one receive archive, loser rejected with state untouched', async () => {
+    78	    const root = scratch('baton-recvconc-');
+    79	    const barrier = scratch('baton-recvconc-barrier-');
+    80	    mkdirSync(join(root, '.handoff'), { recursive: true });
+    81	    writeFileSync(join(root, '.handoff', 'bundle.json'), JSON.stringify(sealed(), null, 2) + '\n');
+    82	
+    83	    // Each child runs its OWN prepare (against the same sealed state) and then
+    84	    // its own commit — the faithful competing-receivers race, not a shared
+    85	    // single receipt double-committed. Both prepares complete before the
+    86	    // barrier; the barrier releases both COMMITs together. The winner bumps the
+    87	    // generation/receive_log, so the loser's re-derivation under the lock no
+    88	    // longer matches its token → stale-receipt rejection, zero mutation.
+    89	    const receiver = `
+    90	import { writeFileSync, existsSync } from 'node:fs';
+    91	import { spawnSync } from 'node:child_process';
+    92	const [bin, root, idx, barrierDir] = process.argv.slice(2);
+    93	const args = ['--platform', 'codex', '--origin', 'claude-code', '--reason', 'limits', '--root', root];
+    94	const prep = spawnSync('node', [bin, 'receive', '--json', ...args], { encoding: 'utf8' });
+    95	if (prep.status !== 0) { writeFileSync(barrierDir + '/prep-fail-' + idx, prep.stderr || ''); process.exit(2); }
+    96	const token = JSON.parse(prep.stdout.trim().split('\\n').pop()).data.token;
+    97	writeFileSync(barrierDir + '/ready-' + idx, '');
+    98	while (!existsSync(barrierDir + '/go')) { /* barrier: both prepared, race the commit */ }
+    99	const r = spawnSync('node', [bin, 'receive', '--commit', token, ...args], { encoding: 'utf8' });
+   100	writeFileSync(barrierDir + '/done-' + idx, JSON.stringify({ status: r.status }));
+   101	process.exit(r.status ?? 1);
+   102	`;
+   103	    const receiverPath = join(barrier, 'receiver.mjs');
+   104	    writeFileSync(receiverPath, receiver);
+   105	
+   106	    const kids = [1, 2].map((i) => spawned(receiverPath, [BATON, root, String(i), barrier]));
+   107	    await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+   108	    writeFileSync(join(barrier, 'go'), '');
+   109	    const results = await Promise.all(kids);
+   110	
+   111	    const codes = results.map((r) => r.code).sort();
+   112	    assert.deepEqual(codes, [0, 1], `exactly one commit succeeds and one is rejected; got ${JSON.stringify(codes)} (stderr: ${results.map((r) => r.stderr).join(' | ')})`);
+   113	
+   114	    const bundle = JSON.parse(readFileSync(join(root, '.handoff', 'bundle.json'), 'utf8'));
+   115	    assert.equal(bundle.generation, 2, 'exactly one generation bump (no double transition)');
+   116	    assert.equal(bundle.handoff.status, 'open', 'the winner opened a fresh writable generation');
+   117	    assert.equal(bundle.origin.platform, 'codex', 'the winning receiver adopted ownership');
+   118	    // The archived received seal carries exactly one receive_log entry.
+   119	    const historyDir = join(root, '.handoff', 'history');
+   120	    const freezes = existsSync(historyDir) ? readdirSync(historyDir).filter((n) => n.endsWith('.receive.json')) : [];
+   121	    assert.equal(freezes.length, 1, 'exactly one receive archive was frozen to history');
+   122	  });
+   123	});
+   124	
+   125	describe('M5 — two debounced afterFileEdit checkpoints race: exactly one appends', () => {
+   126	  it('the second, inside the window, is debounced away under the lock', async () => {
+   127	    const root = scratch('baton-debounce-conc-');
+   128	    const barrier = scratch('baton-debounce-conc-barrier-');
+   129	
+   130	    const writer = `
+
+exec
+/bin/zsh -lc "nl -ba tests/helpers/memfs.mjs | sed -n '55,105p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    55	      dirs.add(cur);
+    56	    }
+    57	  };
+    58	
+    59	  const ensureParent = (np, syscall) => {
+    60	    const parent = dirname(np);
+    61	    if (parent === '/' ) return;
+    62	    if (!dirs.has(parent)) throw fsError('ENOENT', syscall, np);
+    63	  };
+    64	
+    65	  for (const [p, content] of Object.entries(initialFiles)) {
+    66	    const np = normalize(p);
+    67	    mkdirp(dirname(np));
+    68	    store.set(np, String(content));
+    69	    touch(np);
+    70	  }
+    71	
+    72	  const fs = {
+    73	    readFileSync(p /*, enc */) {
+    74	      const np = normalize(p);
+    75	      if (!store.has(np)) throw fsError('ENOENT', 'open', np);
+    76	      return store.get(np);
+    77	    },
+    78	
+    79	    writeFileSync(p, data /*, enc */) {
+    80	      const np = normalize(p);
+    81	      ensureParent(np, 'open');
+    82	      store.set(np, String(data));
+    83	      touch(np);
+    84	      record('writeFileSync', [np]);
+    85	    },
+    86	
+    87	    appendFileSync(p, data) {
+    88	      const np = normalize(p);
+    89	      ensureParent(np, 'open');
+    90	      store.set(np, (store.get(np) || '') + String(data));
+    91	      touch(np);
+    92	      record('appendFileSync', [np]);
+    93	    },
+    94	
+    95	    renameSync(from, to) {
+    96	      const nf = normalize(from);
+    97	      const nt = normalize(to);
+    98	      if (store.has(nf)) {
+    99	        ensureParent(nt, 'rename');
+   100	        const content = store.get(nf);
+   101	        store.delete(nf);
+   102	        store.set(nt, content);
+   103	        touch(nt);
+   104	        record('renameSync', [nf, nt]);
+   105	        return;
+
+exec
+/bin/zsh -lc "nl -ba tests/integration/hook-log-symlink.test.mjs | sed -n '1,90p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it, after } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import * as nodeFs from 'node:fs';
+     4	import { mkdtempSync, rmSync, mkdirSync, symlinkSync, existsSync, readFileSync, readdirSync } from 'node:fs';
+     5	import { tmpdir } from 'node:os';
+     6	import { join } from 'node:path';
+     7	import { runHook } from '../../adapters/claude-code/scripts/hook.mjs';
+     8	
+     9	// ---------------------------------------------------------------------------
+    10	// Gate-2 iteration-3 finding-2 (test-verifier): the fail-open hook diagnostics
+    11	// logger writes into .handoff/log, so it must pass the SAME managed-tree jail
+    12	// as every other write. A symlinked .handoff/log pointing outside the repo must
+    13	// be refused — the logger must NOT create a file through the link — while still
+    14	// failing open (runHook returns 0). Proven over the REAL fs (the memfs fake
+    15	// cannot represent symlinks).
+    16	// ---------------------------------------------------------------------------
+    17	
+    18	const SECRET = 'sk-ant-SUPERSECRET';
+    19	/** @type {string[]} */
+    20	const dirs = [];
+    21	const scratch = (prefix) => {
+    22	  const d = mkdtempSync(join(tmpdir(), prefix));
+    23	  dirs.push(d);
+    24	  return d;
+    25	};
+    26	after(() => {
+    27	  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    28	});
+    29	
+    30	const failOpenIo = (root) => ({
+    31	  cwd: root,
+    32	  env: { CLAUDE_PLUGIN_ROOT: root },
+    33	  stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 's', secret_payload: SECRET }),
+    34	  stdout: { write: () => true },
+    35	  stderr: { write: () => true },
+    36	  fs: nodeFs,
+    37	  // Force the core child to fail so the diagnostics logger runs.
+    38	  execFile: () => Promise.reject(Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' })),
+    39	  now: () => '2026-07-12T00:00:00.000Z',
+    40	});
+    41	
+    42	describe('hook diagnostics logger honors the managed-tree jail', () => {
+    43	  it('refuses to write through a symlinked .handoff/log (fail-open, no escape)', async () => {
+    44	    const root = scratch('baton-hooklog-root-');
+    45	    const outside = scratch('baton-hooklog-outside-');
+    46	    mkdirSync(join(root, '.handoff'), { recursive: true });
+    47	    // .handoff/log is a symlink pointing OUTSIDE the repository.
+    48	    symlinkSync(outside, join(root, '.handoff', 'log'), 'dir');
+    49	
+    50	    const code = await runHook(['Stop'], failOpenIo(root));
+    51	    assert.equal(code, 0, 'the hook still fails open (returns 0)');
+    52	
+    53	    // Nothing was written through the link into the outside directory.
+    54	    const escaped = readdirSync(outside);
+    55	    assert.deepEqual(escaped, [], `no file was written through the symlinked log path; found ${JSON.stringify(escaped)}`);
+    56	    assert.ok(nodeFs.lstatSync(join(root, '.handoff', 'log')).isSymbolicLink(), 'the log symlink is left intact (never followed)');
+    57	  });
+    58	
+    59	  it('control: a normal .handoff/log DOES receive a metadata-only entry (guard is symlink-specific)', async () => {
+    60	    const root = scratch('baton-hooklog-ok-');
+    61	    mkdirSync(join(root, '.handoff'), { recursive: true });
+    62	
+    63	    const code = await runHook(['Stop'], failOpenIo(root));
+    64	    assert.equal(code, 0, 'fail-open');
+    65	
+    66	    const logPath = join(root, '.handoff', 'log', 'hook-errors.jsonl');
+    67	    assert.ok(existsSync(logPath), 'the diagnostics log is written when the tree is safe');
+    68	    const log = readFileSync(logPath, 'utf8');
+    69	    assert.match(log, /"Stop"/, 'the event is recorded');
+    70	    assert.doesNotMatch(log, new RegExp(SECRET), 'metadata only — the raw hook payload never enters the log');
+    71	  });
+    72	});
+
+codex
+So far the replacement tests are mostly testing observable end state, not just implementation calls: the lock and receiver cases both use child processes and a filesystem barrier. I’m now checking the surrounding current lines and running the non-integration subset that should work in this read-only environment.
+exec
+/bin/zsh -lc "nl -ba tests/integration/lock-concurrency.test.mjs | sed -n '185,210p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   185	      : [];
+   186	    const takeovers = journal.filter((e) => e.type === 'note' && /took over stale lock from dead/.test(e.payload?.text ?? ''));
+   187	    assert.equal(takeovers.length, 1, `exactly one dead-lock takeover occurred; got ${takeovers.length}`);
+   188	    assert.equal(existsSync(join(root, '.handoff', 'lock')), false, 'the lock dir is released after both operations');
+   189	  });
+   190	});
+   191	
+   192	describe('barrier-released concurrent writers (real processes, real fs)', () => {
+   193	  it('4 simultaneous checkpoints: every event lands, seqs unique, journalSeq sane', async () => {
+   194	    const root = scratch('baton-conc-root-');
+   195	    const barrier = scratch('baton-conc-barrier-');
+   196	    const writerPath = join(barrier, 'writer.mjs');
+   197	    writeFileSync(writerPath, WRITER);
+   198	
+   199	    const N = 4;
+   200	    const children = [];
+   201	    for (let i = 1; i <= N; i++) children.push(spawned(writerPath, [BATON, root, String(i), barrier]));
+   202	    await until(() => Array.from({ length: N }, (_, i) => existsSync(join(barrier, `ready-${i + 1}`))).every(Boolean));
+   203	    writeFileSync(join(barrier, 'go'), '');
+   204	    const results = await Promise.all(children);
+   205	
+   206	    for (let i = 1; i <= N; i++) {
+   207	      const r = results[i - 1];
+   208	      assert.equal(r.code, 0, `writer wrapper ${i} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+   209	      const done = JSON.parse(readFileSync(join(barrier, `done-${i}`), 'utf8'));
+   210	      assert.equal(done.status, 0, `writer ${i} exited 0; stderr: ${done.stderr}`);
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/gate2-iter2-group6.test.mjs | sed -n '176,215p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   176	    dedupeRing: [],
+   177	  });
+   178	
+   179	  function prep(reason, extraOpts = {}) {
+   180	    const io = makeIo({
+   181	      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed(null), null, 2) + '\n' },
+   182	      now: T0,
+   183	    });
+   184	    return prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason, probes: null, sessionHint: 'cli', ...extraOpts }, io);
+   185	  }
+   186	
+   187	  it('a low-confidence "quota exceeded" reason warns and KEEPS cursor selected (first-eligible)', () => {
+   188	    const { assignments, warnings } = prep('quota exceeded');
+   189	    assert.ok(warnings.some((w) => /low confidence|heuristic|--reason-class/i.test(w)), `a low-confidence warning is surfaced: ${JSON.stringify(warnings)}`);
+   190	    // Not avoiding cursor is observable: the first-eligible role resolves TO it.
+   191	    assert.equal(assignments.cursorFirst.platform, 'cursor', 'a low-confidence heuristic must not silently avoid the origin — cursor stays selected');
+   192	    assert.equal(avoidedCursor(assignments.cursorFirst), false, 'cursor is not skipped-as-avoided');
+   193	  });
+   194	
+   195	  it('an explicit --reason-class usage-limit DOES avoid cursor (role falls through to claude-code)', () => {
+   196	    const { assignments } = prep('quota exceeded', { reasonClass: 'usage-limit' });
+   197	    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'explicit confirmation avoids cursor — the role falls through');
+   198	    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
+   199	  });
+   200	
+   201	  it('a HIGH-confidence (sealed reasonClass) usage-limit avoids cursor without confirmation', () => {
+   202	    // A sealed usage-limit reasonClass is a trusted, high-confidence classification.
+   203	    const io = makeIo({
+   204	      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed('usage-limit'), null, 2) + '\n' },
+   205	      now: T0,
+   206	    });
+   207	    const { assignments } = prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason: 'sealed reason', probes: null, sessionHint: 'cli' }, io);
+   208	    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'a sealed usage-limit reasonClass avoids cursor');
+   209	    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
+   210	  });
+   211	});
+
+exec
+/bin/zsh -lc "nl -ba tests/helpers/memfs.mjs | sed -n '95,135p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    95	    renameSync(from, to) {
+    96	      const nf = normalize(from);
+    97	      const nt = normalize(to);
+    98	      if (store.has(nf)) {
+    99	        ensureParent(nt, 'rename');
+   100	        const content = store.get(nf);
+   101	        store.delete(nf);
+   102	        store.set(nt, content);
+   103	        touch(nt);
+   104	        record('renameSync', [nf, nt]);
+   105	        return;
+   106	      }
+   107	      // Directory rename (atomic move of the node and all descendants) — the
+   108	      // lock's dead-reclaim arbitration renames the stale lock dir aside.
+   109	      if (dirs.has(nf)) {
+   110	        ensureParent(nt, 'rename');
+   111	        const pre = nf + '/';
+   112	        dirs.delete(nf);
+   113	        dirs.add(nt);
+   114	        for (const k of [...store.keys()]) {
+   115	          if (k.startsWith(pre)) {
+   116	            store.set(nt + k.slice(nf.length), store.get(k));
+   117	            store.delete(k);
+   118	          }
+   119	        }
+   120	        for (const d of [...dirs]) {
+   121	          if (d !== nt && d.startsWith(pre)) {
+   122	            dirs.add(nt + d.slice(nf.length));
+   123	            dirs.delete(d);
+   124	          }
+   125	        }
+   126	        touch(nt);
+   127	        record('renameSync', [nf, nt]);
+   128	        return;
+   129	      }
+   130	      throw fsError('ENOENT', 'rename', nf);
+   131	    },
+   132	
+   133	    mkdirSync(p, opts = {}) {
+   134	      const np = normalize(p);
+   135	      if (opts.recursive) {
+
+exec
+/bin/zsh -lc 'node --test tests/unit/lock-hardening.test.mjs tests/commands/gate2-iter2-group6.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+▶ M2 — Windows path handling
+  ✔ resolveRoot ascends a backslash path to the marker directory (0.720875ms)
+  ✔ jailRelPath rejects a Windows-absolute path and normalizes backslashes (0.132125ms)
+  ✔ checkHandoffTree ACCEPTS an in-tree .handoff whose realpath is backslash-spelled (0.537417ms)
+  ✔ checkHandoffTree REFUSES a .handoff realpath outside the root (backslash) (0.137042ms)
+  ✔ checkHandoffTree REFUSES a cross-volume .handoff realpath (0.093042ms)
+✔ M2 — Windows path handling (2.224125ms)
+▶ M3 — doctor probe dimensions
+  ✔ a claude --version success is capped at capability "installed", never reachable/authenticated (1.530334ms)
+  ✔ remap with NO probe cache flags offline selections degraded (plan: offline always degraded) (0.235458ms)
+  ✔ remap WITH a full fresh cache does not blanket-degrade (0.09875ms)
+✔ M3 — doctor probe dimensions (1.9875ms)
+▶ M4 — low-confidence usage-limit does not silently avoid
+  ✔ a low-confidence "quota exceeded" reason warns and KEEPS cursor selected (first-eligible) (1.73225ms)
+  ✔ an explicit --reason-class usage-limit DOES avoid cursor (role falls through to claude-code) (0.287167ms)
+  ✔ a HIGH-confidence (sealed reasonClass) usage-limit avoids cursor without confirmation (0.346458ms)
+✔ M4 — low-confidence usage-limit does not silently avoid (2.484958ms)
+▶ dead-takeover re-claims the lock dir atomically (B1)
+  ✔ takeover renames the stale lock dir ASIDE then claims a fresh one (never in-place rm) (1.753583ms)
+  ✔ a contender that loses the rename sees ENOENT-as-contention, not a second takeover (6.061125ms)
+  ✔ after release the lock is free and the next acquisition mints its own token (0.347666ms)
+✔ dead-takeover re-claims the lock dir atomically (B1) (8.758958ms)
+▶ lock/recover refuse a symlinked managed tree before mutating (B2)
+  ✔ withLock refuses to acquire through a symlinked lock dir (0.235917ms)
+  ✔ recoverLock refuses a symlinked lock dir even with --force (0.23525ms)
+✔ lock/recover refuse a symlinked managed tree before mutating (B2) (0.5745ms)
+ℹ tests 16
+ℹ suites 5
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 66.548667
+
+codex
+Execution evidence: the unit and command tests pass under `node --test tests/unit/lock-hardening.test.mjs tests/commands/gate2-iter2-group6.test.mjs` with 16/16 passing. I’m not relying on integration execution because those tests intentionally allocate temp dirs and spawn children; the judgment there is by reading.
+exec
+/bin/zsh -lc "rg -n \"function prepare|export function prepare|function commit|export function commit|receive_log|\\.receive\\.json|archive|token\" core/src/receive core/src/commands -g '*.mjs'" in /Users/saksham/baton
+ succeeded in 0ms:
+core/src/receive/txn.mjs:35: * The revision fingerprint the receipt token is a hash of. Every field is a
+core/src/receive/txn.mjs:37: * token, so a stale receipt can never commit (plan §Concurrency).
+core/src/receive/txn.mjs:51:    // that lands between this token's derivation and its commit changes
+core/src/receive/txn.mjs:52:    // status/receive_log, so the loser's token cannot re-derive.
+core/src/receive/txn.mjs:54:    receives: Array.isArray(bundle.handoff?.receive_log) ? bundle.handoff.receive_log.length : 0,
+core/src/receive/txn.mjs:98: * resume prompt, and return a one-time receipt token. Mutates NOTHING — the
+core/src/receive/txn.mjs:99: * token is self-contained (a fingerprint hash), never a persisted record.
+core/src/receive/txn.mjs:101: * @returns {{token: string, prompt: string, assignments: Record<string, any>, warnings: string[]}}
+core/src/receive/txn.mjs:103:export function prepare(root, opts, io) {
+core/src/receive/txn.mjs:152:  return { token: deriveToken(root, bundle, opts, io), prompt, assignments, warnings };
+core/src/receive/txn.mjs:158: * writes the received seal, archives it via a 'receive' rotation, then opens a
+core/src/receive/txn.mjs:160: * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io
+core/src/receive/txn.mjs:161: * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+core/src/receive/txn.mjs:163:export function commit(root, token, opts, io) {
+core/src/receive/txn.mjs:166:  // loser's re-derivation sees the winner's generation/status/receive_log.
+core/src/receive/txn.mjs:167:  return withLock(root, io, (fence) => commitLocked(root, token, opts, io, fence));
+core/src/receive/txn.mjs:171: * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io @param {string} fence
+core/src/receive/txn.mjs:172: * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+core/src/receive/txn.mjs:174:function commitLocked(root, token, opts, io, fence) {
+core/src/receive/txn.mjs:178:  if (deriveToken(root, bundle, opts, io) !== token) {
+core/src/receive/txn.mjs:180:      'receipt token is stale: a bound input (bundle revision, intake, config, git state, probes, or target platform/session) drifted since prepare — run re-prepare and retry',
+core/src/receive/txn.mjs:206:      receive_log: [...bundle.handoff.receive_log, receiveEntry],
+core/src/receive/txn.mjs:211:  // archives exactly that state (never the pre-commit bundle). All three
+core/src/receive/txn.mjs:214:  const archivedTo = rotateJournalIn(root, 'receive', io, fence);
+core/src/receive/txn.mjs:230:  return { adopted: true, generation: next.generation, archivedTo };
+core/src/commands/checkpoint.mjs:194:        `baton checkpoint: event from a foreign session/origin (${platform}/${stableIncoming.sessionHint} vs active ${active.origin.platform}/${originHint}) — rejected to keep sessions isolated; rerun with --take-over to archive the active bundle and start fresh\n`,
+core/src/commands/checkpoint.mjs:206:      io.stderr.write(`baton checkpoint: took over — prior bundle archived to history/, fresh bundle owned by ${platform}/${stableIncoming.sessionHint}\n`);
+core/src/commands/shared.mjs:59: * Minimal flag parser: `--key value` pairs (value = next token not starting
+core/src/commands/receive.mjs:8: * `--prepare` are read-only (prepare mutates nothing); `--commit <token>`
+core/src/commands/receive.mjs:11: * still derive the same token; adapters pass `--session` with their real id.
+core/src/commands/receive.mjs:28:    // The fresh probe cache is a bound token input (probesDigest): remap uses
+core/src/commands/receive.mjs:32:    // from a low-confidence-classified origin; bound into the token.
+core/src/commands/receive.mjs:45:      else io.stdout.write(`received — generation ${res.generation} open on ${platform}; archived ${res.archivedTo}\n`);
+core/src/commands/receive.mjs:77:      data: { token: prepared.token, prompt: prepared.prompt, assignments: prepared.assignments, warnings: prepared.warnings },
+core/src/commands/receive.mjs:81:    io.stderr.write(`baton receive: token ${prepared.token}\n`);
+
+exec
+/bin/zsh -lc "sed -n '1,260p' core/src/receive/txn.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "sed -n '1,240p' core/src/commands/receive.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
+import { prepare, commit } from '../receive/txn.mjs';
+import { readProbeCache } from '../roles/availability.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+
+/**
+ * `baton receive` — the two-phase resume flow. `--print-prompt` and
+ * `--prepare` are read-only (prepare mutates nothing); `--commit <token>`
+ * performs the atomic transition. The receiving session hint defaults to a
+ * host-stable value so prepare and commit issued by separate CLI processes
+ * still derive the same token; adapters pass `--session` with their real id.
+ * @param {string[]} args @param {any} io
+ * @returns {Promise<number>}
+ */
+export async function cmdReceive(args, io) {
+  const { flags } = parseFlags(args);
+  const platform = typeof flags.platform === 'string' ? flags.platform : null;
+  if (!platform) return usageError(io, flags, 'receive', '--platform <claude-code|codex|cursor> is required');
+
+  const root = resolveRoot(io, flags);
+  const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+  const hasSession = typeof flags.session === 'string';
+  const opts = {
+    platform,
+    origin: typeof flags.origin === 'string' ? flags.origin : 'unknown',
+    reason: typeof flags.reason === 'string' ? flags.reason : 'unspecified',
+    gitSnapshot: git,
+    // The fresh probe cache is a bound token input (probesDigest): remap uses
+    // it at prepare, and a cache change before commit is drift → re-prepare.
+    probes: readProbeCache(root, io),
+    // Explicit reason-class intake (gate-2 iter-2 M4): confirms a failover away
+    // from a low-confidence-classified origin; bound into the token.
+    ...(typeof flags['reason-class'] === 'string' ? { reasonClass: flags['reason-class'] } : {}),
+    sessionHint: hasSession ? /** @type {string} */ (flags.session) : `cli:${io.host}`,
+    // A defaulted host-derived hint is NOT the harness session id — mark it
+    // unstable so the receiving session's first real hook checkpoint adopts
+    // ownership instead of being rejected as foreign (gate-2 fix 2).
+    sessionUnstable: !hasSession,
+  };
+
+  if (typeof flags.commit === 'string') {
+    try {
+      const res = commit(root, flags.commit, opts, io);
+      if (flags.json) emitEnvelope(io, { ok: true, data: res });
+      else io.stdout.write(`received — generation ${res.generation} open on ${platform}; archived ${res.archivedTo}\n`);
+      return 0;
+    } catch (err) {
+      const msg = /** @type {any} */ (err)?.message ?? String(err);
+      if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'commit-rejected', msg } });
+      else io.stderr.write(`baton receive: ${msg}\n`);
+      return 1;
+    }
+  }
+
+  /** @type {ReturnType<typeof prepare>} */
+  let prepared;
+  try {
+    prepared = prepare(root, opts, io);
+  } catch (err) {
+    const msg = /** @type {any} */ (err)?.message ?? String(err);
+    if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'prepare-failed', msg } });
+    else io.stderr.write(`baton receive: ${msg}\n`);
+    return 1;
+  }
+
+  if (flags['print-prompt'] === true) {
+    // --json wraps the prompt in the envelope (gate-2 iter-2 M6); the bare
+    // form stays raw markdown — the adapter hook fallback path is unchanged.
+    if (flags.json) emitEnvelope(io, { ok: true, data: { prompt: prepared.prompt, warnings: prepared.warnings } });
+    else io.stdout.write(prepared.prompt);
+    return 0;
+  }
+
+  if (flags.json) {
+    emitEnvelope(io, {
+      ok: true,
+      data: { token: prepared.token, prompt: prepared.prompt, assignments: prepared.assignments, warnings: prepared.warnings },
+    });
+  } else {
+    for (const w of prepared.warnings) io.stderr.write(`baton receive: ${w}\n`);
+    io.stderr.write(`baton receive: token ${prepared.token}\n`);
+    io.stdout.write(prepared.prompt);
+  }
+  return 0;
+}
+
+ succeeded in 0ms:
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+import { loadBundle, writeSnapshotIn, rotateJournalIn } from '../bundle/store.mjs';
+import { withLock } from '../bundle/lock.mjs';
+import { loadConfig } from '../roles/matrix.mjs';
+import { resolveRoles } from '../roles/resolve.mjs';
+import { renderResumePrompt } from './prompt.mjs';
+import { loadSignatures } from '../detect/signatures.mjs';
+import { classify } from '../detect/classifier.mjs';
+import { dedupeKey } from '../util/ids.mjs';
+
+const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
+const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+
+/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string, sessionUnstable?: boolean, reasonClass?: string}} ReceiveOpts */
+
+/**
+ * Classify the switch reason, KEEPING confidence (gate-2 iter-2 M4): a
+ * low-confidence heuristic (e.g. Cursor's "quota exceeded") must not silently
+ * drive an avoid[] decision — the caller warns and defers to explicit intake.
+ * @param {string} reason @param {string} originPlatform @param {any} io
+ * @returns {{class: string | null, confidence: string | null}}
+ */
+function classifyReason(reason, originPlatform, io) {
+  try {
+    const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
+    const verdict = classify({ text: reason, exitCode: 0, platform: originPlatform, table, structured: null });
+    return verdict.class === 'ok' ? { class: null, confidence: null } : { class: verdict.class, confidence: verdict.confidence };
+  } catch {
+    return { class: null, confidence: null };
+  }
+}
+
+/**
+ * The revision fingerprint the receipt token is a hash of. Every field is a
+ * bound input: any drift between prepare and commit re-derives a different
+ * token, so a stale receipt can never commit (plan §Concurrency).
+ * @param {string} root @param {any} bundle @param {ReceiveOpts} opts @param {any} io
+ */
+function deriveToken(root, bundle, opts, io) {
+  let configDigest = 'absent';
+  try {
+    configDigest = dedupeKey(io.fs.readFileSync(`${root}/baton.config.json`, 'utf8'));
+  } catch {
+    // no config — 'absent' is itself a bound value
+  }
+  return dedupeKey({
+    generation: bundle.generation,
+    journalSeq: bundle.journalSeq,
+    // The seal state is a bound input too (gate-2 fix): a competing receiver
+    // that lands between this token's derivation and its commit changes
+    // status/receive_log, so the loser's token cannot re-derive.
+    handoffStatus: bundle.handoff?.status ?? null,
+    receives: Array.isArray(bundle.handoff?.receive_log) ? bundle.handoff.receive_log.length : 0,
+    origin: opts.origin,
+    reason: opts.reason,
+    // Explicit --reason-class is a bound intake input (gate-2 iter-2 M4): it
+    // changes the avoid[] decision, so a change between prepare and commit is
+    // drift that must re-prepare.
+    reasonClass: opts.reasonClass ?? null,
+    configDigest,
+    gitDigest: dedupeKey(opts.gitSnapshot ?? null),
+    probesDigest: dedupeKey(opts.probes ?? null),
+    platform: opts.platform,
+    sessionHint: opts.sessionHint,
+  });
+}
+
+/**
+ * @param {any} bundle @param {ReceiveOpts} opts @param {any} io
+ * @returns {string[]} staleness/degradation warnings
+ */
+function stalenessWarnings(bundle, opts, io) {
+  /** @type {string[]} */
+  const warnings = [];
+  if (bundle.handoff.status === 'open') {
+    warnings.push('source bundle is unsealed (open) — the handoff was never finalized; treating this as a degraded (limit-death) receive');
+  }
+  const ref = bundle.handoff.finalizedAt ?? bundle.updatedAt;
+  const ageMs = Date.parse(io.now()) - Date.parse(ref);
+  if (Number.isFinite(ageMs) && ageMs > STALE_AFTER_MS) {
+    warnings.push(`bundle finalized ${Math.round(ageMs / 3_600_000)}h ago (staleness threshold 12h) — re-verify before continuing`);
+  }
+  const g = opts.gitSnapshot;
+  if (g && bundle.git) {
+    if (bundle.git.headSha !== g.headSha) {
+      warnings.push(`HEAD moved since capture: bundle recorded ${bundle.git.headSha}, working tree now ${g.headSha}`);
+    }
+    if (bundle.git.dirty !== g.dirty) {
+      warnings.push(`dirty-state mismatch: bundle captured dirty=${bundle.git.dirty}, working tree now dirty=${g.dirty}`);
+    }
+  }
+  return warnings;
+}
+
+/**
+ * Phase 1 of the receive transaction: validate, resolve roles, render the
+ * resume prompt, and return a one-time receipt token. Mutates NOTHING — the
+ * token is self-contained (a fingerprint hash), never a persisted record.
+ * @param {string} root @param {ReceiveOpts} opts @param {any} io
+ * @returns {{token: string, prompt: string, assignments: Record<string, any>, warnings: string[]}}
+ */
+export function prepare(root, opts, io) {
+  const { bundle, warnings: loadWarnings } = loadBundle(root, io);
+  if (bundle === null) throw new Error(`no handoff bundle under ${root}/.handoff — nothing to receive`);
+
+  const warnings = [...loadWarnings, ...stalenessWarnings(bundle, opts, io)];
+
+  const { config, errors } = loadConfig(root, io);
+  /** @type {Record<string, any>} */
+  let assignments = {};
+  if (config) {
+    // The dead origin comes from the BUNDLE first (its sealed reasonClass and
+    // recorded origin platform); typed intake only fills the gaps — a user
+    // should not need to retype the verbatim limit string to keep roles off
+    // the platform that died (gate-2 reviewer-b finding 4). Confidence gates
+    // auto-avoidance (gate-2 iter-2 M4): an explicit --reason-class or a sealed
+    // reasonClass is trusted; a live text classification only auto-avoids at
+    // medium+ confidence, else it warns and defers to explicit intake.
+    let reasonClass;
+    let confidence;
+    if (typeof opts.reasonClass === 'string') {
+      reasonClass = opts.reasonClass;
+      confidence = 'high'; // explicit user intake
+    } else if (typeof bundle.handoff?.reasonClass === 'string') {
+      reasonClass = bundle.handoff.reasonClass;
+      confidence = 'high'; // trusted seal
+    } else {
+      const v = classifyReason(opts.reason, opts.origin, io);
+      reasonClass = v.class;
+      confidence = v.confidence;
+    }
+    const deadOrigin =
+      typeof bundle.origin?.platform === 'string' && bundle.origin.platform !== 'unknown' ? bundle.origin.platform : opts.origin;
+    /** @type {string[]} */
+    let avoid = [];
+    if (reasonClass === 'usage-limit') {
+      if (confidence === 'low') {
+        warnings.push(
+          `the switch reason matched a usage-limit heuristic only at LOW confidence — not auto-avoiding ${deadOrigin}; pass --reason-class usage-limit to confirm the failover away from it`,
+        );
+      } else {
+        avoid = [deadOrigin];
+      }
+    }
+    assignments = resolveRoles({ config, to: opts.platform, avoid, nativeOnly: false, probes: opts.probes ?? null }).assignments;
+  } else {
+    warnings.push(`role matrix unavailable (${errors.map((e) => e.msg).join('; ')}) — no role table in this prompt`);
+  }
+
+  const prompt = renderResumePrompt({ bundle, assignments, warnings, origin: opts.origin, reason: opts.reason });
+  return { token: deriveToken(root, bundle, opts, io), prompt, assignments, warnings };
+}
+
+/**
+ * Phase 2: one atomic transition. Re-derives every bound input from current
+ * disk state + opts and rejects ANY drift (throws, zero mutation). On match:
+ * writes the received seal, archives it via a 'receive' rotation, then opens a
+ * fresh writable generation owned by the receiving platform/session.
+ * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io
+ * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+ */
+export function commit(root, token, opts, io) {
+  // ONE operation-scoped lock across revalidation and every mutation (gate-2
+  // fix: reviewers a#1/b#11): two competing receivers serialize here, and the
+  // loser's re-derivation sees the winner's generation/status/receive_log.
+  return withLock(root, io, (fence) => commitLocked(root, token, opts, io, fence));
+}
+
+/**
+ * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io @param {string} fence
+ * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+ */
+function commitLocked(root, token, opts, io, fence) {
+  const { bundle } = loadBundle(root, io);
+  if (bundle === null) throw new Error(`no handoff bundle under ${root}/.handoff — nothing to receive; run receive --prepare first`);
+
+  if (deriveToken(root, bundle, opts, io) !== token) {
+    throw new Error(
+      'receipt token is stale: a bound input (bundle revision, intake, config, git state, probes, or target platform/session) drifted since prepare — run re-prepare and retry',
+    );
+  }
+
+  const degraded = bundle.handoff.status !== 'sealed';
+  const receiveEntry = {
+    origin: opts.origin,
+    reason: opts.reason,
+    at: io.now(),
+    ...(degraded ? { degradedSeal: true } : {}),
+  };
+
+  const receivedSeal = {
+    ...bundle,
+    updatedAt: io.now(),
+    handoff: {
+      ...bundle.handoff,
+      status: 'received',
+      ...(degraded
+        ? {
+            reason: opts.reason,
+            // Explicit intake wins; else the live text classification's class.
+            reasonClass: typeof opts.reasonClass === 'string' ? opts.reasonClass : classifyReason(opts.reason, opts.origin, io).class,
+            finalizedAt: io.now(),
+          }
+        : {}),
+      receive_log: [...bundle.handoff.receive_log, receiveEntry],
+    },
+  };
+
+  // Freeze order: the received seal is written first so the 'receive' rotation
+  // archives exactly that state (never the pre-commit bundle). All three
+  // mutations run under the SAME lock acquisition, fence-checked per write.
+  writeSnapshotIn(root, receivedSeal, io, fence);
+  const archivedTo = rotateJournalIn(root, 'receive', io, fence);
+
+  const { config } = loadConfig(root, io);
+  const next = {
+    ...receivedSeal,
+    generation: bundle.generation + 1,
+    origin: {
+      platform: opts.platform,
+      model: config?.defaults?.[opts.platform] ?? 'unknown',
+      sessionHint: opts.sessionHint,
+      unstable: opts.sessionUnstable === true,
+    },
+    handoff: { ...receivedSeal.handoff, status: 'open' },
+  };
+  writeSnapshotIn(root, next, io, fence);
+
+  return { adopted: true, generation: next.generation, archivedTo };
+}
+
+exec
+/bin/zsh -lc "rg -n \"function resolveRoles|avoid|skipped|reasonClass|usage-limit|low confidence|confidence\" core/src/roles core/src/receive -g '*.mjs'" in /Users/saksham/baton
+ succeeded in 0ms:
+core/src/receive/txn.mjs:15:/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string, sessionUnstable?: boolean, reasonClass?: string}} ReceiveOpts */
+core/src/receive/txn.mjs:18: * Classify the switch reason, KEEPING confidence (gate-2 iter-2 M4): a
+core/src/receive/txn.mjs:19: * low-confidence heuristic (e.g. Cursor's "quota exceeded") must not silently
+core/src/receive/txn.mjs:20: * drive an avoid[] decision — the caller warns and defers to explicit intake.
+core/src/receive/txn.mjs:22: * @returns {{class: string | null, confidence: string | null}}
+core/src/receive/txn.mjs:28:    return verdict.class === 'ok' ? { class: null, confidence: null } : { class: verdict.class, confidence: verdict.confidence };
+core/src/receive/txn.mjs:30:    return { class: null, confidence: null };
+core/src/receive/txn.mjs:58:    // changes the avoid[] decision, so a change between prepare and commit is
+core/src/receive/txn.mjs:60:    reasonClass: opts.reasonClass ?? null,
+core/src/receive/txn.mjs:113:    // The dead origin comes from the BUNDLE first (its sealed reasonClass and
+core/src/receive/txn.mjs:117:    // auto-avoidance (gate-2 iter-2 M4): an explicit --reason-class or a sealed
+core/src/receive/txn.mjs:118:    // reasonClass is trusted; a live text classification only auto-avoids at
+core/src/receive/txn.mjs:119:    // medium+ confidence, else it warns and defers to explicit intake.
+core/src/receive/txn.mjs:120:    let reasonClass;
+core/src/receive/txn.mjs:121:    let confidence;
+core/src/receive/txn.mjs:122:    if (typeof opts.reasonClass === 'string') {
+core/src/receive/txn.mjs:123:      reasonClass = opts.reasonClass;
+core/src/receive/txn.mjs:124:      confidence = 'high'; // explicit user intake
+core/src/receive/txn.mjs:125:    } else if (typeof bundle.handoff?.reasonClass === 'string') {
+core/src/receive/txn.mjs:126:      reasonClass = bundle.handoff.reasonClass;
+core/src/receive/txn.mjs:127:      confidence = 'high'; // trusted seal
+core/src/receive/txn.mjs:130:      reasonClass = v.class;
+core/src/receive/txn.mjs:131:      confidence = v.confidence;
+core/src/receive/txn.mjs:136:    let avoid = [];
+core/src/receive/txn.mjs:137:    if (reasonClass === 'usage-limit') {
+core/src/receive/txn.mjs:138:      if (confidence === 'low') {
+core/src/receive/txn.mjs:140:          `the switch reason matched a usage-limit heuristic only at LOW confidence — not auto-avoiding ${deadOrigin}; pass --reason-class usage-limit to confirm the failover away from it`,
+core/src/receive/txn.mjs:143:        avoid = [deadOrigin];
+core/src/receive/txn.mjs:146:    assignments = resolveRoles({ config, to: opts.platform, avoid, nativeOnly: false, probes: opts.probes ?? null }).assignments;
+core/src/receive/txn.mjs:202:            reasonClass: typeof opts.reasonClass === 'string' ? opts.reasonClass : classifyReason(opts.reason, opts.origin, io).class,
+core/src/roles/resolve.mjs:4: * in skipped[] with a why. avoid[] population is the caller's job.
+core/src/roles/resolve.mjs:5: * @param {{config: any, to: string, avoid?: string[], nativeOnly?: boolean, probes?: Record<string, {capability: string, outcome: string}> | null}} input
+core/src/roles/resolve.mjs:8:export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probes = null }) {
+core/src/roles/resolve.mjs:17:    if (avoid.includes(platform)) return 'avoided';
+core/src/roles/resolve.mjs:39:    const skipped = [];
+core/src/roles/resolve.mjs:46:        skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why: 'non-native' });
+core/src/roles/resolve.mjs:51:        skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why });
+core/src/roles/resolve.mjs:60:        skipped,
+core/src/roles/resolve.mjs:71:        assignment = { platform: to, model, effort: null, mode: 'forced-default', chainIndex: null, skipped };
+core/src/roles/resolve.mjs:77:      assignment = { platform: null, model: null, effort: null, mode: 'unavailable', chainIndex: null, skipped };
+
+exec
+/bin/zsh -lc "sed -n '1,260p' core/src/bundle/store.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { atomicWriteText, safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
+import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+import { checkHandoffTree, assertHandoffTreeSafe } from '../util/jail.mjs';
+import { emptyBundle, validateBundle } from './schema.mjs';
+import { applyEvent } from './merge.mjs';
+import { compact } from './compact.mjs';
+import { renderHandoffMd } from './render.mjs';
+import { withLock, guardedWrite, LockHeldError } from './lock.mjs';
+
+const RETAIN_PER_KIND = 10;
+
+/** @param {string} root */
+export function bundlePaths(root) {
+  const dir = `${root}/.handoff`;
+  return {
+    dir,
+    snapshot: `${dir}/bundle.json`,
+    bak: `${dir}/bundle.json.bak`,
+    journal: `${dir}/journal.ndjson`,
+    handoffMd: `${dir}/HANDOFF.md`,
+    historyDir: `${dir}/history`,
+    lockDir: `${dir}/lock`,
+    logDir: `${dir}/log`,
+  };
+}
+
+/** @param {string} iso */
+const tsForFile = (iso) => iso.replace(/[:.]/g, '-');
+
+/** @param {ReturnType<typeof bundlePaths>} p */
+const markerPath = (p) => `${p.dir}/rotation.marker.json`;
+
+/**
+ * Reconcile a leftover rotation marker (crash recovery, part of load). The
+ * mutations run under the repo lock, acquired WITHOUT waiting (gate-2 minor
+ * 16): a held lock means someone is mid-operation — reconciliation defers to
+ * the next unlocked load instead of writing behind their back.
+ * @param {any} io @param {ReturnType<typeof bundlePaths>} p @param {string[]} warnings @param {string} root
+ */
+function reconcileMarker(io, p, warnings, root) {
+  const mp = markerPath(p);
+  if (!io.fs.existsSync(mp)) return;
+  try {
+    withLock(root, { ...io, lockRetry: { attempts: 0, delayMs: 0 } }, () => {
+      if (!io.fs.existsSync(mp)) return; // a competitor reconciled while we acquired
+      const marker = safeReadJson(io.fs, mp);
+      if (!marker.ok) {
+        io.fs.unlinkSync(mp);
+        warnings.push('rotation marker was unparseable — rolled the rotation back (marker cleared, journal preserved)');
+        return;
+      }
+      const stem = `${tsForFile(marker.value.startedAt)}.${marker.value.kind}`;
+      const freeze = `${p.historyDir}/${stem}.json`;
+      const rotated = `${p.historyDir}/${stem}.ndjson`;
+
+      if (io.fs.existsSync(freeze)) {
+        // Roll forward: finish whichever step the crash interrupted.
+        if (io.fs.existsSync(p.journal) && !io.fs.existsSync(rotated)) {
+          io.fs.renameSync(p.journal, rotated);
+        }
+        if (!io.fs.existsSync(p.journal)) {
+          atomicWriteText(io.fs, p.journal, '');
+        }
+        io.fs.unlinkSync(mp);
+        warnings.push(`completed an interrupted rotation (roll-forward of ${stem}); marker cleared`);
+      } else {
+        io.fs.unlinkSync(mp);
+        warnings.push(`aborted an incomplete rotation (roll-back; ${stem} freeze never landed); marker cleared, journal preserved`);
+      }
+    });
+  } catch (err) {
+    if (err instanceof LockHeldError) {
+      warnings.push('a rotation marker is present but the repo lock is held — reconciliation deferred to the next unlocked load');
+      return;
+    }
+    throw err;
+  }
+}
+
+/**
+ * @param {any} io @param {ReturnType<typeof bundlePaths>} p @param {string[]} warnings
+ * @returns {any | null} a usable base bundle, or null when nothing exists
+ */
+function resolveBase(io, p, warnings) {
+  const snapshotExists = io.fs.existsSync(p.snapshot);
+  if (snapshotExists) {
+    const snap = safeReadJson(io.fs, p.snapshot);
+    if (snap.ok && validateBundle(snap.value).ok) return snap.value;
+    warnings.push(
+      snap.ok
+        ? 'snapshot bundle.json failed schema validation — attempting recovery'
+        : `snapshot bundle.json is unreadable (${snap.error}) — attempting recovery`,
+    );
+    const bak = safeReadJson(io.fs, p.bak);
+    if (bak.ok && validateBundle(bak.value).ok) {
+      warnings.push('recovered from backup bundle.json.bak; replaying journal past its journalSeq');
+      return bak.value;
+    }
+    if (io.fs.existsSync(p.bak)) warnings.push('backup bundle.json.bak is also unusable');
+    if (io.fs.existsSync(p.journal)) {
+      warnings.push('rebuilding the bundle by replaying the whole journal over a fresh seed (recovery of last resort)');
+      return emptyBundle({ platform: 'unknown', model: 'unknown', goal: 'unknown (rebuilt from journal)' }, io.now());
+    }
+    return null;
+  }
+  if (io.fs.existsSync(p.journal)) {
+    warnings.push('no snapshot present — rebuilding the bundle from the journal');
+    return emptyBundle({ platform: 'unknown', model: 'unknown', goal: 'unknown (rebuilt from journal)' }, io.now());
+  }
+  return null;
+}
+
+/**
+ * Load the active bundle with full crash recovery. Read path — not lock-gated;
+ * rotation-marker reconciliation is part of load. A managed tree that fails
+ * the symlink/realpath jail (gate-2 fix 6) is refused outright: bundle null,
+ * `unsafe: true`, and the problem in warnings — callers must not treat this as
+ * "no bundle yet" and seed through the link.
+ * @param {string} root @param {any} io
+ * @returns {{bundle: any | null, warnings: string[], unsafe?: boolean}}
+ */
+export function loadBundle(root, io) {
+  const p = bundlePaths(root);
+  /** @type {string[]} */
+  const warnings = [];
+  if (!io.fs.existsSync(p.dir)) return { bundle: null, warnings };
+
+  const safe = checkHandoffTree(root, io);
+  if (!safe.ok) return { bundle: null, warnings: [safe.problem], unsafe: true };
+
+  reconcileMarker(io, p, warnings, root);
+
+  // An interrupted purge is visible on every read path (gate-2 minor 16): the
+  // tree may still hold transcript copies until purge-transcript finishes.
+  if (io.fs.existsSync(`${p.dir}/purge.marker.json`)) {
+    warnings.push('an interrupted purge left its marker — run baton purge-transcript to finish scrubbing every retained copy');
+  }
+
+  let bundle = resolveBase(io, p, warnings);
+  if (bundle === null) return { bundle: null, warnings };
+
+  if (io.fs.existsSync(p.journal)) {
+    const { entries, warnings: jw } = readAllTolerant(io.fs, p.journal);
+    for (const w of jw) {
+      warnings.push(`journal line ${w.line}: ${w.kind}${w.kind === 'seq-order' ? ` (prev ${w.prev}, got ${w.seq})` : ''}`);
+    }
+    for (const e of entries) {
+      // Envelope guard (gate-2 iter-2 B4): a parseable but non-object line
+      // (null, number, bare string) is not an event — skip it with a warning
+      // rather than crash replay on `e.seq` / `e.dedupeKey`.
+      if (e === null || typeof e !== 'object' || Array.isArray(e)) {
+        warnings.push('skipped a malformed journal line (not an event envelope)');
+        continue;
+      }
+      if (typeof e.seq === 'number' && e.seq <= bundle.journalSeq) continue;
+      bundle = applyEvent(bundle, e);
+    }
+  }
+  return { bundle, warnings };
+}
+
+/**
+ * Lock-context snapshot write: caller already holds the repo lock and passes
+ * its fencing token; the write is fence-checked immediately before landing
+ * (the fast-abort layer — gate-2 fix, reviewer-b finding 12).
+ * @param {string} root @param {any} bundle @param {any} io @param {string} token
+ */
+export function writeSnapshotIn(root, bundle, io, token) {
+  const p = bundlePaths(root);
+  return guardedWrite(root, io, token, () => {
+    assertHandoffTreeSafe(root, io);
+    ensureDir(io.fs, p.dir);
+    // Size discipline runs in the write path itself (gate-2 fix 10): every
+    // persisted snapshot is within budget; identity for in-budget bundles.
+    const bounded = compact(bundle);
+    // Validate-before-backup (gate-2 major 15): a corrupt current snapshot
+    // must never overwrite a good .bak — the backup only rotates when the
+    // outgoing snapshot itself would be recoverable.
+    const prev = safeReadJson(io.fs, p.snapshot);
+    if (prev.ok && validateBundle(prev.value).ok) {
+      atomicWriteText(io.fs, p.bak, io.fs.readFileSync(p.snapshot, 'utf8'));
+    }
+    atomicWriteText(io.fs, p.snapshot, JSON.stringify(bounded, null, 2) + '\n');
+    atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bounded));
+  });
+}
+
+/**
+ * Persist a snapshot: back up the previous good one, write atomically, render
+ * HANDOFF.md alongside. Mutation — runs under the repo lock.
+ * @param {string} root @param {any} bundle @param {any} io
+ */
+export function writeSnapshot(root, bundle, io) {
+  return withLock(root, io, (token) => writeSnapshotIn(root, bundle, io, token));
+}
+
+/**
+ * Append one journal entry under the repo lock. A pre-numbered entry keeps its
+ * seq; a seq-less entry is allocated max(snapshot.journalSeq, journal tail) + 1.
+ * @param {string} root @param {any} entry @param {any} io
+ * @returns {number} the entry's (possibly allocated) seq
+ */
+export function appendJournal(root, entry, io) {
+  const p = bundlePaths(root);
+  return withLock(root, io, (token) =>
+    guardedWrite(root, io, token, () => {
+      assertHandoffTreeSafe(root, io);
+      ensureDir(io.fs, p.dir);
+      let seq = entry.seq;
+      let toAppend = entry;
+      if (typeof seq !== 'number') {
+        const snap = safeReadJson(io.fs, p.snapshot);
+        const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+        let tailSeq = 0;
+        if (io.fs.existsSync(p.journal)) {
+          for (const e of readAllTolerant(io.fs, p.journal).entries) {
+            if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+          }
+        }
+        seq = Math.max(snapSeq, tailSeq) + 1;
+        toAppend = { ...entry, seq };
+      }
+      appendEntry(io.fs, p.journal, toAppend);
+      return seq;
+    }),
+  );
+}
+
+/**
+ * Crash-safe journal rotation (marker → freeze → rename → fresh journal →
+ * clear marker), with 10-per-kind history retention. Mutation — lock-gated.
+ * @param {string} root @param {'finalize'|'takeover'|'receive'} kind @param {any} io
+ * @returns {string} the history stem for this rotation
+ */
+export function rotateJournal(root, kind, io) {
+  return withLock(root, io, (token) => rotateJournalIn(root, kind, io, token));
+}
+
+/**
+ * Lock-context rotation: caller holds the lock and passes its fencing token.
+ * @param {string} root @param {'finalize'|'takeover'|'receive'} kind @param {any} io @param {string} token
+ * @returns {string} the history stem for this rotation
+ */
+export function rotateJournalIn(root, kind, io, token) {
+  const p = bundlePaths(root);
+  return guardedWrite(root, io, token, () => {
+    assertHandoffTreeSafe(root, io);
+    ensureDir(io.fs, p.dir);
+    const startedAt = io.now();
+    const stem = `${tsForFile(startedAt)}.${kind}`;
+    const snap = safeReadJson(io.fs, p.snapshot);
+    const seq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+
+    atomicWriteJson(io.fs, markerPath(p), { kind, startedAt, seq });
+    ensureDir(io.fs, p.historyDir);
+
+    if (io.fs.existsSync(p.snapshot)) {
+      // Atomic freeze (gate-2 minor 16): tmp+rename, so a crash mid-copy can
+      // never leave a partial history snapshot that recovery would trust.
+      atomicWriteText(io.fs, `${p.historyDir}/${stem}.json`, io.fs.readFileSync(p.snapshot, 'utf8'));
+
+exec
+/bin/zsh -lc "rg -n \"function rotateJournalIn|export function rotateJournalIn|\\.receive\\.json|receive\" core/src/bundle/store.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+232: * @param {string} root @param {'finalize'|'takeover'|'receive'} kind @param {any} io
+241: * @param {string} root @param {'finalize'|'takeover'|'receive'} kind @param {any} io @param {string} token
+244:export function rotateJournalIn(root, kind, io, token) {
+
+exec
+/bin/zsh -lc "sed -n '1,130p' core/src/bundle/lock.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "sed -n '130,240p' core/src/bundle/lock.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { atomicWriteJson } from '../util/fsx.mjs';
+import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+import { dedupeKey } from '../util/ids.mjs';
+import { checkHandoffTree } from '../util/jail.mjs';
+
+/**
+ * Operation-scoped mutation lock (plan §Concurrency, Lock model).
+ * Acquire = atomic non-recursive mkdir of .handoff/lock/; exclusivity comes from
+ * EEXIST. Ownership facts live in owner.json; logical session ownership lives in
+ * bundle.json, never here. Takeover only when the owner is provably dead on this
+ * host — every other contended state refuses, and `force` never changes that.
+ */
+
+export class LockHeldError extends Error {
+  constructor(/** @type {string} */ message) {
+    super(message);
+    this.name = 'LockHeldError';
+  }
+}
+
+export class FencingError extends Error {
+  constructor(/** @type {string} */ message) {
+    super(message);
+    this.name = 'FencingError';
+  }
+}
+
+/** @param {string} root */
+function lockPaths(root) {
+  const dir = `${root}/.handoff`;
+  return {
+    dir,
+    lockDir: `${dir}/lock`,
+    owner: `${dir}/lock/owner.json`,
+    journal: `${dir}/journal.ndjson`,
+  };
+}
+
+const ESCAPE_HATCH =
+  'Verify manually that no baton process still holds it, then delete .handoff/lock to clear.';
+
+/**
+ * Inspect the current lock state.
+ * @param {any} io @param {ReturnType<typeof lockPaths>} p
+ * @returns {{state: 'free'} | {state: 'torn', cause: string} | {state: 'live'|'dead'|'cross-host', owner: any}}
+ */
+function inspect(io, p) {
+  if (!io.fs.existsSync(p.lockDir)) return { state: 'free' };
+  if (!io.fs.existsSync(p.owner)) {
+    return { state: 'torn', cause: 'owner.json is missing (torn lock metadata)' };
+  }
+  let owner;
+  try {
+    owner = JSON.parse(io.fs.readFileSync(p.owner, 'utf8'));
+  } catch {
+    return { state: 'torn', cause: 'owner.json is unparseable (torn lock metadata)' };
+  }
+  if (owner.host !== io.host) return { state: 'cross-host', owner };
+  if (io.processAlive(owner.pid, owner.startTime)) return { state: 'live', owner };
+  return { state: 'dead', owner };
+}
+
+/** @param {any} io @param {ReturnType<typeof lockPaths>} p @param {string} text */
+function journalNote(io, p, text) {
+  io.fs.mkdirSync(p.dir, { recursive: true });
+  // Allocate seq + dedupeKey like every other journal entry (gate-2 fix,
+  // reviewer-b finding 2): a keyless, seq-less note poisons journalSeq to NaN
+  // on replay and dedupes every later keyless event. We are already inside the
+  // lock here, so reading the tail for allocation is race-free.
+  let tailSeq = 0;
+  try {
+    const snap = JSON.parse(io.fs.readFileSync(`${p.dir}/bundle.json`, 'utf8'));
+    if (typeof snap?.journalSeq === 'number') tailSeq = snap.journalSeq;
+  } catch {
+    // no snapshot yet — journal tail below still counts
+  }
+  try {
+    for (const e of readAllTolerant(io.fs, p.journal).entries) {
+      if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+    }
+  } catch {
+    // no journal yet
+  }
+  const ts = io.now();
+  appendEntry(io.fs, p.journal, {
+    seq: tailSeq + 1,
+    ts,
+    type: 'note',
+    dedupeKey: dedupeKey({ ts, type: 'note', source: 'lock', text }),
+    writerId: ['lock', io.host, io.pid].join('-'),
+    source: 'lock',
+    payload: { text },
+  });
+}
+
+/** @param {any} io @param {ReturnType<typeof lockPaths>} p */
+function publishOwner(io, p) {
+  const token = io.newFencingToken();
+  atomicWriteJson(io.fs, p.owner, {
+    host: io.host,
+    pid: io.pid,
+    startTime: io.startTime,
+    fencingToken: token,
+    acquiredAt: io.now(),
+    heartbeatAt: io.now(),
+  });
+  return token;
+}
+
+/** @param {any} io @param {ReturnType<typeof lockPaths>} p */
+function acquire(io, p) {
+  io.fs.mkdirSync(p.dir, { recursive: true });
+  try {
+    io.fs.mkdirSync(p.lockDir);
+    return publishOwner(io, p);
+  } catch (err) {
+    if (/** @type {any} */ (err)?.code !== 'EEXIST') throw err;
+  }
+
+  const s = inspect(io, p);
+  switch (s.state) {
+    case 'free':
+      // Raced a release between mkdir failure and inspection; retry once. A
+      // competitor can win THIS mkdir too (gate-2 fix 12: observed under real
+      // barrier-released contention) — that is contention, not corruption.
+      try {
+        io.fs.mkdirSync(p.lockDir);
+      } catch (err) {
+        if (/** @type {any} */ (err)?.code === 'EEXIST') {
+          throw new LockHeldError('lock was re-acquired by a competitor mid-inspection — transient contention');
+
+ succeeded in 0ms:
+          throw new LockHeldError('lock was re-acquired by a competitor mid-inspection — transient contention');
+        }
+        throw err;
+      }
+      return publishOwner(io, p);
+    case 'live':
+      throw new LockHeldError(
+        `lock is held by a live process (pid ${s.owner.pid} on ${s.owner.host}) — terminate that process first.`,
+      );
+    case 'cross-host':
+      throw new Error(
+        `lock is held from another host ('${s.owner.host}', this is '${io.host}') — cross-host locks are never provably safe to steal. ${ESCAPE_HATCH}`,
+      );
+    case 'torn':
+      // During ACQUIRE, torn metadata is usually a competitor caught between
+      // its mkdir and owner.json publication — transient by construction, so
+      // LockHeldError lets withLock wait it out (gate-2 fix 12). A genuinely
+      // crashed publisher exhausts the retry budget and surfaces this same
+      // message; recovery semantics (recoverLock) are unchanged: never steal.
+      throw new LockHeldError(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
+    case 'dead': {
+      // Atomic dead-lock reclaim (gate-2 iter-2 B1, hardened iter-3 finding-1).
+      // rm-then-mkdir is NOT mutually exclusive: two contenders can both observe
+      // 'dead' before either removes the stale dir, then both rm+mkdir — the
+      // second silently clobbers the first, yielding two simultaneous holders and
+      // two takeover notes. rename() is the atomic arbiter instead: the stale
+      // lock dir has exactly one name, so only one process can move it aside (the
+      // rest get ENOENT). Winning the rename IS winning the reclaim; a contender
+      // that recreated the dir via the 'free' path first makes our mkdir EEXIST →
+      // transient contention. The fencing token stays the write-time backstop.
+      const aside = `${p.lockDir}.reclaim-${io.pid}-${io.newFencingToken()}`;
+      try {
+        io.fs.renameSync(p.lockDir, aside);
+      } catch (err) {
+        // Source already gone → another contender is reclaiming it; wait+retry.
+        if (/** @type {any} */ (err)?.code === 'ENOENT') {
+          throw new LockHeldError('a competitor is reclaiming the dead lock — transient contention');
+        }
+        throw err;
+      }
+      // Winning the atomic rename IS the takeover — exactly one process can, so
+      // journal it HERE, before recreating. If we then lose the fresh-mkdir race
+      // to a competitor that grabbed the freed slot via the 'free' path, the
+      // audit trail still records who cleared the stale lock (recording it after
+      // publish would drop the note in that interleaving — the clearer isn't
+      // always the eventual holder).
+      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+      io.fs.rmSync(aside, { recursive: true, force: true });
+      try {
+        io.fs.mkdirSync(p.lockDir);
+      } catch (err) {
+        if (/** @type {any} */ (err)?.code === 'EEXIST') {
+          throw new LockHeldError('a competitor re-claimed the dead lock first — transient contention');
+        }
+        throw err;
+      }
+      return publishOwner(io, p);
+    }
+    /* c8 ignore next 2 */
+    default:
+      throw new Error('unreachable lock state');
+  }
+}
+
+/**
+ * Fence-guarded release: the lock dir is removed only while owner.json still
+ * carries OUR token. A holder that paused past a takeover must not delete the
+ * competitor's lock on its way out — release is a write like any other.
+ * @param {any} io @param {ReturnType<typeof lockPaths>} p @param {string} token
+ */
+function release(io, p, token) {
+  try {
+    const current = JSON.parse(io.fs.readFileSync(p.owner, 'utf8'));
+    if (current.fencingToken !== token) return; // a competitor took over — their lock, not ours
+  } catch {
+    return; // owner metadata gone or torn mid-hold — never guess; leave it for recovery
+  }
+  io.fs.rmSync(p.lockDir, { recursive: true, force: true });
+}
+
+// A live same-host holder is transient by design — operation-scoped locks are
+// held for milliseconds — so contention waits instead of dropping the
+// operation (gate-2 fix 12: simultaneous checkpoints must all land). The budget
+// is generous (≈15 s): under heavy load a writer may be starved of scheduling
+// for seconds, and waiting is strictly safer than silently dropping its work.
+// Every other contended state (torn, cross-host) stays fail-fast: waiting
+// cannot make those provably safe.
+const DEFAULT_RETRY = { attempts: 600, delayMs: 25 };
+
+/** Synchronous sleep without burning a core: Atomics.wait on a throwaway buffer. */
+const sleepMs = (/** @type {number} */ ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
+/**
+ * Acquire → run fn(token) → release (also on throw). Synchronous by design:
+ * everything the lock guards is sync fs work. Live-held locks are retried on
+ * a bounded budget (override via io.lockRetry = {attempts, delayMs}).
+ * @param {string} root @param {any} io @param {(token: string) => any} fn
+ */
+export function withLock(root, io, fn) {
+  const p = lockPaths(root);
+  // Jail BEFORE any lock mutation (gate-2 iter-2 B2): a symlinked .handoff or
+  // .handoff/lock must never be created into or removed through — that would
+  // reach outside the repository. Checked once here, ahead of acquire.
+  const safe = checkHandoffTree(root, io);
+  if (!safe.ok) throw new Error(`${safe.problem} — refusing to acquire the lock`);
+  const retry = io.lockRetry ?? DEFAULT_RETRY;
+  /** @type {string} */
+  let token;
+  for (let attempt = 0; ; attempt++) {
+
+codex
+The receiver race prepares independently before the commit barrier, which is the previously missing shape. Its persisted checks are enough to detect double-commit state, though it does not inspect the rejected child’s token or archive contents beyond the resulting generation/history count.
+exec
+/bin/zsh -lc "nl -ba core/src/bundle/lock.mjs | sed -n '140,180p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "sed -n '260,330p' core/src/bundle/store.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+      atomicWriteText(io.fs, `${p.historyDir}/${stem}.json`, io.fs.readFileSync(p.snapshot, 'utf8'));
+    } else {
+      atomicWriteText(io.fs, `${p.historyDir}/${stem}.json`, '');
+    }
+    if (io.fs.existsSync(p.journal)) {
+      io.fs.renameSync(p.journal, `${p.historyDir}/${stem}.ndjson`);
+    } else {
+      atomicWriteText(io.fs, `${p.historyDir}/${stem}.ndjson`, '');
+    }
+    atomicWriteText(io.fs, p.journal, '');
+
+    // Retention: newest RETAIN_PER_KIND per kind (ISO-derived stems sort by time).
+    const freezes = io.fs
+      .readdirSync(p.historyDir)
+      .filter((/** @type {string} */ n) => n.endsWith(`.${kind}.json`))
+      .sort();
+    while (freezes.length > RETAIN_PER_KIND) {
+      const oldest = /** @type {string} */ (freezes.shift());
+      const oldStem = oldest.slice(0, -'.json'.length);
+      for (const suffix of ['.json', '.ndjson']) {
+        try {
+          io.fs.unlinkSync(`${p.historyDir}/${oldStem}${suffix}`);
+        } catch {
+          // already absent — retention is best-effort per file
+        }
+      }
+    }
+
+    io.fs.unlinkSync(markerPath(p));
+    return stem;
+  });
+}
+
+ succeeded in 0ms:
+   140	      throw new Error(
+   141	        `lock is held from another host ('${s.owner.host}', this is '${io.host}') — cross-host locks are never provably safe to steal. ${ESCAPE_HATCH}`,
+   142	      );
+   143	    case 'torn':
+   144	      // During ACQUIRE, torn metadata is usually a competitor caught between
+   145	      // its mkdir and owner.json publication — transient by construction, so
+   146	      // LockHeldError lets withLock wait it out (gate-2 fix 12). A genuinely
+   147	      // crashed publisher exhausts the retry budget and surfaces this same
+   148	      // message; recovery semantics (recoverLock) are unchanged: never steal.
+   149	      throw new LockHeldError(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
+   150	    case 'dead': {
+   151	      // Atomic dead-lock reclaim (gate-2 iter-2 B1, hardened iter-3 finding-1).
+   152	      // rm-then-mkdir is NOT mutually exclusive: two contenders can both observe
+   153	      // 'dead' before either removes the stale dir, then both rm+mkdir — the
+   154	      // second silently clobbers the first, yielding two simultaneous holders and
+   155	      // two takeover notes. rename() is the atomic arbiter instead: the stale
+   156	      // lock dir has exactly one name, so only one process can move it aside (the
+   157	      // rest get ENOENT). Winning the rename IS winning the reclaim; a contender
+   158	      // that recreated the dir via the 'free' path first makes our mkdir EEXIST →
+   159	      // transient contention. The fencing token stays the write-time backstop.
+   160	      const aside = `${p.lockDir}.reclaim-${io.pid}-${io.newFencingToken()}`;
+   161	      try {
+   162	        io.fs.renameSync(p.lockDir, aside);
+   163	      } catch (err) {
+   164	        // Source already gone → another contender is reclaiming it; wait+retry.
+   165	        if (/** @type {any} */ (err)?.code === 'ENOENT') {
+   166	          throw new LockHeldError('a competitor is reclaiming the dead lock — transient contention');
+   167	        }
+   168	        throw err;
+   169	      }
+   170	      // Winning the atomic rename IS the takeover — exactly one process can, so
+   171	      // journal it HERE, before recreating. If we then lose the fresh-mkdir race
+   172	      // to a competitor that grabbed the freed slot via the 'free' path, the
+   173	      // audit trail still records who cleared the stale lock (recording it after
+   174	      // publish would drop the note in that interleaving — the clearer isn't
+   175	      // always the eventual holder).
+   176	      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+   177	      io.fs.rmSync(aside, { recursive: true, force: true });
+   178	      try {
+   179	        io.fs.mkdirSync(p.lockDir);
+   180	      } catch (err) {
+
+exec
+/bin/zsh -lc "nl -ba core/src/util/jail.mjs | sed -n '40,75p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    40	/**
+    41	 * Verify the managed .handoff tree is safe to operate on: the directory itself
+    42	 * is not a symlink, its realpath stays under the repository root, and no entry
+    43	 * anywhere in the tree is a symlink (lstat walk — never follows links). An
+    44	 * absent tree is safe; an unverifiable tree is refused, never trusted.
+    45	 * @param {string} root @param {any} io
+    46	 * @returns {{ok: true} | {ok: false, problem: string}}
+    47	 */
+    48	export function checkHandoffTree(root, io) {
+    49	  const dir = `${root}/.handoff`;
+    50	  try {
+    51	    if (!io.fs.existsSync(dir)) return { ok: true };
+    52	    if (io.fs.lstatSync(dir).isSymbolicLink()) {
+    53	      return { ok: false, problem: `.handoff is a symlink — refusing to operate through a linked managed tree` };
+    54	    }
+    55	    // Separator-normalize before comparing (Windows: realpathSync returns
+    56	    // backslash paths, so a raw compare against `${rootReal}/.handoff` would
+    57	    // mismatch on EVERY managed tree and refuse all operations). Comparing on a
+    58	    // canonical forward-slash spelling makes containment platform-neutral.
+    59	    const norm = (/** @type {string} */ s) => String(s).replace(/\\/g, '/');
+    60	    const rootReal = norm(io.fs.realpathSync(root));
+    61	    const dirReal = norm(io.fs.realpathSync(dir));
+    62	    if (dirReal !== `${rootReal}/.handoff`) {
+    63	      return { ok: false, problem: `.handoff resolves outside the repository root (${dirReal}) — refusing` };
+    64	    }
+    65	    // Walk is race-tolerant (gate-2 iter-2): under concurrent atomic writes
+    66	    // the tree churns — tmp files, the lock dir, and rotated journals appear
+    67	    // and vanish between readdir and lstat. An entry that disappears mid-walk
+    68	    // (ENOENT) is normal concurrency, NOT a symlink attack, so it is skipped;
+    69	    // only a POSITIVELY observed symlink refuses. The stable top-level checks
+    70	    // above (.handoff itself a symlink / realpath escape) stay strict.
+    71	    /** @type {string[]} */
+    72	    const stack = [dir];
+    73	    while (stack.length > 0) {
+    74	      const d = /** @type {string} */ (stack.pop());
+    75	      /** @type {string[]} */
+
+exec
+/bin/zsh -lc "nl -ba adapters/claude-code/scripts/hook.mjs | sed -n '43,75p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    43	// retention (last 50 entries / 7 days). The log rides .handoff/ so the purge
+    44	// walk covers it.
+    45	const HOOK_LOG_MAX = 50;
+    46	const HOOK_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+    47	
+    48	/** @param {any} io @param {string} event @param {any} err */
+    49	function logHookError(io, event, err) {
+    50	  try {
+    51	    // The diagnostics log rides .handoff/, so it passes the same managed-tree
+    52	    // jail as every other write (threat model): refuse to create or write
+    53	    // through a symlinked/escaped .handoff. Diagnostics must never be the hole
+    54	    // the jail closes elsewhere — and this stays fail-open (skip, don't throw).
+    55	    if (!checkHandoffTree(io.cwd, io).ok) return;
+    56	    const dir = `${io.cwd}/.handoff/log`;
+    57	    io.fs.mkdirSync(dir, { recursive: true });
+    58	    const path = `${dir}/hook-errors.jsonl`;
+    59	    const nowIso = typeof io.now === 'function' ? io.now() : new Date().toISOString();
+    60	    /** @type {any[]} */
+    61	    let entries = [];
+    62	    try {
+    63	      entries = io.fs
+    64	        .readFileSync(path, 'utf8')
+    65	        .split('\n')
+    66	        .filter((/** @type {string} */ l) => l.trim() !== '')
+    67	        .map((/** @type {string} */ l) => {
+    68	          try {
+    69	            return JSON.parse(l);
+    70	          } catch {
+    71	            return null;
+    72	          }
+    73	        })
+    74	        .filter(Boolean);
+    75	    } catch {
+
+exec
+/bin/zsh -lc "sed -n '1,120p' core/src/roles/matrix.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "rg -n \"export async function runHook|function runHook|case 'Stop'|afterFileEdit|baton\\(\" adapters/claude-code/scripts/hook.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+94:async function baton(io, argv, event) {
+147:export async function runHook(args, io) {
+157:      await baton(io, detectArgs, event);
+158:      await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+164:    await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+
+ succeeded in 0ms:
+/**
+ * Load + validate baton.config.json, parsing role chains from their
+ * "platform/model[@effort]" string form into structured entries.
+ * Never throws: returns {config, errors} with dotted-path errors.
+ * @param {string} cwd @param {any} io
+ * @returns {{config: any | null, errors: {path: string, msg: string}[]}}
+ */
+export function loadConfig(cwd, io) {
+  const file = `${cwd}/baton.config.json`;
+  /** @type {{path: string, msg: string}[]} */
+  const errors = [];
+
+  let raw;
+  try {
+    raw = io.fs.readFileSync(file, 'utf8');
+  } catch {
+    return { config: null, errors: [{ path: '', msg: `baton.config.json not found at ${file} — run 'baton init' to scaffold it` }] };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    return { config: null, errors: [{ path: '', msg: `baton.config.json is not valid JSON (${/** @type {any} */ (err)?.message ?? 'parse error'})` }] };
+  }
+
+  if (parsed.roles === null || typeof parsed.roles !== 'object' || Array.isArray(parsed.roles)) {
+    errors.push({ path: 'roles', msg: 'roles must be an object mapping role names to chain arrays' });
+  }
+
+  /** @type {Record<string, any[]>} */
+  const roles = {};
+  if (errors.length === 0) {
+    for (const [role, chain] of Object.entries(parsed.roles)) {
+      if (!Array.isArray(chain)) {
+        errors.push({ path: `roles.${role}`, msg: 'a role chain must be an array of "platform/model[@effort]" strings' });
+        continue;
+      }
+      /** @type {any[]} */
+      const entries = [];
+      for (let i = 0; i < chain.length; i += 1) {
+        const s = chain[i];
+        const slash = typeof s === 'string' ? s.indexOf('/') : -1;
+        if (slash <= 0 || slash === s.length - 1) {
+          errors.push({ path: `roles.${role}[${i}]`, msg: `malformed chain entry ${JSON.stringify(s)} — expected "platform/model[@effort]"` });
+          continue;
+        }
+        const platform = s.slice(0, slash);
+        const rest = s.slice(slash + 1);
+        const at = rest.indexOf('@');
+        const model = at === -1 ? rest : rest.slice(0, at);
+        const effort = at === -1 ? null : rest.slice(at + 1);
+        if (parsed.platforms && !(platform in parsed.platforms)) {
+          errors.push({ path: `roles.${role}[${i}]`, msg: `unknown platform "${platform}" — not a key of config.platforms` });
+          continue;
+        }
+        entries.push({ platform, model, effort });
+      }
+      roles[role] = entries;
+    }
+  }
+
+  if (errors.length > 0) return { config: null, errors };
+  return { config: { ...parsed, roles }, errors };
+}
+
+exec
+/bin/zsh -lc "sed -n '120,240p' adapters/claude-code/scripts/hook.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  let bundle;
+  try {
+    bundle = JSON.parse(io.fs.readFileSync(`${io.cwd}/.handoff/bundle.json`, 'utf8'));
+  } catch {
+    return 0;
+  }
+  const origin = bundle?.origin?.platform;
+  const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
+  const foreign = typeof origin === 'string' && origin !== 'claude-code';
+  if (pending && foreign) {
+    io.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: `A handoff bundle from ${origin} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
+        },
+      }) + '\n',
+    );
+  }
+  return 0;
+}
+
+/**
+ * @param {string[]} args argv after the script path; args[0] is the hook event
+ * @param {any} io injected {cwd, env, stdin, stdout, stderr, fs, execFile, now, …}
+ * @returns {Promise<number>} always 0 — fail-open by construction
+ */
+export async function runHook(args, io) {
+  try {
+    const event = args[0] ?? 'unknown';
+
+    if (event === 'SessionStart') return sessionStart(io);
+
+    if (event === 'StopFailure') {
+      const errorType = parsePayload(io)?.error?.type;
+      const detectArgs = ['detect', '--platform', 'claude-code'];
+      if (typeof errorType === 'string') detectArgs.push('--structured-error-type', errorType);
+      await baton(io, detectArgs, event);
+      await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+      return 0;
+    }
+
+    // Stop / PreCompact / SessionEnd — and any future event — are routine
+    // mechanical checkpoints; core normalize degrades unknown payloads safely.
+    await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Main entry: hooks.json executes this file directly (`node …/hook.mjs <Event>`),
+// so a real invocation must build the real io and run — an export alone is a
+// production no-op (gate-2 reviewer-b finding 1).
+const isMain = (() => {
+  try {
+    return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  let stdin = '';
+  try {
+    if (!process.stdin.isTTY) stdin = readFileSync(0, 'utf8');
+  } catch {
+    stdin = '';
+  }
+  const io = {
+    cwd: process.cwd(),
+    env: process.env,
+    stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    fs: nodeFs,
+    execFile: execFileWithInput,
+    now: () => new Date().toISOString(),
+  };
+  runHook(process.argv.slice(2), io).then(
+    (code) => process.exit(code),
+    () => process.exit(0),
+  );
+}
+
+exec
+/bin/zsh -lc "sed -n '1,110p' core/src/roles/resolve.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+/**
+ * Pure, explainable role resolution over the committed matrix. Every decision
+ * is auditable: chosen entries carry their chainIndex; passed-over entries land
+ * in skipped[] with a why. avoid[] population is the caller's job.
+ * @param {{config: any, to: string, avoid?: string[], nativeOnly?: boolean, probes?: Record<string, {capability: string, outcome: string}> | null}} input
+ * @returns {{assignments: Record<string, any>, notes: string[]}}
+ */
+export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probes = null }) {
+  /** @type {string[]} */
+  const notes = [];
+
+  /**
+   * The eligibility verdict for a platform, or null when eligible.
+   * @param {string} platform @returns {string | null}
+   */
+  function skipReason(platform) {
+    if (avoid.includes(platform)) return 'avoided';
+    if (!(platform in (config.platforms ?? {}))) return 'unknown-platform';
+    if (config.platforms[platform]?.enabled === false) return 'disabled';
+    if (probes && probes[platform]) {
+      if (probes[platform].outcome === 'rate-limited') return 'rate-limited';
+      if (probes[platform].capability === 'installed') return 'unauthenticated';
+      if (probes[platform].capability === 'not-installed') return 'not-installed';
+    }
+    return null;
+  }
+
+  // A selection is degraded when its availability is UNVERIFIED (gate-2 iter-2
+  // M3): with no probe cache at all, resolution is offline and EVERY selection
+  // is degraded (plan: "Offline resolution always succeeds, flagged degraded");
+  // with a partial cache, only the platforms the cache is missing are.
+  /** @param {string} platform */
+  const probeUnverified = (platform) => probes == null || !probes[platform];
+
+  /** @type {Record<string, any>} */
+  const assignments = {};
+  for (const [role, chain] of Object.entries(config.roles)) {
+    /** @type {any[]} */
+    const skipped = [];
+    /** @type {any} */
+    let assignment = null;
+
+    for (let i = 0; i < chain.length; i += 1) {
+      const entry = chain[i];
+      if (nativeOnly && entry.platform !== to) {
+        skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why: 'non-native' });
+        continue;
+      }
+      const why = skipReason(entry.platform);
+      if (why) {
+        skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why });
+        continue;
+      }
+      assignment = {
+        platform: entry.platform,
+        model: entry.model,
+        effort: entry.effort ?? null,
+        mode: entry.platform === to ? 'native' : 'delegated',
+        chainIndex: i,
+        skipped,
+      };
+      if (probeUnverified(entry.platform)) assignment.degraded = true;
+      break;
+    }
+
+    if (!assignment && nativeOnly) {
+      // Forced-default is only valid when the destination itself is eligible.
+      const whyTo = skipReason(to);
+      const model = config.defaults?.[to];
+      if (!whyTo && typeof model === 'string') {
+        assignment = { platform: to, model, effort: null, mode: 'forced-default', chainIndex: null, skipped };
+        if (probeUnverified(to)) assignment.degraded = true;
+      }
+    }
+
+    if (!assignment) {
+      assignment = { platform: null, model: null, effort: null, mode: 'unavailable', chainIndex: null, skipped };
+    }
+    assignments[role] = assignment;
+  }
+
+  return { assignments, notes };
+}
+
+codex
+For the helper fake, directory `renameSync` now moves the directory entry and descendant files/dirs under the new prefix while preserving the existing file-rename path. I don’t see it weakening the lock tests’ atomicity checks; those tests intercept the single `renameSync` call before the fake applies the move.
+codex
+1. VERDICT: APPROVED_WITH_NOTES
+
+2. Numbered findings, most severe first:
+1. [minor] — tests/integration/lock-concurrency.test.mjs:161 — the real-process reclaim race has only a start barrier, so old rm-then-mkdir could still pass if one child finishes reclaim before the other observes the stale owner. Fix: add a second test-only synchronization point around stale-owner observation, or keep treating `tests/unit/lock-hardening.test.mjs:52`/`:70` as the deterministic regression oracle.
+
+3. Per-finding table:
+
+| finding | now pinned honestly? | test file:line | would-fail-on-regression? |
+|---|---|---|---|
+| 1 | partial | tests/integration/lock-concurrency.test.mjs:161, tests/unit/lock-hardening.test.mjs:52 | yes via unit; integration alone no |
+| 2 | yes | tests/integration/hook-log-symlink.test.mjs:50 | yes |
+| 3 | yes | tests/commands/gate2-iter2-group6.test.mjs:187 | yes |
+| 4 | yes | tests/commands/gate2-iter2-group6.test.mjs:87 | yes |
+| 5 | yes | tests/integration/receiver-concurrency.test.mjs:94 | yes |
+| memfs | yes | tests/helpers/memfs.mjs:95 | yes |
+tokens used
+80,113
+1. VERDICT: APPROVED_WITH_NOTES
+
+2. Numbered findings, most severe first:
+1. [minor] — tests/integration/lock-concurrency.test.mjs:161 — the real-process reclaim race has only a start barrier, so old rm-then-mkdir could still pass if one child finishes reclaim before the other observes the stale owner. Fix: add a second test-only synchronization point around stale-owner observation, or keep treating `tests/unit/lock-hardening.test.mjs:52`/`:70` as the deterministic regression oracle.
+
+3. Per-finding table:
+
+| finding | now pinned honestly? | test file:line | would-fail-on-regression? |
+|---|---|---|---|
+| 1 | partial | tests/integration/lock-concurrency.test.mjs:161, tests/unit/lock-hardening.test.mjs:52 | yes via unit; integration alone no |
+| 2 | yes | tests/integration/hook-log-symlink.test.mjs:50 | yes |
+| 3 | yes | tests/commands/gate2-iter2-group6.test.mjs:187 | yes |
+| 4 | yes | tests/commands/gate2-iter2-group6.test.mjs:87 | yes |
+| 5 | yes | tests/integration/receiver-concurrency.test.mjs:94 | yes |
+| memfs | yes | tests/helpers/memfs.mjs:95 | yes |

@@ -109,10 +109,15 @@ for (;;) {
 writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0, t1 }));
 `;
 
-// One provably-dead owner, two real reclaimers released together. Each does a
-// read-modify-write of a shared file INSIDE withLock (no fencing helper — the
-// lock alone must serialize). A non-atomic reclaim (rm-then-mkdir) would let
-// both hold at once → a lost update AND two takeover notes (iter-3 finding-1).
+// One provably-dead owner, two real reclaimers. Each does a read-modify-write of
+// a shared file INSIDE withLock (no fencing helper — the lock alone must
+// serialize). A non-atomic reclaim (rm-then-mkdir) would let both hold at once →
+// a lost update AND two takeover notes (iter-3 finding-1). TWO barriers make the
+// race deterministic (iter-4 minor): first both processes start, then both
+// PROVABLY observe the stale dead owner (observe-dead barrier) before either is
+// allowed to reclaim — reproducing the exact double-observe window the old
+// rm-then-mkdir needed. The unit white-box trace test is the deterministic
+// oracle; this is the real-process liveness+exclusion complement.
 const RECLAIMER = `
 import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import * as fs from 'node:fs';
@@ -127,7 +132,13 @@ const io = {
 };
 const orderFile = root + '/.handoff/order.txt';
 writeFileSync(barrierDir + '/ready-' + idx, '');
-while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+while (!existsSync(barrierDir + '/go')) { /* barrier 1: both processes live */ }
+// Observe-dead barrier: prove we have SEEN the stale dead owner, then wait for
+// the peer to have seen it too, so neither reclaims before both observe it.
+const owner = JSON.parse(readFileSync(root + '/.handoff/lock/owner.json', 'utf8'));
+if (String(owner.pid) !== deadPid) { writeFileSync(barrierDir + '/err-' + idx, 'stale owner not present at observe time'); process.exit(3); }
+writeFileSync(barrierDir + '/observed-' + idx, '');
+{ const t0 = Date.now(); while (!(existsSync(barrierDir + '/observed-1') && existsSync(barrierDir + '/observed-2'))) { if (Date.now() - t0 > 15000) { writeFileSync(barrierDir + '/err-' + idx, 'observe barrier timeout'); process.exit(4); } } }
 const deadline = Date.now() + 20000;
 for (;;) {
   if (Date.now() > deadline) { writeFileSync(barrierDir + '/err-' + idx, 'never acquired'); process.exit(1); }
