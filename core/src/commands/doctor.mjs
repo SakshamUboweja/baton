@@ -130,7 +130,10 @@ function hookSurfaceCheck(io, root, p, platform, relPath, checkpointEvent, trust
   let enabled = false;
   try {
     const cfg = JSON.parse(/** @type {string} */ (text));
-    enabled = hookCommands(cfg?.hooks?.[checkpointEvent]).some((c) => /baton\s+checkpoint/.test(c));
+    // Match the bare `baton checkpoint` form AND the absolute
+    // `"<node>" "<…/baton.mjs>" checkpoint` form init now writes (the entry
+    // script may be quote-terminated: `baton.mjs" checkpoint`).
+    enabled = hookCommands(cfg?.hooks?.[checkpointEvent]).some((c) => /\bbaton(?:\.mjs)?["']?\s+checkpoint\b/.test(c));
   } catch {
     enabled = false;
   }

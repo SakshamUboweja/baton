@@ -43,9 +43,14 @@ function deriveHint(raw, session) {
  * @param {any} raw parsed JS value (the caller owns JSON.parse)
  * @param {string} platform 'claude-code' | 'codex' | 'cursor'
  * @param {SessionFacts} [session] identity facts for generated hints; defaults to this process
+ * @param {string} [explicitEvent] the hook event name passed on the command line
+ *   (`--trigger`). Authoritative when present — the hooks manifest already keys
+ *   each command by event, so this needs no per-harness payload parsing. Cursor's
+ *   stop payload carries neither `hook_event_name` nor `event`, so without this
+ *   its checkpoint degraded to trigger 'unknown' and never satisfied the canary.
  * @returns {any[]}
  */
-export function normalizeHookPayload(raw, platform, session) {
+export function normalizeHookPayload(raw, platform, session, explicitEvent) {
   // Passthrough tier: the adapter formed the events; return them untouched.
   if (raw && typeof raw === 'object' && raw.schema === 'baton/event@1') {
     if (Array.isArray(raw.events)) return raw.events;
@@ -59,11 +64,12 @@ export function normalizeHookPayload(raw, platform, session) {
   const note = (trigger) => event('note', { trigger, text: 'hook ' + trigger + ' observed on ' + platform });
 
   const eventName =
-    raw && typeof raw === 'object'
+    (typeof explicitEvent === 'string' && explicitEvent.length > 0 && explicitEvent) ||
+    (raw && typeof raw === 'object'
       ? (typeof raw.hook_event_name === 'string' && raw.hook_event_name) ||
         (platform === 'cursor' && typeof raw.event === 'string' && raw.event) ||
         null
-      : null;
+      : null);
   if (!eventName) return [note('unknown')];
 
   if (platform === 'claude-code') {

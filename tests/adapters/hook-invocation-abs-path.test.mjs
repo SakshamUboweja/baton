@@ -104,6 +104,16 @@ for (const [plat, flag] of [['codex', 'codex'], ['cursor', 'cursor']]) {
       assert.ok(allCommands(merged).some((c) => c.includes(`"${BATON_ENTRY}"`)), 'baton’s own entry is present and absolute');
     });
 
+    it('the checkpoint hook declares its event via --trigger so doctor’s canary can identify it', () => {
+      const canary = plat === 'codex' ? 'Stop' : 'stop';
+      const manifest = JSON.parse(hooksAction(planHarnessInit(ROOT, { [flag]: true }, io()), plat).preview);
+      const checkpointCmds = allCommands({ hooks: { [canary]: manifest.hooks[canary] } });
+      assert.ok(
+        checkpointCmds.some((c) => c.includes(`--trigger ${canary}`)),
+        `the ${canary} checkpoint command passes --trigger ${canary} — got: ${checkpointCmds.join(' | ')}`,
+      );
+    });
+
     it('a second init is a byte-identical no-op (idempotent under the deterministic invocation)', () => {
       const first = hooksAction(planHarnessInit(ROOT, { [flag]: true }, io()), plat);
       const seeded = io({ [`${ROOT}/.${plat}/hooks.json`]: first.preview });

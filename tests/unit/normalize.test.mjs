@@ -307,3 +307,25 @@ describe('normalize — malformed-input fuzz never throws', () => {
     }
   });
 });
+
+describe('normalizeHookPayload — explicit event (--trigger) is authoritative', () => {
+  it('stamps trigger from the explicit event when the cursor payload names no event', () => {
+    // Cursor's real stop payload carries neither hook_event_name nor `event`, so
+    // WITHOUT the explicit trigger it degrades to 'unknown' (never the canary).
+    const cursorStopPayload = { conversation_id: 'c1', workspace_roots: ['/repo'] };
+    const [ev] = normalizeHookPayload(cursorStopPayload, 'cursor', undefined, 'stop');
+    assert.equal(ev.type, 'note');
+    assert.equal(ev.payload.trigger, 'stop', 'the explicit --trigger drives the event identity');
+    assert.equal(ev.source, 'cursor');
+  });
+
+  it('without the explicit event, the same cursor payload degrades to unknown (documents why the fix is needed)', () => {
+    const [ev] = normalizeHookPayload({ conversation_id: 'c1' }, 'cursor');
+    assert.equal(ev.payload.trigger, 'unknown');
+  });
+
+  it('the explicit event overrides a payload-embedded event name (determinism)', () => {
+    const [ev] = normalizeHookPayload({ hook_event_name: 'Stop' }, 'codex', undefined, 'PreCompact');
+    assert.equal(ev.payload.trigger, 'PreCompact');
+  });
+});

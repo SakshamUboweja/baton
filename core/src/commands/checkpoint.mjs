@@ -135,7 +135,11 @@ async function run(flags, platform, io) {
   }
 
   const session = { host: io.host, pid: io.pid, startTime: io.startTime };
-  const events = normalizeHookPayload(raw, platform, session);
+  // The hook command declares which event it is (--trigger), so event identity
+  // never depends on parsing each harness's payload shape (Cursor's stop payload
+  // names the event nowhere normalize could find it).
+  const explicitEvent = typeof flags.trigger === 'string' ? flags.trigger : undefined;
+  const events = normalizeHookPayload(raw, platform, session, explicitEvent);
   if (events.length === 0) return finish({ ok: true, data: { events: 0, rewritten: false } }, 0);
 
   // Opt-in transcript tail (gate-2 fix 10): rides the journal as its own

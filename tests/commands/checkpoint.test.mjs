@@ -315,3 +315,33 @@ describe('checkpoint — foreign session isolation', () => {
     assert.ok(!snap.decisions.some((d) => d.summary === 'OLD-DECISION'), 'the fresh bundle does NOT inherit the archived session\'s decisions');
   });
 });
+
+describe('checkpoint — --trigger stamps the event identity (GUI-app canary fix)', () => {
+  it('a raw cursor stop payload (no event field) + --trigger stop journals trigger=stop', async () => {
+    // Cursor's stop payload names the event nowhere normalize can find it, so
+    // without --trigger the note degraded to trigger "unknown" and doctor never
+    // saw the canary. The hook command now declares the event explicitly.
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle({ origin: { platform: 'cursor', model: 'composer', sessionHint: null, unstable: false } })) },
+      stdin: JSON.stringify({ conversation_id: 'c1', workspace_roots: ['/repo'] }),
+    });
+
+    const code = await cmdCheckpoint(['--platform', 'cursor', '--trigger', 'stop'], io);
+    assert.equal(code, 0);
+
+    const note = journalEntries(io).find((e) => e.type === 'note');
+    assert.ok(note, 'a note was journaled for the cursor stop hook');
+    assert.equal(note.payload.trigger, 'stop', 'the note carries the explicit trigger, so doctor sees the stop canary');
+    assert.equal(note.source, 'cursor');
+  });
+
+  it('without --trigger the same payload still degrades to unknown (guards the regression the flag fixes)', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle({ origin: { platform: 'cursor', model: 'composer', sessionHint: null, unstable: false } })) },
+      stdin: JSON.stringify({ conversation_id: 'c1' }),
+    });
+    await cmdCheckpoint(['--platform', 'cursor'], io);
+    const note = journalEntries(io).find((e) => e.type === 'note');
+    assert.equal(note.payload.trigger, 'unknown');
+  });
+});

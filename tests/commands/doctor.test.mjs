@@ -255,6 +255,17 @@ describe('doctor — envelope + check aggregation', () => {
     assert.equal(s2.observed, true, 'a codex Stop-triggered entry is the observed canary');
   });
 
+  it('enabled recognizes the ABSOLUTE-path checkpoint command init now writes (not only bare `baton`)', async () => {
+    // Regression: init embeds `"<node>" "<…/baton.mjs>" checkpoint …` so
+    // GUI-launched harnesses can resolve baton without PATH. The enablement
+    // scan must still recognize that form — a `baton.mjs" checkpoint` command.
+    const ABS = '"/opt/nvm/v24/bin/node" "/home/u/baton/core/bin/baton.mjs" checkpoint --platform codex --trigger Stop';
+    const CODEX_ABS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: ABS }] }] } });
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_ABS } });
+    await cmdDoctor(['--json'], io);
+    assert.equal(findCheck(envelope(io), /codex-hooks/).states.enabled, true, 'the absolute-path checkpoint command reads as enabled');
+  });
+
   it('(iter-5 A3) observed requires the Stop trigger — SessionStart/PreCompact/triggerless entries do NOT count', async () => {
     const CODEX_HOOKS = '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"baton checkpoint --platform codex"}]}]}}';
     const cases = [

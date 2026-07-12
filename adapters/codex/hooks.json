@@ -5,8 +5,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "baton checkpoint --platform codex",
-            "commandWindows": "cmd /c baton checkpoint --platform codex"
+            "command": "baton checkpoint --platform codex --trigger Stop",
+            "commandWindows": "cmd /c baton checkpoint --platform codex --trigger Stop"
           }
         ]
       }
@@ -16,8 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "baton checkpoint --platform codex",
-            "commandWindows": "cmd /c baton checkpoint --platform codex"
+            "command": "baton checkpoint --platform codex --trigger PreCompact",
+            "commandWindows": "cmd /c baton checkpoint --platform codex --trigger PreCompact"
           }
         ]
       }

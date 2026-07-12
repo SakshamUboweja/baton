@@ -3,17 +3,17 @@
   "hooks": {
     "stop": [
       {
-        "command": "baton checkpoint --platform cursor"
+        "command": "baton checkpoint --platform cursor --trigger stop"
       }
     ],
     "afterFileEdit": [
       {
-        "command": "baton checkpoint --platform cursor --debounce 120"
+        "command": "baton checkpoint --platform cursor --debounce 120 --trigger afterFileEdit"
       }
     ],
     "beforeShellExecution": [
       {
-        "command": "baton checkpoint --platform cursor",
+        "command": "baton checkpoint --platform cursor --trigger beforeShellExecution",
         "matcher": "git commit"
       }
     ],
@@ -24,7 +24,7 @@
     ],
     "preCompact": [
       {
-        "command": "baton checkpoint --platform cursor"
+        "command": "baton checkpoint --platform cursor --trigger preCompact"
       }
     ]
   }
