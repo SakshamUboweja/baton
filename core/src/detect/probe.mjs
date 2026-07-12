@@ -36,14 +36,40 @@ const META = new Set(['(', ')', '[', ']', '{', '}', '|', '^', '$', '.', '*', '+'
  * @returns {string[]}
  */
 function patternLiterals(pattern) {
-  const decoded = pattern
-    .replace(/\\u\{([0-9a-fA-F]{1,6})\}/g, (_, h) => cp(parseInt(h, 16)))
-    .replace(/\\u([0-9a-fA-F]{4})/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
-    .replace(/\\x([0-9a-fA-F]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
   /** @type {Set<string>} */
   const out = new Set();
-  for (const ch of decoded) {
-    if (!META.has(ch)) out.add(ch);
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') {
+      const n = pattern[i + 1];
+      if (n === 'x') {
+        out.add(String.fromCharCode(parseInt(pattern.slice(i + 2, i + 4), 16)));
+        i += 3;
+        continue;
+      }
+      if (n === 'u') {
+        if (pattern[i + 2] === '{') {
+          const e = pattern.indexOf('}', i);
+          out.add(cp(parseInt(pattern.slice(i + 3, e), 16)));
+          i = e;
+          continue;
+        }
+        out.add(String.fromCharCode(parseInt(pattern.slice(i + 2, i + 6), 16)));
+        i += 5;
+        continue;
+      }
+      // Control escapes decode to their real char; escaped metacharacters (`\(`,
+      // `\.`, `\*`…) decode to the literal char (iter-4 I4 defense-in-depth: the
+      // old code dropped these, so a chained star over an escaped metachar or a
+      // `\n` literal never got a matching probe run). Class shorthands are
+      // already represented by COVER.
+      const named = { n: '\n', t: '\t', r: '\r', f: '\f', v: '\v', 0: '\0' };
+      if (Object.prototype.hasOwnProperty.call(named, n)) out.add(named[/** @type {'n'} */ (n)]);
+      else if (n !== undefined && !'dwsDWSbB'.includes(n)) out.add(n);
+      i += 1;
+      continue;
+    }
+    if (!META.has(c)) out.add(c);
   }
   return [...out];
 }

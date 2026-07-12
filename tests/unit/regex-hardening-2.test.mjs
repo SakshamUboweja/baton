@@ -59,6 +59,11 @@ describe('probe catches group-free pathological patterns over non-alnum classes 
     // iter-3 F7: non-ASCII literal and class — the ASCII-only cover missed these.
     ['non-ASCII literal chained star', 'é*é*é*é*é*é*é*é*é*é*é*é*!'],
     ['non-ASCII escaped class-range chained star', '[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*[\\u00e0-\\u00ff]*!'],
+    // iter-4 I4: escaped-metacharacter and control-char literals — the escape
+    // decoder dropped these, so the fills never triggered the backtrack.
+    ['escaped-metacharacter chained star', '\\(*\\(*\\(*\\(*\\(*\\(*\\(*\\(*\\(*\\(*\\(*\\(*!'],
+    ['newline-literal chained star', '\\n*\\n*\\n*\\n*\\n*\\n*\\n*\\n*\\n*\\n*\\n*\\n*!'],
+    ['dot chained star', '.*.*.*.*.*.*.*.*.*.*.*.*\\n'],
   ];
   for (const [label, pattern] of HANGS) {
     it(`probeRegexSafe rejects: ${label}`, () => {
@@ -78,4 +83,39 @@ describe('probe catches group-free pathological patterns over non-alnum classes 
     assert.equal(probeRegexSafe('\\d+ requests remaining', '').safe, true);
     assert.equal(probeRegexSafe('quota exceeded|usage limit', 'i').safe, true);
   });
+});
+
+describe('structural rejection of chained overlapping quantified ATOMS (iter-4 I4)', () => {
+  // The structural scanner rejects these at LOAD — no probe timeout needed —
+  // because a finite probe alphabet cannot guarantee a non-matching tail for
+  // every atom (a `.` accepts almost everything).
+  const REJECTED = [
+    ['dot chain', '.*.*.*x'],
+    ['digit chain', '\\d*\\d*\\d*x'],
+    ['escaped-paren chain', '\\(*\\(*x'],
+    ['newline-literal chain', '\\n*\\n*x'],
+    ['class chain', '[a-z]*[a-z]*X'],
+    ['plus chain', '\\w+\\w+x'],
+    ['open-brace chain', 'a{2,}a{2,}x'],
+  ];
+  for (const [label, pattern] of REJECTED) {
+    it(`loadSignatures rejects a chained overlapping quantifier: ${label}`, () => {
+      assert.throws(() => loadWith({ matcher: { kind: 'regex', pattern } }), /ov/);
+    });
+  }
+
+  const ACCEPTED = [
+    ['single quantified atom', "You've hit your \\S+ limit"],
+    ['disjoint chained stars', '\\d*\\s*!'],
+    ['disjoint literals', 'a+b+c+'],
+    ['alternation, no quantifier chain', 'usage limit exceeded|quota exceeded'],
+    ['quantified group over a distinct atom', '(abc)+\\d+'],
+    ['bounded repeats', '\\d{2,4}\\d{1,3}'],
+  ];
+  for (const [label, pattern] of ACCEPTED) {
+    it(`loadSignatures ACCEPTS a benign pattern (no false positive): ${label}`, () => {
+      const t = loadWith({ matcher: { kind: 'regex', pattern, flags: 'i' } });
+      assert.ok(t.signatures.some((s) => s.id === 'ov'), `${label} must load`);
+    });
+  }
 });

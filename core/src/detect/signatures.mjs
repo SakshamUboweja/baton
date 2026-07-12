@@ -78,6 +78,208 @@ function scanQuantifiedGroups(pattern) {
   return null;
 }
 
+/**
+ * Approximate character-set overlap between two simple-atom alphabets.
+ * Descriptors: {all:true} (dot / broad negated shorthand) | {sh:'d'|'w'|'s'} |
+ * {lit:Set<string>}. Returns true unless the two sets are PROVABLY disjoint —
+ * conservative for untrusted overlays (iter-4 I4).
+ * @param {any} a @param {any} b
+ */
+function alphasOverlap(a, b) {
+  if (!a || !b) return false;
+  if (a.all || b.all) return true;
+  if (a.sh && b.sh) {
+    if (a.sh === b.sh) return true;
+    // \s is disjoint from \d and \w; \d ⊂ \w so they overlap.
+    return !(a.sh === 's' || b.sh === 's');
+  }
+  if (a.lit && b.lit) {
+    for (const c of a.lit) if (b.lit.has(c)) return true;
+    return false;
+  }
+  const sh = a.sh ? a.sh : b.sh;
+  const lit = a.lit ? a.lit : b.lit;
+  for (const c of lit) {
+    if (sh === 'd' && c >= '0' && c <= '9') return true;
+    if (sh === 'w' && /[A-Za-z0-9_]/.test(c)) return true;
+    if (sh === 's' && /\s/.test(c)) return true;
+  }
+  return false;
+}
+
+/**
+ * Structural scan for a run of ≥2 CONSECUTIVE atoms, each with an UNBOUNDED
+ * quantifier (`*`, `+`, `{n,}`), whose alphabets overlap — `.*.*…`, `\d*\d*…`,
+ * `\(*\(*…`, `\n*\n*…`, `[a-z]*[a-z]*…`. Such a chain partitions the same input
+ * combinatorially and backtracks super-linearly, yet is invisible to the
+ * quantified-GROUP scan; and because a finite probe alphabet cannot guarantee a
+ * non-matching tail for every atom (`.` accepts almost everything), rejecting
+ * the STRUCTURE at load is the reliable guard (iter-4 I4, reviewer-a #7 /
+ * reviewer-b #3). Groups reset the run (the group scan covers quantified groups;
+ * a group's overlap with a simple atom is not decided here). Returns a problem
+ * string or null.
+ * @param {string} pattern
+ * @returns {string | null}
+ */
+function scanChainedQuantifiedAtoms(pattern) {
+  const p = pattern;
+  /** @type {any} */
+  let prev = null; // alpha of the previous atom IF it carried an unbounded quantifier, else null
+
+  for (let i = 0; i < p.length; ) {
+    const c = p[i];
+    // Chain-breakers: alternation and anchors end any run.
+    if (c === '|' || c === '^' || c === '$') {
+      prev = null;
+      i += 1;
+      continue;
+    }
+    /** @type {any} */
+    let alpha = null;
+    let isGroup = false;
+    if (c === '\\') {
+      const n = p[i + 1];
+      // decode length of the escape token
+      let len = 2;
+      if (n === 'x') len = 4;
+      else if (n === 'u') len = p[i + 2] === '{' ? (p.indexOf('}', i) - i + 1) : 6;
+      if (n === 'd' || n === 'w' || n === 's') alpha = { sh: n };
+      else if (n === 'D' || n === 'W' || n === 'S' || n === 'b' || n === 'B') alpha = { all: true }; // broad/negated or anchor-ish → conservative
+      else alpha = { lit: new Set([decodeEscape(p.slice(i, i + len))]) }; // \(, \n, \t, \xNN, \uNNNN → the literal char
+      i += Math.max(2, len);
+    } else if (c === '[') {
+      const end = classEnd(p, i);
+      const body = p.slice(i + 1, end);
+      alpha = body.startsWith('^') ? { all: true } : classAlpha(body);
+      i = end + 1;
+    } else if (c === '(') {
+      // Skip the whole group (balance-aware); recurse into its body for chains.
+      const end = groupEnd(p, i);
+      const inner = scanChainedQuantifiedAtoms(p.slice(i + 1, end));
+      if (inner) return inner;
+      isGroup = true;
+      i = end + 1;
+    } else if (c === '.') {
+      alpha = { all: true };
+      i += 1;
+    } else {
+      alpha = { lit: new Set([c]) };
+      i += 1;
+    }
+
+    // Read an optional quantifier and classify it as unbounded or not.
+    let unbounded = false;
+    const q = p[i];
+    if (q === '*' || q === '+') {
+      unbounded = true;
+      i += 1;
+    } else if (q === '{') {
+      const close = p.indexOf('}', i);
+      if (close !== -1) {
+        const spec = p.slice(i + 1, close);
+        // {n,} (no upper bound) is unbounded; {n} and {n,m} are bounded.
+        unbounded = /^\d+,\s*$/.test(spec);
+        i = close + 1;
+      }
+    } else if (q === '?') {
+      i += 1;
+    }
+    // consume a lazy/possessive modifier if present
+    if (p[i] === '?' || p[i] === '+') i += 1;
+
+    if (isGroup) {
+      // A group breaks the simple-atom run.
+      prev = null;
+      continue;
+    }
+    // prev + current = a run of ≥2 CONSECUTIVE overlapping unbounded-quantified
+    // atoms → super-linear backtracking. Reject.
+    if (unbounded && prev && alphasOverlap(prev, alpha)) {
+      return 'chained overlapping unbounded quantifiers (e.g. `.*.*`, `\\d*\\d*`, `\\(*\\(*`) backtrack super-linearly';
+    }
+    prev = unbounded ? alpha : null;
+  }
+  return null;
+}
+
+/** Decode a single-char escape token (`\(`, `\n`, `\t`, `\xNN`, `\uNNNN`, `\u{...}`) to its literal char. @param {string} tok */
+function decodeEscape(tok) {
+  const rest = tok.slice(1);
+  if (rest[0] === 'x') return String.fromCharCode(parseInt(rest.slice(1, 3), 16));
+  if (rest[0] === 'u') {
+    const h = rest[1] === '{' ? rest.slice(2, rest.indexOf('}')) : rest.slice(1, 5);
+    try {
+      return String.fromCodePoint(parseInt(h, 16));
+    } catch {
+      return rest[0];
+    }
+  }
+  const named = { n: '\n', t: '\t', r: '\r', f: '\f', v: '\v', 0: '\0' };
+  return named[/** @type {'n'} */ (rest[0])] ?? rest[0];
+}
+
+/** Index of the `]` closing a class opened at `open` (a `]` immediately after `[`/`[^` is a literal). @param {string} p @param {number} open */
+function classEnd(p, open) {
+  let i = open + 1;
+  if (p[i] === '^') i += 1;
+  if (p[i] === ']') i += 1; // leading ] is literal
+  for (; i < p.length; i++) {
+    if (p[i] === '\\') {
+      i += 1;
+      continue;
+    }
+    if (p[i] === ']') return i;
+  }
+  return p.length - 1;
+}
+
+/** Index of the `)` closing a group opened at `open` (balance-aware, class/escape-safe). @param {string} p @param {number} open */
+function groupEnd(p, open) {
+  let depth = 0;
+  let inClass = false;
+  for (let i = open; i < p.length; i++) {
+    const c = p[i];
+    if (c === '\\') {
+      i += 1;
+      continue;
+    }
+    if (inClass) {
+      if (c === ']') inClass = false;
+      continue;
+    }
+    if (c === '[') inClass = true;
+    else if (c === '(') depth += 1;
+    else if (c === ')') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return p.length - 1;
+}
+
+/** Approximate alphabet of a (non-negated) class body: literals + range endpoints + shorthands. @param {string} body */
+function classAlpha(body) {
+  if (/\\[dwsDWS]/.test(body) || /\\[DWS]/.test(body)) return { all: true }; // shorthand inside a class → treat broadly
+  /** @type {Set<string>} */
+  const lit = new Set();
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\\') {
+      lit.add(decodeEscape(body.slice(i, i + 2)));
+      i += 1;
+      continue;
+    }
+    // range a-z: add endpoints (a run of an endpoint char backtracks the same)
+    if (body[i + 1] === '-' && body[i + 2] !== undefined) {
+      lit.add(body[i]);
+      lit.add(body[i + 2]);
+      i += 2;
+      continue;
+    }
+    lit.add(body[i]);
+  }
+  return { lit };
+}
+
 const ALLOWED_FLAGS = 'dgimsuvy';
 
 /**
@@ -111,7 +313,7 @@ function lintRegex(id, pattern, flags = '') {
     throw new Error(`signature ${id}: regex backreferences are not allowed`);
   }
   lintFlags(id, flags);
-  const problem = scanQuantifiedGroups(pattern);
+  const problem = scanQuantifiedGroups(pattern) || scanChainedQuantifiedAtoms(pattern);
   if (problem) {
     throw new Error(`signature ${id}: ${problem} (pathological backtracking / non-linear-time risk)`);
   }
