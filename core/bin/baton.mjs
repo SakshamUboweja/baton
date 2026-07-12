@@ -28,6 +28,10 @@ const code = await run(process.argv.slice(2), {
   fs: fs.default ?? fs,
   execFile: promisify(execFile),
   now: () => new Date().toISOString(),
+  // Absolute path to THIS node binary. Harness hook files embed it so a
+  // GUI-launched harness (Cursor/Codex desktop app) — whose minimal PATH omits
+  // nvm/volta shims — can still resolve node to run baton.
+  execPath: process.execPath,
   host: (await import('node:os')).hostname(),
   pid: process.pid,
   // Epoch ms of THIS process's start — comparable against `ps` output when a

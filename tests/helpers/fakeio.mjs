@@ -31,6 +31,7 @@ export function makeIo({
   startTime = 111000,
   processAlive = null,
   fencingSeed = 1,
+  execPath = process.execPath,
 } = {}) {
   const { fs, files: filesSnapshot } = makeMemfs(files);
   const outChunks = [];
@@ -76,6 +77,7 @@ export function makeIo({
     execFile,
     now: () => currentNow,
     setNow: (iso) => { currentNow = iso; },
+    execPath,
     host,
     pid,
     startTime,
