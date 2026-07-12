@@ -1,6 +1,6 @@
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, usageError } from './shared.mjs';
 
 /**
  * `baton remap` — resolve the committed role matrix for a destination platform.
@@ -11,10 +11,7 @@ import { emitEnvelope, parseFlags } from './shared.mjs';
 export function cmdRemap(args, io) {
   const { flags } = parseFlags(args);
   const to = typeof flags.to === 'string' ? flags.to : null;
-  if (!to) {
-    io.stderr.write('baton remap: --to <claude-code|codex|cursor> is required\n');
-    return 2;
-  }
+  if (!to) return usageError(io, flags, 'remap', '--to <claude-code|codex|cursor> is required');
 
   const { config, errors } = loadConfig(io.cwd, io);
   if (!config) {

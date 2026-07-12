@@ -10,6 +10,7 @@ import { cmdInit } from './commands/init.mjs';
 import { cmdDoctor } from './commands/doctor.mjs';
 import { cmdPurgeTranscript } from './commands/purge-transcript.mjs';
 import { cmdSessionStart } from './commands/session-start.mjs';
+import { cmdRecover } from './commands/recover.mjs';
 
 // The ten user-facing commands are the frozen v1 contract; session-start is an
 // adapter-facing addition prescribed by gate-2 finding 8 (the cheap
@@ -102,12 +103,16 @@ export function run(argv, io) {
   const cmd = args[0];
   const rest = args.slice(1);
 
+  // Usage errors honor the --json envelope contract too (gate-2 fix 11).
+  const wantsJson = rest.includes('--json');
   if (cmd === 'wrap') {
-    io.stderr.write(`baton wrap is reserved for a future release (PTY supervisor); not available in v1.\n${USAGE}`);
+    if (wantsJson) emitEnvelope(io, { ok: false, error: { code: 'usage', msg: 'baton wrap is reserved for a future release (PTY supervisor); not available in v1' } });
+    else io.stderr.write(`baton wrap is reserved for a future release (PTY supervisor); not available in v1.\n${USAGE}`);
     return 2;
   }
   if (!COMMANDS.includes(cmd)) {
-    io.stderr.write(`baton: unknown command '${cmd}'\n${USAGE}`);
+    if (wantsJson) emitEnvelope(io, { ok: false, error: { code: 'usage', msg: `unknown command '${cmd}'` } });
+    else io.stderr.write(`baton: unknown command '${cmd}'\n${USAGE}`);
     return 2;
   }
 
@@ -126,6 +131,7 @@ export function run(argv, io) {
   if (cmd === 'doctor') return cmdDoctor(rest, io);
   if (cmd === 'purge-transcript') return cmdPurgeTranscript(rest, io);
   if (cmd === 'session-start') return cmdSessionStart(rest, io);
+  if (cmd === 'recover') return cmdRecover(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {

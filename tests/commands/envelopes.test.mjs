@@ -1,0 +1,84 @@
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import { makeIo } from '../helpers/fakeio.mjs';
+import { run } from '../../core/src/cli.mjs';
+import { cmdCheckpoint } from '../../core/src/commands/checkpoint.mjs';
+import { cmdDetect } from '../../core/src/commands/detect.mjs';
+import { cmdFinalize } from '../../core/src/commands/finalize.mjs';
+import { cmdReceive } from '../../core/src/commands/receive.mjs';
+import { cmdRemap } from '../../core/src/commands/remap.mjs';
+
+// ---------------------------------------------------------------------------
+// Gate-2 fix 11 (reviewer-b finding 9): the --json contract is "exactly one
+// compact envelope {ok,data,warnings,error} on stdout" for EVERY exit path —
+// checkpoint emitted none and usage errors bypassed the envelope everywhere.
+// ---------------------------------------------------------------------------
+
+/** stdout must be exactly one parseable envelope line. */
+function theEnvelope(io) {
+  const out = io.stdoutText().trim();
+  const lines = out === '' ? [] : out.split('\n');
+  assert.equal(lines.length, 1, `expected exactly one stdout line, got: ${JSON.stringify(io.stdoutText())}`);
+  const env = JSON.parse(lines[0]);
+  for (const k of ['ok', 'data', 'warnings', 'error']) assert.ok(k in env, `envelope carries ${k}`);
+  return env;
+}
+
+const EVENT = JSON.stringify({ schema: 'baton/event@1', type: 'decision', payload: { summary: 's' } });
+
+describe('checkpoint --json emits the envelope on every path', () => {
+  it('success: ok:true with applied-event data', async () => {
+    const io = makeIo({ stdin: EVENT });
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--json'], io), 0);
+    const env = theEnvelope(io);
+    assert.equal(env.ok, true);
+    assert.equal(typeof env.data.events, 'number');
+  });
+
+  it('usage error (no --platform): envelope with a usage error, exit 2', async () => {
+    const io = makeIo({ stdin: EVENT });
+    assert.equal(await cmdCheckpoint(['--json'], io), 2);
+    const env = theEnvelope(io);
+    assert.equal(env.ok, false);
+    assert.equal(env.error.code, 'usage');
+  });
+
+  it('garbage stdin: envelope ok:false, exit stays 0 (hook-safety)', async () => {
+    const io = makeIo({ stdin: 'not json{{' });
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--json'], io), 0);
+    const env = theEnvelope(io);
+    assert.equal(env.ok, false);
+  });
+});
+
+describe('usage errors emit envelopes across commands', () => {
+  it('detect without --platform', () => {
+    const io = makeIo({});
+    assert.equal(cmdDetect(['--json'], io), 2);
+    assert.equal(theEnvelope(io).error.code, 'usage');
+  });
+
+  it('finalize without --reason', async () => {
+    const io = makeIo({});
+    assert.equal(await cmdFinalize(['--json'], io), 2);
+    assert.equal(theEnvelope(io).error.code, 'usage');
+  });
+
+  it('receive without --platform', async () => {
+    const io = makeIo({});
+    assert.equal(await cmdReceive(['--json'], io), 2);
+    assert.equal(theEnvelope(io).error.code, 'usage');
+  });
+
+  it('remap without --to', () => {
+    const io = makeIo({});
+    assert.equal(cmdRemap(['--json'], io), 2);
+    assert.equal(theEnvelope(io).error.code, 'usage');
+  });
+
+  it('cli: unknown command with --json', async () => {
+    const io = makeIo({});
+    assert.equal(await run(['no-such-cmd', '--json'], io), 2);
+    assert.equal(theEnvelope(io).error.code, 'usage');
+  });
+});

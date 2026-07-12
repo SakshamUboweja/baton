@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, usageError } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -19,10 +19,7 @@ const EXIT_BY_CLASS = { ok: 0, 'usage-limit': 10, throttle: 11, auth: 12, 'other
 export function cmdDetect(args, io) {
   const { flags } = parseFlags(args);
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
-  if (!platform) {
-    io.stderr.write('baton detect: --platform <claude-code|codex|cursor> is required\n');
-    return 2;
-  }
+  if (!platform) return usageError(io, flags, 'detect', '--platform <claude-code|codex|cursor> is required');
 
   let table;
   try {

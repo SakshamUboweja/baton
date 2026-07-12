@@ -5,7 +5,7 @@ import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { safeReadJson } from '../util/fsx.mjs';
 import { redactSecrets } from '../util/redact.mjs';
-import { parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 // Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
 // HANDOFF.md) re-render only on an important event type, >30 s since the last
@@ -63,15 +63,13 @@ export async function cmdCheckpoint(args, io) {
   const { flags } = parseFlags(args);
   const strict = flags.strict === true;
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
-  if (!platform) {
-    io.stderr.write('baton checkpoint: --platform <claude-code|codex|cursor> is required\n');
-    return 2;
-  }
+  if (!platform) return usageError(io, flags, 'checkpoint', '--platform <claude-code|codex|cursor> is required');
 
   try {
     return await run(flags, platform, io);
   } catch (err) {
     const msg = /** @type {any} */ (err)?.message ?? String(err);
+    if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'checkpoint-failed', msg } });
     io.stderr.write(`baton checkpoint: ${msg}\n`);
     return strict ? 1 : 0;
   }
@@ -87,6 +85,12 @@ async function run(flags, platform, io) {
   const strict = flags.strict === true;
   const root = resolveRoot(io, flags);
   const paths = bundlePaths(root);
+  // The --json contract (gate-2 fix 11): exactly one envelope on stdout for
+  // every exit path — the exit code stays governed by hook-safety.
+  const finish = (/** @type {any} */ env, /** @type {number} */ code) => {
+    if (flags.json) emitEnvelope(io, env);
+    return code;
+  };
 
   /** @type {any} */
   let raw;
@@ -94,12 +98,12 @@ async function run(flags, platform, io) {
     raw = JSON.parse(typeof io.stdin === 'string' ? io.stdin : '');
   } catch {
     io.stderr.write('baton checkpoint: stdin could not be parsed as JSON — input ignored\n');
-    return strict ? 1 : 0;
+    return finish({ ok: false, error: { code: 'bad-stdin', msg: 'stdin could not be parsed as JSON' } }, strict ? 1 : 0);
   }
 
   const session = { host: io.host, pid: io.pid, startTime: io.startTime };
   const events = normalizeHookPayload(raw, platform, session);
-  if (events.length === 0) return 0;
+  if (events.length === 0) return finish({ ok: true, data: { events: 0, rewritten: false } }, 0);
 
   // Opt-in transcript tail (gate-2 fix 10): rides the journal as its own
   // IMPORTANT event so the snapshot rewrite below persists it, and purge can
@@ -123,7 +127,7 @@ async function run(flags, platform, io) {
   // hook-safety keeps the refusal soft outside --strict.
   if (unsafe === true) {
     io.stderr.write('baton checkpoint: managed tree failed the symlink/realpath jail — nothing written\n');
-    return strict ? 1 : 0;
+    return finish({ ok: false, error: { code: 'unsafe-tree', msg: warnings[0] ?? 'managed tree failed the jail check' } }, strict ? 1 : 0);
   }
 
   let active = bundle;
@@ -145,7 +149,7 @@ async function run(flags, platform, io) {
       io.stderr.write(
         `baton checkpoint: event from a foreign session/origin (${platform}/${stableIncoming.sessionHint} vs active ${active.origin.platform}/${originHint}) — rejected to keep sessions isolated; rerun with --take-over to archive the active bundle and start fresh\n`,
       );
-      return 0;
+      return finish({ ok: false, error: { code: 'foreign-session', msg: 'event from a foreign session/origin rejected; rerun with --take-over' } }, 0);
     }
     if (foreign) {
       rotateJournal(root, 'takeover', io);
@@ -209,6 +213,7 @@ async function run(flags, platform, io) {
   const elapsed = Date.parse(io.now()) - snapUpdated > THROTTLE_WINDOW_MS;
   const accreted = lastSeq - snapSeq;
 
+  let rewritten = false;
   if (mustRewrite || important || elapsed || accreted >= THROTTLE_EVENT_COUNT) {
     const merged = loadBundle(root, io).bundle;
     if (merged) {
@@ -220,7 +225,8 @@ async function run(flags, platform, io) {
         if (git !== null) merged.git = git;
       }
       writeSnapshot(root, merged, io);
+      rewritten = true;
     }
   }
-  return 0;
+  return finish({ ok: true, data: { events: events.length, rewritten } }, 0);
 }

@@ -4,7 +4,7 @@ import { bundlePaths, loadBundle, writeSnapshot, rotateJournal } from '../bundle
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -35,10 +35,7 @@ function inferReasonClass(reason, platform, io) {
 export async function cmdFinalize(args, io) {
   const { flags } = parseFlags(args);
   const reason = typeof flags.reason === 'string' ? flags.reason : null;
-  if (!reason) {
-    io.stderr.write('baton finalize: --reason "<why you are switching>" is required\n');
-    return 2;
-  }
+  if (!reason) return usageError(io, flags, 'finalize', '--reason "<why you are switching>" is required');
 
   const root = resolveRoot(io, flags);
   const paths = bundlePaths(root);

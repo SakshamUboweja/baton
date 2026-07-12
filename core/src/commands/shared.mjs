@@ -9,6 +9,20 @@ export function emitEnvelope(io, env) {
 }
 
 /**
+ * Centralized usage-error emission (gate-2 fix 11): with --json the envelope
+ * contract holds even for bad invocations; otherwise a one-line stderr
+ * message. Always returns the usage exit code 2.
+ * @param {any} io @param {Record<string, string | boolean>} flags
+ * @param {string} cmd @param {string} msg
+ * @returns {number}
+ */
+export function usageError(io, flags, cmd, msg) {
+  if (flags.json === true) emitEnvelope(io, { ok: false, error: { code: 'usage', msg } });
+  else io.stderr.write(`baton ${cmd}: ${msg}\n`);
+  return 2;
+}
+
+/**
  * Repo-root discovery (plan §Root discovery): `--root` wins; else the nearest
  * ancestor of io.cwd carrying `.handoff/` or `baton.config.json`; else the
  * nearest ancestor carrying `.git` (the repo toplevel — and a boundary the

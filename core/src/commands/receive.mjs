@@ -1,6 +1,6 @@
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { prepare, commit } from '../receive/txn.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 /**
  * `baton receive` — the two-phase resume flow. `--print-prompt` and
@@ -14,10 +14,7 @@ import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 export async function cmdReceive(args, io) {
   const { flags } = parseFlags(args);
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
-  if (!platform) {
-    io.stderr.write('baton receive: --platform <claude-code|codex|cursor> is required\n');
-    return 2;
-  }
+  if (!platform) return usageError(io, flags, 'receive', '--platform <claude-code|codex|cursor> is required');
 
   const root = resolveRoot(io, flags);
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
