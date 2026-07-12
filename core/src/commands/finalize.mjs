@@ -4,7 +4,7 @@ import { bundlePaths, loadBundle, writeSnapshot, rotateJournal } from '../bundle
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -40,7 +40,7 @@ export async function cmdFinalize(args, io) {
     return 2;
   }
 
-  const root = io.cwd;
+  const root = resolveRoot(io, flags);
   const paths = bundlePaths(root);
   const { bundle, warnings } = loadBundle(root, io);
   for (const w of warnings) io.stderr.write(`baton finalize: ${w}\n`);

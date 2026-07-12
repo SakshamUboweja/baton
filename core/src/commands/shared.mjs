@@ -9,6 +9,31 @@ export function emitEnvelope(io, env) {
 }
 
 /**
+ * Repo-root discovery (plan §Root discovery): `--root` wins; else the nearest
+ * ancestor of io.cwd carrying `.handoff/` or `baton.config.json`; else the
+ * nearest ancestor carrying `.git` (the repo toplevel — and a boundary the
+ * walk never crosses, so a nested repo resolves to itself); else io.cwd.
+ * @param {any} io @param {Record<string, string | boolean>} flags
+ * @returns {string}
+ */
+export function resolveRoot(io, flags) {
+  if (typeof flags.root === 'string' && flags.root.length > 0) return flags.root;
+  let dir = String(io.cwd);
+  while (true) {
+    try {
+      if (io.fs.existsSync(`${dir}/.handoff`) || io.fs.existsSync(`${dir}/baton.config.json`)) return dir;
+      if (io.fs.existsSync(`${dir}/.git`)) return dir; // repo toplevel; never walk past a .git boundary
+    } catch {
+      break;
+    }
+    const parent = dir.slice(0, dir.lastIndexOf('/')) || '/';
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return String(io.cwd);
+}
+
+/**
  * Minimal flag parser: `--key value` pairs (value = next token not starting
  * with --), bare `--key` booleans, positionals collected in order.
  * @param {string[]} args

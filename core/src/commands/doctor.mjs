@@ -5,7 +5,7 @@ import { bundlePaths } from '../bundle/store.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
 import { ensureDir, atomicWriteJson, safeReadJson } from '../util/fsx.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -65,11 +65,11 @@ async function runProbe(probe, io, table) {
   }
 }
 
-/** @param {any} io @returns {Promise<{id: string, ok: boolean, detail?: string}>} */
-async function gitGuardCheck(io) {
+/** @param {any} io @param {string} root @returns {Promise<{id: string, ok: boolean, detail?: string}>} */
+async function gitGuardCheck(io, root) {
   let log;
   try {
-    log = await io.execFile('git', ['log', '-n', String(GUARD_COMMIT_BOUND), '--format=%h %s%n%n%b'], { cwd: io.cwd, timeout: 5000 });
+    log = await io.execFile('git', ['log', '-n', String(GUARD_COMMIT_BOUND), '--format=%h %s%n%n%b'], { cwd: root, timeout: 5000 });
   } catch {
     return { id: 'git-guard', ok: true, detail: 'git unavailable — commit scan skipped' };
   }
@@ -98,12 +98,13 @@ async function gitGuardCheck(io) {
  */
 export async function cmdDoctor(args, io) {
   const { flags } = parseFlags(args);
-  const p = bundlePaths(io.cwd);
+  const root = resolveRoot(io, flags);
+  const p = bundlePaths(root);
   /** @type {{id: string, ok: boolean, detail?: string}[]} */
   const checks = [];
 
   // Attribution settings: repo-level first, then the user's global file.
-  const settingsText = readOrNull(io, `${io.cwd}/.claude/settings.json`) ?? readOrNull(io, `${io.env?.HOME ?? ''}/.claude/settings.json`);
+  const settingsText = readOrNull(io, `${root}/.claude/settings.json`) ?? readOrNull(io, `${io.env?.HOME ?? ''}/.claude/settings.json`);
   let attrOk = false;
   try {
     const s = settingsText === null ? null : JSON.parse(settingsText);
@@ -117,7 +118,7 @@ export async function cmdDoctor(args, io) {
     detail: attrOk ? 'attribution.commit and attribution.pr are ""' : 'set {"attribution":{"commit":"","pr":""}} in .claude/settings.json (baton init does this)',
   });
 
-  checks.push(await gitGuardCheck(io));
+  checks.push(await gitGuardCheck(io, root));
 
   const journalText = readOrNull(io, p.journal);
   const journalBytes = journalText === null ? 0 : Buffer.byteLength(journalText);

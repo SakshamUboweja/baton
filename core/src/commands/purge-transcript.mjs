@@ -1,7 +1,7 @@
 import { bundlePaths } from '../bundle/store.mjs';
 import { withLock, LockHeldError } from '../bundle/lock.mjs';
 import { atomicWriteText, atomicWriteJson } from '../util/fsx.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 /**
  * Remove every property named `transcript` anywhere in a JSON value.
@@ -85,7 +85,8 @@ function scrubLinesFile(io, path) {
  */
 export async function cmdPurgeTranscript(args, io) {
   const { flags } = parseFlags(args);
-  const p = bundlePaths(io.cwd);
+  const root = resolveRoot(io, flags);
+  const p = bundlePaths(root);
   const markerPath = `${p.dir}/purge.marker.json`;
 
   if (!io.fs.existsSync(p.dir)) {
@@ -95,7 +96,7 @@ export async function cmdPurgeTranscript(args, io) {
   }
 
   try {
-    withLock(io.cwd, io, () => {
+    withLock(root, io, () => {
       atomicWriteJson(io.fs, markerPath, { startedAt: io.now() });
       for (const file of walk(io, p.dir)) {
         if (file === markerPath) continue;

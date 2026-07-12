@@ -3,7 +3,7 @@ import { emptyBundle } from '../bundle/schema.mjs';
 import { normalizeHookPayload } from '../bundle/normalize.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { safeReadJson } from '../util/fsx.mjs';
-import { parseFlags } from './shared.mjs';
+import { parseFlags, resolveRoot } from './shared.mjs';
 
 // Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
 // HANDOFF.md) re-render only on an important event type, >30 s since the last
@@ -45,7 +45,7 @@ export async function cmdCheckpoint(args, io) {
  */
 function run(flags, platform, io) {
   const strict = flags.strict === true;
-  const root = io.cwd;
+  const root = resolveRoot(io, flags);
   const paths = bundlePaths(root);
 
   /** @type {any} */

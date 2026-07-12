@@ -1,6 +1,6 @@
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { prepare, commit } from '../receive/txn.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 /**
  * `baton receive` — the two-phase resume flow. `--print-prompt` and
@@ -19,7 +19,7 @@ export async function cmdReceive(args, io) {
     return 2;
   }
 
-  const root = io.cwd;
+  const root = resolveRoot(io, flags);
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
   const hasSession = typeof flags.session === 'string';
   const opts = {

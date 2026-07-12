@@ -2,7 +2,7 @@ import { dirname } from 'node:path';
 import { planInit } from '../scaffold/plan.mjs';
 import { planHarnessInit } from '../scaffold/harness.mjs';
 import { atomicWriteText, ensureDir } from '../util/fsx.mjs';
-import { emitEnvelope, parseFlags } from './shared.mjs';
+import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 /**
  * `baton init` — two-phase scaffolder. The plan phase (planInit) is read-only;
@@ -14,14 +14,15 @@ import { emitEnvelope, parseFlags } from './shared.mjs';
  */
 export async function cmdInit(args, io) {
   const { flags } = parseFlags(args);
+  const root = resolveRoot(io, flags);
 
   /** @type {ReturnType<typeof planInit>} */
   let actions;
   try {
     actions = [
-      ...planInit(io.cwd, { force: flags.force === true }, io),
+      ...planInit(root, { force: flags.force === true }, io),
       ...planHarnessInit(
-        io.cwd,
+        root,
         { codex: flags.codex === true, cursor: flags.cursor === true, withLegacyPrompts: flags['with-legacy-prompts'] === true },
         io,
       ),
