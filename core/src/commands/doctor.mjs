@@ -72,13 +72,19 @@ function versionCheck(platform, v) {
 }
 
 /**
- * Codex/Cursor hook surface: installed / trusted / observed-executing. Trust
- * is not verifiable from outside the harness, so the fidelity claim is gated
- * on the CANARY — journal evidence that a hook of this platform actually ran.
+ * Codex/Cursor hook surface: installed / enabled / trusted / observed-executing.
+ * `installed` = the hooks file references baton at all; `enabled` = the
+ * mechanical-checkpoint hook (the `checkpointEvent` key: codex `Stop`, cursor
+ * `stop`) actually DECLARES a `baton checkpoint` invocation (iter-5 A3 — not
+ * merely that the file mentions baton somewhere); `trusted` is not externally
+ * verifiable (Codex per-hash trust / Cursor workspace trust) → 'unknown';
+ * `observed` = a mechanical checkpoint sourced from this platform is in the
+ * journal (the canary the checkpoint hook actually ran). The ≤1-turn
+ * mechanical-staleness fidelity claim is gated on enabled AND observed.
  * @param {any} io @param {string} root @param {any} p bundlePaths
- * @param {string} platform @param {string} relPath @param {string} trustNote
+ * @param {string} platform @param {string} relPath @param {string} checkpointEvent @param {string} trustNote
  */
-function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
+function hookSurfaceCheck(io, root, p, platform, relPath, checkpointEvent, trustNote) {
   const id = `${platform}-hooks`;
   let text = null;
   try {
@@ -88,9 +94,6 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
   }
   const installed = text !== null && text.includes('baton');
   if (!installed) {
-    // Four explicit per-hook states (iter-4 I5 / plan §Codex,§Cursor adapters):
-    // installed / enabled / trusted / observed-executing. When nothing is
-    // installed every downstream state is false.
     return {
       id,
       ok: true,
@@ -98,10 +101,24 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
       detail: `not installed — run 'baton init --${platform}' to write ${relPath}`,
     };
   }
+  // enabled: the checkpoint hook itself is declared with a `baton checkpoint`
+  // command — a file that mentions baton only in (say) a session-start hook is
+  // installed but NOT checkpoint-enabled.
+  let enabled = false;
+  try {
+    const cfg = JSON.parse(/** @type {string} */ (text));
+    const hookDef = cfg?.hooks?.[checkpointEvent];
+    enabled = hookDef !== undefined && /baton\s+checkpoint/.test(JSON.stringify(hookDef));
+  } catch {
+    enabled = false;
+  }
+  // observed: a mechanical checkpoint sourced from THIS platform is recorded
+  // (writerId `${platform}-…`; lock notes are `lock-…` and excluded), i.e. the
+  // checkpoint hook actually executed.
   let observed = false;
   try {
     for (const e of readAllTolerant(io.fs, p.journal).entries) {
-      if (e?.source === platform || String(e?.writerId ?? '').startsWith(`${platform}-`)) {
+      if (String(e?.writerId ?? '').startsWith(`${platform}-`) || e?.source === platform) {
         observed = true;
         break;
       }
@@ -109,19 +126,18 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
   } catch {
     observed = false;
   }
-  // `trusted` is NOT externally verifiable — Codex records trust against a hook
-  // HASH and Cursor gates on workspace trust, neither readable from here — so it
-  // is reported 'unknown' and the fidelity claim is gated on the observed canary.
-  // `enabled` follows installation for these harnesses (no separate enable step);
-  // the hook is only truly ACTIVE once trusted AND observed.
-  const states = { installed: true, enabled: true, trusted: 'unknown', observed };
+  const states = { installed: true, enabled, trusted: 'unknown', observed };
+  // The ≤1-turn claim needs the checkpoint hook DECLARED (enabled) AND OBSERVED —
+  // neither alone suffices.
+  const fidelityHolds = enabled && observed;
+  const enabledNote = enabled ? `${checkpointEvent} checkpoint hook enabled` : `${checkpointEvent} checkpoint hook NOT declared (enabled=false)`;
   return {
     id,
     ok: true,
     states,
-    detail: observed
-      ? 'installed, enabled; trusted=unknown (not externally verifiable); execution OBSERVED (canary) — the ≤1-turn mechanical-staleness claim holds'
-      : `installed, enabled; trusted=unknown — ${trustNote}; execution not yet observed — the fidelity claim is gated on this canary`,
+    detail: fidelityHolds
+      ? `installed, ${enabledNote}; trusted=unknown (not externally verifiable); execution OBSERVED (canary) — the ≤1-turn mechanical-staleness claim holds`
+      : `installed, ${enabledNote}; trusted=unknown — ${trustNote}; ${observed ? 'execution observed but' : 'execution not yet observed —'} the ≤1-turn fidelity claim is gated on the ${checkpointEvent} canary + enablement`,
   };
 }
 
@@ -313,8 +329,8 @@ export async function cmdDoctor(args, io) {
   for (const platform of Object.keys(VERSION_BINS)) {
     checks.push(versionCheck(platform, versions[platform] ?? null));
   }
-  checks.push(hookSurfaceCheck(io, root, p, 'codex', '.codex/hooks.json', 'trust review may be pending (run /hooks inside Codex to trust the definitions)'));
-  checks.push(hookSurfaceCheck(io, root, p, 'cursor', '.cursor/hooks.json', 'project hooks require a trusted workspace in Cursor'));
+  checks.push(hookSurfaceCheck(io, root, p, 'codex', '.codex/hooks.json', 'Stop', 'trust review may be pending (run /hooks inside Codex to trust the definitions)'));
+  checks.push(hookSurfaceCheck(io, root, p, 'cursor', '.cursor/hooks.json', 'stop', 'project hooks require a trusted workspace in Cursor'));
 
   const failing = checks.filter((c) => !c.ok);
   if (flags.json) {

@@ -237,30 +237,43 @@ describe('doctor — envelope + check aggregation', () => {
     const s0 = findCheck(envelope(io0), /codex-hooks/).states;
     assert.deepEqual(s0, { installed: false, enabled: false, trusted: 'unknown', observed: false });
 
-    // Installed (hooks.json references baton), no canary yet → trusted unknown, observed false.
-    const io1 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: '{"hooks":{"Stop":"node baton.mjs checkpoint"}}' } });
+    // Installed with a real Stop checkpoint hook, no canary yet → enabled true, observed false.
+    const CODEX_HOOKS = '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"baton checkpoint --platform codex"}]}]}}';
+    const io1 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS } });
     await cmdDoctor(['--json'], io1);
     const s1 = findCheck(envelope(io1), /codex-hooks/).states;
     assert.equal(s1.installed, true);
-    assert.equal(s1.enabled, true);
+    assert.equal(s1.enabled, true, 'the Stop hook declares baton checkpoint');
     assert.equal(s1.trusted, 'unknown', 'trust is not externally verifiable');
     assert.equal(s1.observed, false, 'no canary yet');
 
-    // Installed + a journal entry from codex → observed true (fidelity canary).
-    const journal = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', payload: { text: 'ran' } }) + '\n';
-    const io2 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: '{"hooks":{"Stop":"node baton.mjs checkpoint"}}', [`${ROOT}/.handoff/journal.ndjson`]: journal } });
+    // Installed + a codex-sourced journal entry → observed true (fidelity canary).
+    const journal = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', writerId: 'codex-123-s', payload: { text: 'ran' } }) + '\n';
+    const io2 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: CODEX_HOOKS, [`${ROOT}/.handoff/journal.ndjson`]: journal } });
     await cmdDoctor(['--json'], io2);
     const s2 = findCheck(envelope(io2), /codex-hooks/).states;
     assert.equal(s2.observed, true, 'a codex-sourced journal entry is the observed canary');
   });
 
+  it('(iter-5 A3) installed but the Stop hook does NOT invoke checkpoint → enabled false', async () => {
+    // baton is referenced (a session-start hook) but the mechanical-checkpoint
+    // Stop hook is absent — installed, but NOT checkpoint-enabled.
+    const sessionOnly = '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"baton session-start --platform codex"}]}]}}';
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: sessionOnly } });
+    await cmdDoctor(['--json'], io);
+    const s = findCheck(envelope(io), /codex-hooks/).states;
+    assert.equal(s.installed, true, 'the file references baton');
+    assert.equal(s.enabled, false, 'no Stop checkpoint hook is declared — not checkpoint-enabled');
+  });
+
   it('reports the four states for the cursor hook surface too (iter-4 I5)', async () => {
     // Same shared reporter, but pin cursor explicitly so a future divergence is caught.
-    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.cursor/hooks.json`]: '{"version":1,"hooks":{"stop":"node baton.mjs checkpoint"}}' } });
+    const CURSOR_HOOKS = '{"version":1,"hooks":{"stop":[{"command":"baton checkpoint --platform cursor"}]}}';
+    const io = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.cursor/hooks.json`]: CURSOR_HOOKS } });
     await cmdDoctor(['--json'], io);
     const s = findCheck(envelope(io), /cursor-hooks/).states;
     assert.equal(s.installed, true);
-    assert.equal(s.enabled, true);
+    assert.equal(s.enabled, true, 'the stop hook declares baton checkpoint');
     assert.equal(s.trusted, 'unknown');
     assert.equal(s.observed, false);
   });
