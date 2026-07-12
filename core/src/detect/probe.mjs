@@ -13,20 +13,26 @@ import { Worker } from 'node:worker_threads';
 const DEADLINE_MS = 1000; // generous vs worker spawn (~50-100 ms); tiny vs the 93.8 s repro
 const INPUT_LEN = 4096;
 
+// A covering alphabet (gate-2 iter-2 M8): a chained-star pattern backtracks on
+// a long run of characters its classes accept, then a non-matching tail. The
+// old probe drew fill chars only from the pattern's LITERAL [A-Za-z0-9], so a
+// group-free star over \d / \s / [!-/] never got a matching input and was
+// reported safe, then hung classify(). These fills exercise digits, spaces,
+// word chars, and common punctuation ranges regardless of how the class is
+// spelled; the tail (\x01) is outside all of them, forcing a full backtrack.
+const COVER = ['0', '9', ' ', '\t', 'a', 'Z', '_', '!', '/', '-', '.', '#', '@'];
+const TAIL = String.fromCharCode(1);
+
 /**
- * Build adversarial probe inputs from the pattern itself: long runs of the
- * pattern's own literal characters ending in a byte that cannot match, which
- * forces a full backtrack on pathological shapes.
+ * Build adversarial probe inputs: one long run per covering-alphabet char plus
+ * the pattern's own literals, each ending in a non-matching byte.
  * @param {string} pattern
  * @returns {string[]}
  */
 function probeInputs(pattern) {
-  const chars = [...new Set(pattern.match(/[A-Za-z0-9]/g) ?? [])].slice(0, 4);
-  if (chars.length === 0) chars.push('a');
-  const tail = String.fromCharCode(1);
-  const inputs = chars.map((c) => c.repeat(INPUT_LEN) + tail);
-  inputs.push('a'.repeat(INPUT_LEN) + tail);
-  return inputs;
+  const literals = [...new Set(pattern.match(/[A-Za-z0-9]/g) ?? [])].slice(0, 4);
+  const fills = [...new Set([...COVER, ...literals])];
+  return fills.map((c) => c.repeat(INPUT_LEN) + TAIL);
 }
 
 /**
@@ -34,6 +40,14 @@ function probeInputs(pattern) {
  * @returns {{safe: true} | {safe: false, reason: string}}
  */
 export function probeRegexSafe(pattern, flags = '', timeoutMs = DEADLINE_MS) {
+  // Pre-compile in the main thread (gate-2 iter-2 B3): a bad pattern/flag pair
+  // is a COMPILE error reported distinctly, never conflated with a timeout.
+  try {
+    // eslint-disable-next-line no-new
+    new RegExp(pattern, flags);
+  } catch (err) {
+    return { safe: false, reason: `invalid regex pattern/flags (compile error: ${/** @type {any} */ (err)?.message ?? 'syntax error'})` };
+  }
   const sab = new SharedArrayBuffer(4);
   const flag = new Int32Array(sab);
   const worker = new Worker(new URL('./probe-worker.mjs', import.meta.url), {

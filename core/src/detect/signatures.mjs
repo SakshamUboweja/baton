@@ -78,29 +78,48 @@ function scanQuantifiedGroups(pattern) {
   return null;
 }
 
+const ALLOWED_FLAGS = 'dgimsuvy';
+
 /**
- * Lint one regex pattern. Together with the load-time worker probe on overlay
- * tables (see probe.mjs), the runtime time-guard is by construction: patterns
- * that could backtrack catastrophically never reach classify(), which stays
- * synchronous with no timers.
- * @param {string} id @param {string} pattern
+ * Validate a regex flags string (gate-2 iter-2 B3): every char must be an
+ * allowed JS flag with no duplicates, so a flags value that compiles nowhere
+ * (`z`, `ii`) is rejected at LOAD, not left to throw later inside classify().
+ * @param {string} id @param {string} flags
  */
-function lintRegex(id, pattern) {
+function lintFlags(id, flags) {
+  if (typeof flags !== 'string') throw new Error(`signature ${id}: regex flags must be a string`);
+  const seen = new Set();
+  for (const c of flags) {
+    if (!ALLOWED_FLAGS.includes(c)) throw new Error(`signature ${id}: unsupported regex flag "${c}" (allowed: ${ALLOWED_FLAGS})`);
+    if (seen.has(c)) throw new Error(`signature ${id}: duplicate regex flag "${c}"`);
+    seen.add(c);
+  }
+}
+
+/**
+ * Lint one regex pattern together with its flags. With the load-time worker
+ * probe on overlay tables (see probe.mjs), the runtime time-guard is by
+ * construction: patterns that could backtrack catastrophically never reach
+ * classify(), which stays synchronous with no timers.
+ * @param {string} id @param {string} pattern @param {string} [flags]
+ */
+function lintRegex(id, pattern, flags = '') {
   if (typeof pattern !== 'string' || pattern.length > REGEX_MAX_LEN) {
     throw new Error(`signature ${id}: regex pattern exceeds the ${REGEX_MAX_LEN}-char length cap (or is not a string)`);
   }
   if (/\\[1-9]/.test(pattern)) {
     throw new Error(`signature ${id}: regex backreferences are not allowed`);
   }
+  lintFlags(id, flags);
   const problem = scanQuantifiedGroups(pattern);
   if (problem) {
     throw new Error(`signature ${id}: ${problem} (pathological backtracking / non-linear-time risk)`);
   }
   try {
     // eslint-disable-next-line no-new
-    new RegExp(pattern);
+    new RegExp(pattern, flags);
   } catch (err) {
-    throw new Error(`signature ${id}: invalid regex pattern (${/** @type {any} */ (err)?.message ?? 'syntax error'})`);
+    throw new Error(`signature ${id}: invalid regex pattern/flags (${/** @type {any} */ (err)?.message ?? 'syntax error'})`);
   }
 }
 
@@ -114,7 +133,7 @@ function lintSignature(s) {
   if (!s.matcher || !MATCHER_KINDS.includes(s.matcher.kind)) {
     throw new Error(`signature ${s.id}: unknown matcher kind "${s.matcher?.kind}" (expected ${MATCHER_KINDS.join('|')})`);
   }
-  if (s.matcher.kind === 'regex') lintRegex(s.id, s.matcher.pattern);
+  if (s.matcher.kind === 'regex') lintRegex(s.id, s.matcher.pattern, s.matcher.flags ?? '');
   if (s.matcher.kind === 'substring' && typeof s.matcher.value !== 'string') {
     throw new Error(`signature ${s.id}: substring matcher needs a string value`);
   }
