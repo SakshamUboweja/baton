@@ -54,6 +54,20 @@ describe('F1 — a healthy version-probed platform is selectable-but-degraded, n
     assert.ok((cc.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'claude-code' && s.why === 'unauthenticated'), 'recorded as unauthenticated');
   });
 
+  it('a non-ok OUTCOME on a selected platform flags degraded (iter-4 I6)', () => {
+    // capability is fine but the last probe ERRORED/TIMED OUT — the selection is
+    // still made (capability ≥ authenticated, outcome ≠ rate-limited) but must be
+    // flagged degraded, not presented as verified-healthy.
+    const errored = { ...HEALTHY_CACHE, codex: { capability: 'authenticated', outcome: 'error' } };
+    const codexPick = resolveRoles({ config: { ...CONFIG, roles: { r: [{ platform: 'codex', model: 'gpt-5.6-sol' }] } }, to: 'codex', probes: errored }).assignments.r;
+    assert.equal(codexPick.platform, 'codex', 'still selectable');
+    assert.equal(codexPick.degraded, true, 'a non-ok outcome degrades the selection');
+
+    const timedOut = { ...HEALTHY_CACHE, codex: { capability: 'reachable', outcome: 'timeout' } };
+    const codexPick2 = resolveRoles({ config: { ...CONFIG, roles: { r: [{ platform: 'codex', model: 'gpt-5.6-sol' }] } }, to: 'codex', probes: timedOut }).assignments.r;
+    assert.equal(codexPick2.degraded, true, 'a timeout outcome degrades the selection');
+  });
+
   it('a fully-reachable platform still resolves without a degraded flag', () => {
     const { assignments } = resolveRoles({ config: CONFIG, to: 'codex', probes: HEALTHY_CACHE });
     // codex is reachable+ok → the delegated pick for a codex-native role is not degraded.

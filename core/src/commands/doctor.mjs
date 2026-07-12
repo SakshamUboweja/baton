@@ -86,8 +86,17 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
   } catch {
     text = null;
   }
-  if (text === null || !text.includes('baton')) {
-    return { id, ok: true, detail: `not installed — run 'baton init --${platform}' to write ${relPath}` };
+  const installed = text !== null && text.includes('baton');
+  if (!installed) {
+    // Four explicit per-hook states (iter-4 I5 / plan §Codex,§Cursor adapters):
+    // installed / enabled / trusted / observed-executing. When nothing is
+    // installed every downstream state is false.
+    return {
+      id,
+      ok: true,
+      states: { installed: false, enabled: false, trusted: 'unknown', observed: false },
+      detail: `not installed — run 'baton init --${platform}' to write ${relPath}`,
+    };
   }
   let observed = false;
   try {
@@ -100,9 +109,20 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
   } catch {
     observed = false;
   }
-  return observed
-    ? { id, ok: true, detail: 'installed; execution observed (canary) — the ≤1-turn mechanical-staleness claim holds' }
-    : { id, ok: true, detail: `installed; execution not yet observed — ${trustNote}; the fidelity claim is gated on this canary` };
+  // `trusted` is NOT externally verifiable — Codex records trust against a hook
+  // HASH and Cursor gates on workspace trust, neither readable from here — so it
+  // is reported 'unknown' and the fidelity claim is gated on the observed canary.
+  // `enabled` follows installation for these harnesses (no separate enable step);
+  // the hook is only truly ACTIVE once trusted AND observed.
+  const states = { installed: true, enabled: true, trusted: 'unknown', observed };
+  return {
+    id,
+    ok: true,
+    states,
+    detail: observed
+      ? 'installed, enabled; trusted=unknown (not externally verifiable); execution OBSERVED (canary) — the ≤1-turn mechanical-staleness claim holds'
+      : `installed, enabled; trusted=unknown — ${trustNote}; execution not yet observed — the fidelity claim is gated on this canary`,
+  };
 }
 
 // Noninteractive status probes per platform (docs/design/platform-notes.md CLIs).

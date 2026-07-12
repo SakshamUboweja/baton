@@ -38,7 +38,17 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
   // platform probed only to 'installed' (auth unverified, e.g. a --version
   // success) is degraded even though it stays selectable.
   /** @param {string} platform */
-  const probeUnverified = (platform) => probes == null || !probes[platform] || probes[platform].capability === 'installed';
+  const probeUnverified = (platform) => {
+    if (probes == null || !probes[platform]) return true;
+    const { capability, outcome } = probes[platform];
+    // Degraded when ANY required dimension is unverified: a capped 'installed'
+    // (auth never confirmed) OR a non-ok outcome (iter-4 I6) — a selectable
+    // platform whose last probe ERRORED or TIMED OUT is presented as
+    // reachability-verified otherwise, which is exactly the silent-degradation
+    // the plan's degraded flag exists to surface. (rate-limited is skipped, not
+    // selected, so it never reaches here.)
+    return capability === 'installed' || outcome !== 'ok';
+  };
 
   /** @type {Record<string, any>} */
   const assignments = {};

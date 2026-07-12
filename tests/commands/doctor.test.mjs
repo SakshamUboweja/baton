@@ -229,6 +229,30 @@ describe('doctor — envelope + check aggregation', () => {
     assert.ok(findCheck(env, /journal/), 'a journal-size check is present');
     assert.ok(findCheck(env, /filesystem|network|mount|fs/), 'a filesystem check is present');
   });
+
+  it('reports the four per-hook states distinctly: installed/enabled/trusted/observed (iter-4 I5)', async () => {
+    // Not installed → every state false.
+    const io0 = makeDoctorIo({ files: { ...ATTR_FILES } });
+    await cmdDoctor(['--json'], io0);
+    const s0 = findCheck(envelope(io0), /codex-hooks/).states;
+    assert.deepEqual(s0, { installed: false, enabled: false, trusted: 'unknown', observed: false });
+
+    // Installed (hooks.json references baton), no canary yet → trusted unknown, observed false.
+    const io1 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: '{"hooks":{"Stop":"node baton.mjs checkpoint"}}' } });
+    await cmdDoctor(['--json'], io1);
+    const s1 = findCheck(envelope(io1), /codex-hooks/).states;
+    assert.equal(s1.installed, true);
+    assert.equal(s1.enabled, true);
+    assert.equal(s1.trusted, 'unknown', 'trust is not externally verifiable');
+    assert.equal(s1.observed, false, 'no canary yet');
+
+    // Installed + a journal entry from codex → observed true (fidelity canary).
+    const journal = JSON.stringify({ seq: 1, ts: NOW, type: 'note', source: 'codex', payload: { text: 'ran' } }) + '\n';
+    const io2 = makeDoctorIo({ files: { ...ATTR_FILES, [`${ROOT}/.codex/hooks.json`]: '{"hooks":{"Stop":"node baton.mjs checkpoint"}}', [`${ROOT}/.handoff/journal.ndjson`]: journal } });
+    await cmdDoctor(['--json'], io2);
+    const s2 = findCheck(envelope(io2), /codex-hooks/).states;
+    assert.equal(s2.observed, true, 'a codex-sourced journal entry is the observed canary');
+  });
 });
 
 // ===========================================================================
