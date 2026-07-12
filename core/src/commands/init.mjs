@@ -16,6 +16,18 @@ export async function cmdInit(args, io) {
   const { flags } = parseFlags(args);
   const root = resolveRoot(io, flags);
 
+  // Fail-safe read for the two READ-ONLY mode flags: presence wins. parseFlags
+  // consumes the next token as a flag's value, so a stray trailing token (a
+  // pasted `# comment`, a typo) used to flip `=== true` false and silently run
+  // a REAL init where the user asked for a preview. Warn and stay read-only.
+  const readOnlyFlag = (/** @type {string} */ name) => {
+    if (flags[name] === undefined) return false;
+    if (flags[name] !== true) io.stderr.write(`baton init: ignoring unexpected value after --${name} (treated as a bare flag)\n`);
+    return true;
+  };
+  const checkMode = readOnlyFlag('check');
+  const dryRun = readOnlyFlag('dry-run');
+
   /** @type {ReturnType<typeof planInit>} */
   let actions;
   try {
@@ -40,7 +52,7 @@ export async function cmdInit(args, io) {
   // --check (gate-2 fix 9): the CI drift gate. Read-only — a scaffolded tree
   // where init would change nothing passes; anything init would write or
   // refuse is drift and fails the check.
-  if (flags.check === true) {
+  if (checkMode) {
     const drift = actions.filter((a) => a.op !== 'skip');
     if (flags.json) {
       emitEnvelope(io, {
@@ -55,7 +67,7 @@ export async function cmdInit(args, io) {
     return drift.length === 0 ? 0 : 1;
   }
 
-  if (flags['dry-run'] === true) {
+  if (dryRun) {
     if (flags.json) {
       emitEnvelope(io, { ok: true, data: { dryRun: true, actions: actions.map(({ id, path, op, note }) => ({ id, path, op, note: note ?? null })) } });
     } else {

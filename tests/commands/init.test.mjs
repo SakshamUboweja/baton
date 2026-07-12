@@ -172,6 +172,28 @@ describe('init — --dry-run is plan-only (zero writes)', () => {
     await cmdInit(['--dry-run'], io);
     assert.equal(read(io, '.claude/settings.json'), undefined, 'no attribution file is written during a dry run');
   });
+
+  // Field finding: a stray token after --dry-run (e.g. a pasted `# comment`
+  // zsh does not strip) was consumed as the flag's VALUE, `=== true` failed,
+  // and the "preview" ran a REAL init. A safety flag must fail safe: presence
+  // wins, the stray value is warned about and ignored.
+  it('--dry-run with a stray trailing token is STILL a dry run (zero writes) and warns', async () => {
+    const io = seedIo();
+    const before = io.files();
+    const code = await cmdInit(['--dry-run', '#', 'preview'], io);
+    assert.equal(code, 0);
+    assert.deepEqual(io.files(), before, 'a garbled --dry-run must never fall through to a real init');
+    assert.match(io.stdoutText(), /dry run/, 'the dry-run banner still prints');
+    assert.match(io.stderrText(), /ignoring unexpected value/i, 'the stray token is surfaced, not silently eaten');
+  });
+
+  it('--check with a stray trailing token is STILL check mode (read-only)', async () => {
+    const io = seedIo();
+    const before = io.files();
+    const code = await cmdInit(['--check', 'foo'], io);
+    assert.deepEqual(io.files(), before, 'a garbled --check must stay read-only');
+    assert.equal(code, 1, 'an unscaffolded tree is drift — check mode exits 1, it does not scaffold');
+  });
 });
 
 // ===========================================================================
