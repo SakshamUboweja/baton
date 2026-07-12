@@ -1,4 +1,5 @@
 import { bundlePaths, loadBundle, writeSnapshot, appendJournal, rotateJournal } from '../bundle/store.mjs';
+import { withLock } from '../bundle/lock.mjs';
 import { emptyBundle } from '../bundle/schema.mjs';
 import { normalizeHookPayload } from '../bundle/normalize.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
@@ -40,6 +41,28 @@ function captureTranscriptTail(root, raw, io) {
 
   try {
     if (!io.fs.lstatSync(path).isFile()) return null;
+    // Allowlist the transcript path (gate-2 iter-2 m1): the payload is
+    // untrusted, so its resolved realpath must sit under the repo root, the
+    // user's ~/.claude tree (where Claude Code actually writes transcripts),
+    // or a configured capture.transcriptDir — never an arbitrary readable file.
+    const fileReal = io.fs.realpathSync(path);
+    /** @type {string[]} */
+    const allowed = [root];
+    const home = io.env?.HOME;
+    if (typeof home === 'string' && home.length > 0) allowed.push(`${home}/.claude`);
+    const dir = cfg.value?.capture?.transcriptDir;
+    if (typeof dir === 'string' && dir.length > 0) allowed.push(dir);
+    const under = (/** @type {string} */ base) => {
+      let baseReal;
+      try {
+        baseReal = io.fs.realpathSync(base);
+      } catch {
+        baseReal = base;
+      }
+      return fileReal === baseReal || fileReal.startsWith(`${baseReal}/`);
+    };
+    if (!allowed.some(under)) return null;
+
     const text = io.fs.readFileSync(path, 'utf8');
     const lines = text.split('\n').filter((/** @type {string} */ l) => l.trim() !== '');
     let tail = lines.slice(-TAIL_MESSAGES).join('\n');
@@ -132,16 +155,23 @@ async function run(flags, platform, io) {
 
   // Opt-in debounce (gate-2 major 14; Cursor afterFileEdit fires per edit):
   // at most one real checkpoint per window, tracked by a per-platform stamp.
+  // The read-and-set runs UNDER the repo lock (gate-2 iter-2 M5) so two
+  // simultaneous afterFileEdit hooks can't both observe no stamp and both
+  // checkpoint — exactly one wins the window.
   if (flags.debounce !== undefined) {
     const seconds = Number(flags.debounce);
     if (!Number.isFinite(seconds) || seconds <= 0) return usageError(io, flags, 'checkpoint', '--debounce <seconds> must be a positive number');
     const stampPath = `${paths.logDir}/debounce-${platform}.json`;
-    const stamp = safeReadJson(io.fs, stampPath);
-    if (stamp.ok && typeof stamp.value?.at === 'string' && Date.parse(io.now()) - Date.parse(stamp.value.at) < seconds * 1000) {
-      return finish({ ok: true, data: { events: 0, rewritten: false, debounced: true } }, 0);
-    }
-    ensureDir(io.fs, paths.logDir);
-    atomicWriteJson(io.fs, stampPath, { at: io.now() });
+    const proceed = withLock(root, io, () => {
+      const stamp = safeReadJson(io.fs, stampPath);
+      if (stamp.ok && typeof stamp.value?.at === 'string' && Date.parse(io.now()) - Date.parse(stamp.value.at) < seconds * 1000) {
+        return false;
+      }
+      ensureDir(io.fs, paths.logDir);
+      atomicWriteJson(io.fs, stampPath, { at: io.now() });
+      return true;
+    });
+    if (!proceed) return finish({ ok: true, data: { events: 0, rewritten: false, debounced: true } }, 0);
   }
 
   let active = bundle;
@@ -253,13 +283,13 @@ async function run(flags, platform, io) {
   if (mustRewrite || important || elapsed || accreted >= THROTTLE_EVENT_COUNT) {
     const merged = loadBundle(root, io).bundle;
     if (merged) {
-      // Bounded git refresh on important checkpoints (gate-2 fix 10): the
-      // mechanical checkpoint carries branch/HEAD/dirty; unavailability
-      // degrades to the bundle's previous git state, never a failure.
-      if (important) {
-        const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
-        if (git !== null) merged.git = git;
-      }
+      // Bounded git refresh on EVERY snapshot rewrite (gate-2 iter-2 M1): a
+      // mechanical checkpoint is defined to carry branch/HEAD/dirty, so any
+      // rewrite — routine Stop that cleared the throttle included, not only
+      // "important" events — refreshes git; unavailability degrades to the
+      // previous git state (or null), never a failure.
+      const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+      if (git !== null) merged.git = git;
       writeSnapshot(root, merged, io);
       rewritten = true;
     }
