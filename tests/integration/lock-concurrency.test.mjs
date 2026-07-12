@@ -32,11 +32,21 @@ after(() => {
   for (const d of dirs) rmSync(d, { recursive: true, force: true });
 });
 
-/** Spawn a node script; resolve with its exit code. */
+// Every child is lifetime-bounded (test-verifier finding 1): a lock
+// regression must fail the test with diagnostics, never hang the suite.
+const CHILD_TIMEOUT_MS = 30_000;
+
+/** Spawn a node script; resolve with {code, stderr}. Kills at the deadline. */
 const spawned = (script, args) =>
   new Promise((resolve) => {
-    const child = spawn('node', [script, ...args], { encoding: 'utf8' });
-    child.on('close', (code) => resolve(code));
+    const child = spawn('node', [script, ...args]);
+    let stderr = '';
+    child.stderr.on('data', (d) => (stderr += d));
+    const killer = setTimeout(() => child.kill('SIGKILL'), CHILD_TIMEOUT_MS);
+    child.on('close', (code, signal) => {
+      clearTimeout(killer);
+      resolve({ code, signal, stderr });
+    });
   });
 
 /** Wait until pred() is true (bounded). */
@@ -79,7 +89,13 @@ const io = {
 writeFileSync(barrierDir + '/ready-' + idx, '');
 while (!existsSync(barrierDir + '/go')) { /* barrier */ }
 let t0 = 0, t1 = 0;
+const deadline = Date.now() + 20_000; // bounded retry: a stuck lock FAILS, never hangs
+let lastErr = null;
 for (;;) {
+  if (Date.now() > deadline) {
+    writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0: 0, t1: 0, error: 'lock never acquired within 20s: ' + String(lastErr) }));
+    process.exit(1);
+  }
   try {
     withLock(root, io, () => {
       t0 = Date.now();
@@ -88,7 +104,7 @@ for (;;) {
       t1 = Date.now();
     });
     break;
-  } catch { /* held — keep trying until we get a turn */ }
+  } catch (err) { lastErr = err?.message ?? err; /* held — retry until the deadline */ }
 }
 writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0, t1 }));
 `;
@@ -105,13 +121,14 @@ describe('barrier-released concurrent writers (real processes, real fs)', () => 
     for (let i = 1; i <= N; i++) children.push(spawned(writerPath, [BATON, root, String(i), barrier]));
     await until(() => Array.from({ length: N }, (_, i) => existsSync(join(barrier, `ready-${i + 1}`))).every(Boolean));
     writeFileSync(join(barrier, 'go'), '');
-    const codes = await Promise.all(children);
+    const results = await Promise.all(children);
 
     for (let i = 1; i <= N; i++) {
+      const r = results[i - 1];
+      assert.equal(r.code, 0, `writer wrapper ${i} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
       const done = JSON.parse(readFileSync(join(barrier, `done-${i}`), 'utf8'));
       assert.equal(done.status, 0, `writer ${i} exited 0; stderr: ${done.stderr}`);
     }
-    assert.deepEqual(codes, Array(N).fill(0));
 
     // Journal integrity: every writer's event landed exactly once, seqs unique.
     const journal = readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
@@ -152,10 +169,15 @@ describe('barrier-released concurrent writers (real processes, real fs)', () => 
     const children = [1, 2].map((i) => spawned(holderPath, [LOCK_URL, root, String(i), barrier]));
     await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
     writeFileSync(join(barrier, 'go'), '');
-    await Promise.all(children);
+    const results = await Promise.all(children);
+    for (const [i, r] of results.entries()) {
+      assert.equal(r.code, 0, `holder ${i + 1} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+    }
 
     const a = JSON.parse(readFileSync(join(barrier, 'interval-1'), 'utf8'));
     const b = JSON.parse(readFileSync(join(barrier, 'interval-2'), 'utf8'));
+    assert.equal(a.error ?? null, null, `holder 1 acquired cleanly: ${a.error}`);
+    assert.equal(b.error ?? null, null, `holder 2 acquired cleanly: ${b.error}`);
     assert.ok(a.t0 > 0 && b.t0 > 0, 'both holders eventually acquired the lock');
     const overlap = a.t0 < b.t1 && b.t0 < a.t1;
     assert.equal(overlap, false, `critical sections overlap: A=[${a.t0},${a.t1}] B=[${b.t0},${b.t1}]`);

@@ -4548,3 +4548,2546 @@ exec
    674	  });
    675	});
 
+exec
+/bin/zsh -lc "sed -n '1,260p' adapters/claude-code/scripts/hook.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+// Single Claude Code hook entrypoint. hooks.json routes every event here with
+// the event name as argv[0]; this script's only job is to reach the core CLI
+// (never re-implement it) and to stay fail-open: a hook must never break the
+// host session, so every path returns 0.
+
+import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import * as nodeFs from 'node:fs';
+import { pathToFileURL } from 'node:url';
+
+/** @param {any} io */
+const batonBin = (io) => `${io.env?.CLAUDE_PLUGIN_ROOT ?? '.'}/core/bin/baton.mjs`;
+
+/**
+ * execFile-shaped spawn that supports {input}: async execFile has no input
+ * option, and a child reading stdin would otherwise block forever (gate-2
+ * reviewer-b finding 1). The io contract for this adapter is therefore
+ * "promise execFile honoring opts.input as the child's stdin".
+ * @param {string} cmd @param {string[]} args @param {{cwd?: string, input?: string, timeout?: number}} [opts]
+ * @returns {Promise<{stdout: string, stderr: string}>}
+ */
+function execFileWithInput(cmd, args = [], opts = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd: opts.cwd, timeout: opts.timeout ?? 25_000 });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => (stdout += d));
+    child.stderr.on('data', (d) => (stderr += d));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) return resolve({ stdout, stderr });
+      const e = Object.assign(new Error(`Command failed: ${cmd}`), { code, stdout, stderr });
+      reject(e);
+    });
+    if (typeof opts.input === 'string' && child.stdin) child.stdin.write(opts.input);
+    child.stdin?.end();
+  });
+}
+
+// Hook-error diagnostics (gate-2 minor 16 / plan §Transcript policy log
+// contract): metadata-only entries — never the hook payload — with bounded
+// retention (last 50 entries / 7 days). The log rides .handoff/ so the purge
+// walk covers it.
+const HOOK_LOG_MAX = 50;
+const HOOK_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @param {any} io @param {string} event @param {any} err */
+function logHookError(io, event, err) {
+  try {
+    const dir = `${io.cwd}/.handoff/log`;
+    io.fs.mkdirSync(dir, { recursive: true });
+    const path = `${dir}/hook-errors.jsonl`;
+    const nowIso = typeof io.now === 'function' ? io.now() : new Date().toISOString();
+    /** @type {any[]} */
+    let entries = [];
+    try {
+      entries = io.fs
+        .readFileSync(path, 'utf8')
+        .split('\n')
+        .filter((/** @type {string} */ l) => l.trim() !== '')
+        .map((/** @type {string} */ l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+    } catch {
+      entries = [];
+    }
+    entries.push({ ts: nowIso, event, code: err?.code ?? null });
+    const cutoff = Date.parse(nowIso) - HOOK_LOG_MAX_AGE_MS;
+    entries = entries.filter((e) => typeof e.ts === 'string' && Date.parse(e.ts) >= cutoff).slice(-HOOK_LOG_MAX);
+    io.fs.writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  } catch {
+    // diagnostics must never break fail-open
+  }
+}
+
+/**
+ * Run a core baton command as a child process, forwarding the raw hook payload
+ * as the child's stdin. Rejections are swallowed (fail-open) — core commands
+ * carry their own hook-safety, and Claude ignores hook exit codes anyway —
+ * but each failure leaves a metadata-only diagnostic in .handoff/log/.
+ * @param {any} io @param {string[]} argv @param {string} event
+ */
+async function baton(io, argv, event) {
+  try {
+    await io.execFile('node', [batonBin(io), ...argv], { input: io.stdin });
+  } catch (err) {
+    // fail-open: a failing child must not break the session
+    logHookError(io, event, err);
+  }
+}
+
+/** @param {any} io @returns {any | null} parsed hook payload, or null */
+function parsePayload(io) {
+  try {
+    return JSON.parse(typeof io.stdin === 'string' ? io.stdin : '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SessionStart: not a checkpoint. If a pending bundle from ANOTHER platform
+ * exists (sealed, or open-but-limit-hit — the unsealed limit death), inject a
+ * receive suggestion via the Claude context shape. Own-platform bundles are
+ * this session's own work; quiet no-op.
+ * @param {any} io
+ */
+function sessionStart(io) {
+  let bundle;
+  try {
+    bundle = JSON.parse(io.fs.readFileSync(`${io.cwd}/.handoff/bundle.json`, 'utf8'));
+  } catch {
+    return 0;
+  }
+  const origin = bundle?.origin?.platform;
+  const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
+  const foreign = typeof origin === 'string' && origin !== 'claude-code';
+  if (pending && foreign) {
+    io.stdout.write(
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: `A handoff bundle from ${origin} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
+        },
+      }) + '\n',
+    );
+  }
+  return 0;
+}
+
+/**
+ * @param {string[]} args argv after the script path; args[0] is the hook event
+ * @param {any} io injected {cwd, env, stdin, stdout, stderr, fs, execFile, now, …}
+ * @returns {Promise<number>} always 0 — fail-open by construction
+ */
+export async function runHook(args, io) {
+  try {
+    const event = args[0] ?? 'unknown';
+
+    if (event === 'SessionStart') return sessionStart(io);
+
+    if (event === 'StopFailure') {
+      const errorType = parsePayload(io)?.error?.type;
+      const detectArgs = ['detect', '--platform', 'claude-code'];
+      if (typeof errorType === 'string') detectArgs.push('--structured-error-type', errorType);
+      await baton(io, detectArgs, event);
+      await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+      return 0;
+    }
+
+    // Stop / PreCompact / SessionEnd — and any future event — are routine
+    // mechanical checkpoints; core normalize degrades unknown payloads safely.
+    await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+// Main entry: hooks.json executes this file directly (`node …/hook.mjs <Event>`),
+// so a real invocation must build the real io and run — an export alone is a
+// production no-op (gate-2 reviewer-b finding 1).
+const isMain = (() => {
+  try {
+    return process.argv[1] ? import.meta.url === pathToFileURL(process.argv[1]).href : false;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  let stdin = '';
+  try {
+    if (!process.stdin.isTTY) stdin = readFileSync(0, 'utf8');
+  } catch {
+    stdin = '';
+  }
+  const io = {
+    cwd: process.cwd(),
+    env: process.env,
+    stdin,
+    stdout: process.stdout,
+    stderr: process.stderr,
+    fs: nodeFs,
+    execFile: execFileWithInput,
+    now: () => new Date().toISOString(),
+  };
+  runHook(process.argv.slice(2), io).then(
+    (code) => process.exit(code),
+    () => process.exit(0),
+  );
+}
+
+exec
+/bin/zsh -lc "sed -n '1,220p' adapters/claude-code/hooks.json" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/adapters/claude-code-hook-spawn.test.mjs | sed -n '1,120p'" in /Users/saksham/baton
+ exited 1 in 0ms:
+sed: adapters/claude-code/hooks.json: No such file or directory
+
+ succeeded in 0ms:
+     1	import { describe, it, after } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { spawnSync } from 'node:child_process';
+     4	import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+     5	import { tmpdir } from 'node:os';
+     6	import { fileURLToPath } from 'node:url';
+     7	import { join, dirname } from 'node:path';
+     8	
+     9	// ---------------------------------------------------------------------------
+    10	// Gate-2 fix (reviewer-b finding 1): the hook script must WORK when executed
+    11	// exactly as hooks.json invokes it — `node …/scripts/hook.mjs <Event>` with the
+    12	// hook payload on stdin — not merely export a function. These tests spawn the
+    13	// real script over a real scratch cwd and assert the .handoff/ mutation the
+    14	// production path exists to produce. Fail-open is asserted at the same
+    15	// altitude: garbage stdin still exits 0.
+    16	// ---------------------------------------------------------------------------
+    17	
+    18	const here = dirname(fileURLToPath(import.meta.url));
+    19	const repoRoot = join(here, '..', '..');
+    20	const HOOK = join(repoRoot, 'adapters', 'claude-code', 'scripts', 'hook.mjs');
+    21	
+    22	/** @type {string[]} */
+    23	const dirs = [];
+    24	const scratch = () => {
+    25	  const d = mkdtempSync(join(tmpdir(), 'baton-hook-spawn-'));
+    26	  dirs.push(d);
+    27	  return d;
+    28	};
+    29	after(() => {
+    30	  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    31	});
+    32	
+    33	/** Spawn the hook exactly as hooks.json does. */
+    34	function runHookProcess(cwd, event, stdin) {
+    35	  return spawnSync('node', [HOOK, event], {
+    36	    cwd,
+    37	    input: stdin,
+    38	    encoding: 'utf8',
+    39	    env: { ...process.env, CLAUDE_PLUGIN_ROOT: repoRoot },
+    40	    timeout: 60_000,
+    41	  });
+    42	}
+    43	
+    44	describe('hook.mjs — spawn-level (production invocation shape)', () => {
+    45	  it('a Stop event with a baton/event@1 payload creates/extends .handoff/ in the hook cwd', () => {
+    46	    const cwd = scratch();
+    47	    const payload = JSON.stringify({
+    48	      schema: 'baton/event@1',
+    49	      type: 'decision',
+    50	      payload: { summary: 'spawned-hook-checkpoint' },
+    51	      source: 'claude-code',
+    52	      sessionHint: 'spawn-sess-1',
+    53	      unstable: false,
+    54	    });
+    55	
+    56	    const r = runHookProcess(cwd, 'Stop', payload);
+    57	    assert.equal(r.status, 0, `the hook exits 0; stderr: ${r.stderr}`);
+    58	
+    59	    const snapshot = join(cwd, '.handoff', 'bundle.json');
+    60	    assert.ok(existsSync(snapshot), 'the real hook invocation produced a bundle — the adapter is not a no-op');
+    61	    const bundle = JSON.parse(readFileSync(snapshot, 'utf8'));
+    62	    assert.ok(
+    63	      bundle.decisions.some((/** @type {any} */ d) => d.summary === 'spawned-hook-checkpoint'),
+    64	      'the stdin payload reached the core CLI through the child stdin (execFile input forwarding)',
+    65	    );
+    66	  });
+    67	
+    68	  it('garbage stdin still exits 0 and mutates nothing (fail-open at spawn altitude)', () => {
+    69	    const cwd = scratch();
+    70	    const r = runHookProcess(cwd, 'Stop', 'not json at all {');
+    71	    assert.equal(r.status, 0, `fail-open: garbage payload exits 0; stderr: ${r.stderr}`);
+    72	    assert.ok(!existsSync(join(cwd, '.handoff', 'journal.ndjson')), 'an ignored payload appends nothing');
+    73	  });
+    74	
+    75	  it('a rate_limit StopFailure persists the limit-hit state: bundle.handoff.reasonClass becomes usage-limit (gate-2 fix 3)', () => {
+    76	    const cwd = scratch();
+    77	    const payload = JSON.stringify({ hook_event_name: 'StopFailure', session_id: 'spawn-sess-sf', cwd, error: { type: 'rate_limit' } });
+    78	
+    79	    const r = runHookProcess(cwd, 'StopFailure', payload);
+    80	    assert.equal(r.status, 0, `StopFailure handling is fail-open; stderr: ${r.stderr}`);
+    81	
+    82	    const bundle = JSON.parse(readFileSync(join(cwd, '.handoff', 'bundle.json'), 'utf8'));
+    83	    assert.equal(bundle.handoff.reasonClass, 'usage-limit', 'the unsealed limit death is marked on the bundle, not just logged');
+    84	    assert.equal(bundle.handoff.status, 'open', 'the bundle stays open (no seal was written) — the degraded-receive shape');
+    85	  });
+    86	
+    87	  it('SessionStart with no bundle is a quiet exit-0 no-op', () => {
+    88	    const cwd = scratch();
+    89	    const r = runHookProcess(cwd, 'SessionStart', JSON.stringify({ hook_event_name: 'SessionStart' }));
+    90	    assert.equal(r.status, 0);
+    91	    assert.equal(r.stdout.trim(), '', 'nothing pending means no context output');
+    92	  });
+    93	});
+
+codex
+The Claude hook spawn test uses the real script and persisted bundle state, including StopFailure limit-hit state. The Stop fixture is a core-normalized event rather than a raw Claude Stop payload, so I’m treating it as an stdin-forwarding pin rather than full Claude payload coverage; StopFailure covers the platform payload path that mattered for the gate-2 regression.
+exec
+/bin/zsh -lc 'rg --files adapters/claude-code' in /Users/saksham/baton
+ succeeded in 0ms:
+adapters/claude-code/skills/handoff-protocol/SKILL.md
+adapters/claude-code/commands/handoff.md
+adapters/claude-code/commands/receive.md
+adapters/claude-code/commands/baton-setup.md
+adapters/claude-code/scripts/hook.mjs
+adapters/claude-code/hooks/hooks.json
+
+exec
+/bin/zsh -lc 'rg -n "scripts/hook|hook.mjs|StopFailure|SessionStart|CLAUDE_PLUGIN_ROOT" adapters/claude-code templates tests/adapters' in /Users/saksham/baton
+ succeeded in 0ms:
+tests/adapters/codex-init-writer.test.mjs:42://       JSON carrying baton's Stop/PreCompact/SessionStart hooks (and surfaces the
+tests/adapters/codex-init-writer.test.mjs:47://       PreCompact, SessionStart — with the baton entry coexisting in the SAME
+tests/adapters/codex-init-writer.test.mjs:87:  SessionStart: 'BATON_CODEX_SESSIONSTART_MARK',
+tests/adapters/codex-init-writer.test.mjs:95:    SessionStart: [{ hooks: [{ type: 'command', command: `baton receive --print-prompt --platform codex ${MARK.SessionStart}`, commandWindows: 'baton receive --print-prompt --platform codex' }] }],
+tests/adapters/codex-init-writer.test.mjs:155:  it('plans a valid-JSON write carrying baton Stop/PreCompact/SessionStart hooks + the template bytes', () => {
+tests/adapters/codex-init-writer.test.mjs:164:    for (const ev of ['Stop', 'PreCompact', 'SessionStart']) {
+tests/adapters/codex-init-writer.test.mjs:190:      SessionStart: { hooks: [{ type: 'command', command: 'USER_SESSIONSTART_HOOK', timeout: 7 }] },
+tests/adapters/codex-init-writer.test.mjs:198:        SessionStart: [USER.SessionStart],
+tests/adapters/codex-init-writer.test.mjs:211:    for (const ev of ['Stop', 'PreCompact', 'SessionStart']) {
+tests/adapters/codex-init-writer.test.mjs:275:    assert.ok(json.hooks && json.hooks.Stop && json.hooks.SessionStart, 'the written file carries baton hooks');
+adapters/claude-code/commands/handoff.md:10:   - Send them as `baton/event@1` events on stdin to `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" checkpoint --platform claude-code`.
+adapters/claude-code/commands/handoff.md:11:2. Seal: run `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" finalize --reason "$ARGUMENTS"` (let the reason class be inferred; add `--to <platform>` if the destination is known).
+tests/adapters/codex-templates.test.mjs:28://   C2. Exactly three events — Stop, PreCompact, SessionStart (no StopFailure on
+tests/adapters/codex-templates.test.mjs:32://       `--platform codex`; EVERY SessionStart command is the cheap
+tests/adapters/codex-templates.test.mjs:50:const EXPECTED_EVENTS = ['Stop', 'PreCompact', 'SessionStart'];
+tests/adapters/codex-templates.test.mjs:97:  it('configures EXACTLY Stop, PreCompact, SessionStart (no StopFailure on Codex)', () => {
+tests/adapters/codex-templates.test.mjs:105:  it('EVERY Stop + PreCompact command is checkpoint --platform codex; EVERY SessionStart command is session-start --platform codex', () => {
+tests/adapters/codex-templates.test.mjs:125:    for (const i of commandItems(hooks, 'SessionStart')) {
+tests/adapters/codex-templates.test.mjs:127:        assert.doesNotMatch(cmd, /checkpoint/, 'SessionStart is a pending-handoff notice, not a checkpoint (both command strings)');
+tests/adapters/codex-templates.test.mjs:128:        // (gate-2 fix 8) SessionStart must NOT run full receive preparation —
+tests/adapters/codex-templates.test.mjs:131:        assert.doesNotMatch(cmd, /receive/, '(gate-2 fix 8) SessionStart never runs receive preparation');
+adapters/claude-code/commands/receive.md:8:1. Prepare: run `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" receive --platform claude-code --prepare --json` and read the prompt, warnings, and role assignments from the envelope.
+adapters/claude-code/scripts/hook.mjs:12:const batonBin = (io) => `${io.env?.CLAUDE_PLUGIN_ROOT ?? '.'}/core/bin/baton.mjs`;
+adapters/claude-code/scripts/hook.mjs:107: * SessionStart: not a checkpoint. If a pending bundle from ANOTHER platform
+adapters/claude-code/scripts/hook.mjs:127:          hookEventName: 'SessionStart',
+adapters/claude-code/scripts/hook.mjs:145:    if (event === 'SessionStart') return sessionStart(io);
+adapters/claude-code/scripts/hook.mjs:147:    if (event === 'StopFailure') {
+adapters/claude-code/scripts/hook.mjs:165:// Main entry: hooks.json executes this file directly (`node …/hook.mjs <Event>`),
+tests/adapters/claude-code-hook-spawn.test.mjs:11:// exactly as hooks.json invokes it — `node …/scripts/hook.mjs <Event>` with the
+tests/adapters/claude-code-hook-spawn.test.mjs:20:const HOOK = join(repoRoot, 'adapters', 'claude-code', 'scripts', 'hook.mjs');
+tests/adapters/claude-code-hook-spawn.test.mjs:39:    env: { ...process.env, CLAUDE_PLUGIN_ROOT: repoRoot },
+tests/adapters/claude-code-hook-spawn.test.mjs:44:describe('hook.mjs — spawn-level (production invocation shape)', () => {
+tests/adapters/claude-code-hook-spawn.test.mjs:75:  it('a rate_limit StopFailure persists the limit-hit state: bundle.handoff.reasonClass becomes usage-limit (gate-2 fix 3)', () => {
+tests/adapters/claude-code-hook-spawn.test.mjs:77:    const payload = JSON.stringify({ hook_event_name: 'StopFailure', session_id: 'spawn-sess-sf', cwd, error: { type: 'rate_limit' } });
+tests/adapters/claude-code-hook-spawn.test.mjs:79:    const r = runHookProcess(cwd, 'StopFailure', payload);
+tests/adapters/claude-code-hook-spawn.test.mjs:80:    assert.equal(r.status, 0, `StopFailure handling is fail-open; stderr: ${r.stderr}`);
+tests/adapters/claude-code-hook-spawn.test.mjs:87:  it('SessionStart with no bundle is a quiet exit-0 no-op', () => {
+tests/adapters/claude-code-hook-spawn.test.mjs:89:    const r = runHookProcess(cwd, 'SessionStart', JSON.stringify({ hook_event_name: 'SessionStart' }));
+adapters/claude-code/commands/baton-setup.md:7:1. Run `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" doctor --json` and report each check and per-platform probe record plainly.
+adapters/claude-code/commands/baton-setup.md:8:2. Show the plan first: `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" init --dry-run` — walk the user through what would be written (baton.config.json, .gitignore ensure-line, AGENTS.md/CLAUDE.md managed blocks, attribution settings).
+adapters/claude-code/commands/baton-setup.md:10:4. Apply with `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" init [flags]`, then re-run doctor to confirm green.
+adapters/claude-code/hooks/hooks.json:3:    "StopFailure": [
+adapters/claude-code/hooks/hooks.json:9:            "command": "node \"${CLAUDE_PLUGIN_ROOT}/adapters/claude-code/scripts/hook.mjs\" StopFailure",
+adapters/claude-code/hooks/hooks.json:20:            "command": "node \"${CLAUDE_PLUGIN_ROOT}/adapters/claude-code/scripts/hook.mjs\" Stop",
+adapters/claude-code/hooks/hooks.json:31:            "command": "node \"${CLAUDE_PLUGIN_ROOT}/adapters/claude-code/scripts/hook.mjs\" PreCompact",
+adapters/claude-code/hooks/hooks.json:42:            "command": "node \"${CLAUDE_PLUGIN_ROOT}/adapters/claude-code/scripts/hook.mjs\" SessionEnd",
+adapters/claude-code/hooks/hooks.json:48:    "SessionStart": [
+adapters/claude-code/hooks/hooks.json:53:            "command": "node \"${CLAUDE_PLUGIN_ROOT}/adapters/claude-code/scripts/hook.mjs\" SessionStart",
+tests/adapters/claude-code-hook-script.test.mjs:8:// resolve — only hook.mjs is missing.)
+tests/adapters/claude-code-hook-script.test.mjs:9:import { runHook } from '../../adapters/claude-code/scripts/hook.mjs';
+tests/adapters/claude-code-hook-script.test.mjs:15:// the adapter SURFACE only (event→command mapping, the SessionStart context
+tests/adapters/claude-code-hook-script.test.mjs:18:// TARGET MODULE: adapters/claude-code/scripts/hook.mjs (sole target).
+tests/adapters/claude-code-hook-script.test.mjs:21:// §Claude Code (SessionStart injects hookSpecificOutput.additionalContext).
+tests/adapters/claude-code-hook-script.test.mjs:28://   S1. BATON REACH. To run a core command, hook.mjs invokes the core CLI as a
+tests/adapters/claude-code-hook-script.test.mjs:30://       `${io.env.CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs` and calls
+tests/adapters/claude-code-hook-script.test.mjs:38://       StopFailure -> BOTH a `detect --platform claude-code` invocation (the
+tests/adapters/claude-code-hook-script.test.mjs:40://       stamped with a stop-failure trigger; a rate_limit StopFailure carries the
+tests/adapters/claude-code-hook-script.test.mjs:42://   S3. SessionStart is NOT a checkpoint: it spawns NO checkpoint child. Instead
+tests/adapters/claude-code-hook-script.test.mjs:46://         {"hookSpecificOutput":{"hookEventName":"SessionStart",
+tests/adapters/claude-code-hook-script.test.mjs:73:  const io = makeIo({ env: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT }, stdin, files, now: T0 });
+tests/adapters/claude-code-hook-script.test.mjs:91:  assert.ok(line(c).includes(BATON_BIN), `${label}: the invocation uses the baton bin resolved under CLAUDE_PLUGIN_ROOT (${BATON_BIN}); got: ${line(c)}`);
+tests/adapters/claude-code-hook-script.test.mjs:120:describe('hook.mjs — routine checkpoint events map to a single core checkpoint (S1, S2)', () => {
+tests/adapters/claude-code-hook-script.test.mjs:143:describe('hook.mjs — StopFailure classifies AND checkpoints (S2)', () => {
+tests/adapters/claude-code-hook-script.test.mjs:144:  it('a rate_limit StopFailure invokes detect and a stop-failure checkpoint carrying the rate_limit signal', async () => {
+tests/adapters/claude-code-hook-script.test.mjs:146:      stdin: payload('StopFailure', { error: { type: 'rate_limit' } }),
+tests/adapters/claude-code-hook-script.test.mjs:149:      // stdout. hook.mjs must tolerate the nonzero exit (fail-open) and still route.
+tests/adapters/claude-code-hook-script.test.mjs:162:    const code = await runHook(['StopFailure'], io);
+tests/adapters/claude-code-hook-script.test.mjs:163:    assert.equal(code, 0, 'StopFailure handling is fail-open even when detect exits nonzero');
+tests/adapters/claude-code-hook-script.test.mjs:166:    assert.equal(detects.length, 1, 'StopFailure runs the payload through `baton detect` (the classify step)');
+tests/adapters/claude-code-hook-script.test.mjs:167:    assertBatonCall(detects[0], io, 'StopFailure detect');
+tests/adapters/claude-code-hook-script.test.mjs:171:    assert.equal(ckpts.length, 1, 'StopFailure also writes a mechanical checkpoint');
+tests/adapters/claude-code-hook-script.test.mjs:173:    assertBatonCall(c, io, 'StopFailure checkpoint');
+tests/adapters/claude-code-hook-script.test.mjs:179:    for (const any of calls) assertBatonCall(any, io, 'StopFailure core call');
+tests/adapters/claude-code-hook-script.test.mjs:184:describe('hook.mjs — SessionStart injects a handoff-pending notice, never checkpoints (S3)', () => {
+tests/adapters/claude-code-hook-script.test.mjs:190:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+tests/adapters/claude-code-hook-script.test.mjs:192:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:194:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:198:    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart', 'emits the SessionStart hookSpecificOutput envelope');
+tests/adapters/claude-code-hook-script.test.mjs:211:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+tests/adapters/claude-code-hook-script.test.mjs:213:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:215:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:218:    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
+tests/adapters/claude-code-hook-script.test.mjs:238:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+tests/adapters/claude-code-hook-script.test.mjs:240:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:242:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:247:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(claudeBundle()) } });
+tests/adapters/claude-code-hook-script.test.mjs:249:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:251:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:259:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+tests/adapters/claude-code-hook-script.test.mjs:261:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:263:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:271:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+tests/adapters/claude-code-hook-script.test.mjs:273:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:275:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:280:    const { io, calls } = makeHookIo({ stdin: payload('SessionStart') }); // empty tree: no .handoff/
+tests/adapters/claude-code-hook-script.test.mjs:282:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-hook-script.test.mjs:284:    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+tests/adapters/claude-code-hook-script.test.mjs:290:describe('hook.mjs — fail-open (S4)', () => {
+tests/adapters/claude-code-hook-script.test.mjs:307:  it('SessionStart with a corrupt bundle returns 0 and emits no crash output', async () => {
+tests/adapters/claude-code-hook-script.test.mjs:308:    const { io } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: '{ corrupt json' } });
+tests/adapters/claude-code-hook-script.test.mjs:309:    const code = await runHook(['SessionStart'], io);
+tests/adapters/claude-code-manifests.test.mjs:26://       adapters/claude-code/…), so ${CLAUDE_PLUGIN_ROOT} is the repo root and
+tests/adapters/claude-code-hooks-json.test.mjs:18:// platform-notes.md §Claude Code (verified hook events + the StopFailure matcher
+tests/adapters/claude-code-hooks-json.test.mjs:29://       StopFailure, Stop, PreCompact, SessionEnd, SessionStart.
+tests/adapters/claude-code-hooks-json.test.mjs:31://   H3. The StopFailure matcher surface covers the FULL verified enum snapshot
+tests/adapters/claude-code-hooks-json.test.mjs:33://       StopFailure contains every token). Layout-agnostic: one alternation
+tests/adapters/claude-code-hooks-json.test.mjs:36://         node "${CLAUDE_PLUGIN_ROOT}/…/scripts/hook.mjs" <Event>
+tests/adapters/claude-code-hooks-json.test.mjs:37://       i.e. it invokes `node`, references ${CLAUDE_PLUGIN_ROOT}, points at the
+tests/adapters/claude-code-hooks-json.test.mjs:38://       single entrypoint scripts/hook.mjs, and passes its own event name as an
+tests/adapters/claude-code-hooks-json.test.mjs:40://       hook.mjs itself — pinned in claude-code-hook-script.test.mjs, which
+tests/adapters/claude-code-hooks-json.test.mjs:41://       asserts hook.mjs spawns core/bin/baton.mjs. hooks.json's contract is only
+tests/adapters/claude-code-hooks-json.test.mjs:44://       StopFailure 30, Stop 30, PreCompact 60, SessionEnd 30, SessionStart 10.
+tests/adapters/claude-code-hooks-json.test.mjs:54:// Verbatim from docs/design/platform-notes.md §Claude Code (StopFailure enum
+tests/adapters/claude-code-hooks-json.test.mjs:69:const EXPECTED_EVENTS = ['StopFailure', 'Stop', 'PreCompact', 'SessionEnd', 'SessionStart'];
+tests/adapters/claude-code-hooks-json.test.mjs:70:const EXPECTED_TIMEOUT = { StopFailure: 30, Stop: 30, PreCompact: 60, SessionEnd: 30, SessionStart: 10 };
+tests/adapters/claude-code-hooks-json.test.mjs:100:  it('configures EXACTLY StopFailure, Stop, PreCompact, SessionEnd, SessionStart', () => {
+tests/adapters/claude-code-hooks-json.test.mjs:107:describe('claude-code hooks.json — StopFailure matcher enum snapshot (H3)', () => {
+tests/adapters/claude-code-hooks-json.test.mjs:108:  it('the StopFailure matchers cover every verified enum error type verbatim', () => {
+tests/adapters/claude-code-hooks-json.test.mjs:110:    const groups = hooks.StopFailure;
+tests/adapters/claude-code-hooks-json.test.mjs:111:    assert.ok(Array.isArray(groups) && groups.length > 0, 'StopFailure maps to hook groups');
+tests/adapters/claude-code-hooks-json.test.mjs:114:      assert.ok(matcherText.includes(type), `StopFailure must filter the "${type}" error type (full enum snapshot from platform-notes)`);
+tests/adapters/claude-code-hooks-json.test.mjs:121:  it('every command invokes node on ${CLAUDE_PLUGIN_ROOT}/…/scripts/hook.mjs', () => {
+tests/adapters/claude-code-hooks-json.test.mjs:128:        assert.ok(cmd.includes('${CLAUDE_PLUGIN_ROOT}'), `${event} command resolves under \${CLAUDE_PLUGIN_ROOT}`);
+tests/adapters/claude-code-hooks-json.test.mjs:129:        assert.ok(cmd.includes('scripts/hook.mjs'), `${event} command routes through the single entrypoint scripts/hook.mjs`);
+tests/adapters/claude-code-hooks-json.test.mjs:148:  it('StopFailure/Stop/SessionEnd=30, PreCompact=60, SessionStart=10', () => {
+
+exec
+/bin/zsh -lc 'find adapters/claude-code -maxdepth 3 -type f -print' in /Users/saksham/baton
+ succeeded in 0ms:
+adapters/claude-code/hooks/hooks.json
+adapters/claude-code/scripts/hook.mjs
+adapters/claude-code/commands/baton-setup.md
+adapters/claude-code/commands/receive.md
+adapters/claude-code/commands/handoff.md
+adapters/claude-code/skills/handoff-protocol/SKILL.md
+
+codex
+I’m checking a few implementation entry points only to classify test honesty: whether tests are asserting stored state/output rather than just reproducing arguments. The review judgment stays on the tests.
+exec
+/bin/zsh -lc "sed -n '1,280p' core/src/events/normalize.mjs" in /Users/saksham/baton
+ exited 1 in 0ms:
+sed: core/src/events/normalize.mjs: No such file or directory
+
+exec
+/bin/zsh -lc "sed -n '1,240p' core/src/commands/session-start.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { loadBundle } from '../bundle/store.mjs';
+import { parseFlags, resolveRoot } from './shared.mjs';
+
+// Per-platform receive pointers and context shapes (plan §adapters; gate-2
+// fix 8). Claude Code injects hookSpecificOutput.additionalContext, Cursor
+// expects additional_context JSON, Codex surfaces plain hook stdout.
+/** @type {Record<string, string>} */
+const RESUME_HINT = {
+  'claude-code': 'Suggest running /baton:receive to resume that task with remapped roles.',
+  codex: "Run 'baton receive --platform codex' or the baton-handoff skill to resume that task with remapped roles.",
+  cursor: "Run 'baton receive --platform cursor' to resume that task with remapped roles.",
+};
+
+/**
+ * `baton session-start` — the cheap SessionStart gate the Codex and Cursor
+ * adapters call instead of full receive preparation (gate-2 fix 8). Inspects
+ * only pending-foreign state: a bundle that is sealed OR limit-hit AND from
+ * another platform yields a harness-shaped notice on stdout; every other state
+ * — own bundle, open non-limit bundle, no bundle, corrupt tree — is a quiet
+ * no-op. ALWAYS exits 0: a session-start notice must never break a session.
+ * @param {string[]} args @param {any} io
+ * @returns {Promise<number>}
+ */
+export async function cmdSessionStart(args, io) {
+  try {
+    const { flags } = parseFlags(args);
+    const platform = typeof flags.platform === 'string' ? flags.platform : null;
+    if (!platform) {
+      io.stderr.write('baton session-start: --platform <claude-code|codex|cursor> is required — emitting nothing\n');
+      return 0;
+    }
+
+    const root = resolveRoot(io, flags);
+    // Full load (journal replay included): an unsealed limit death may live
+    // only as a post-snapshot journal note. Load warnings are deliberately
+    // not surfaced — this is a notice path, not a diagnostics path.
+    const { bundle } = loadBundle(root, io);
+    if (bundle === null) return 0;
+
+    const origin = bundle?.origin?.platform;
+    const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
+    const foreign = typeof origin === 'string' && origin !== platform;
+    if (!pending || !foreign) return 0;
+
+    const kind = bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing';
+    const msg = `A handoff bundle from ${origin} is pending in .handoff/ (${kind}). ${RESUME_HINT[platform] ?? RESUME_HINT.codex}`;
+
+    if (platform === 'cursor') {
+      io.stdout.write(JSON.stringify({ additional_context: msg }) + '\n');
+    } else if (platform === 'claude-code') {
+      io.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg } }) + '\n');
+    } else {
+      io.stdout.write(msg + '\n');
+    }
+    return 0;
+  } catch {
+    return 0;
+  }
+}
+
+exec
+/bin/zsh -lc "sed -n '1,360p' core/src/bundle/merge.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { jailRelPath } from '../util/jail.mjs';
+
+const RING_CAP = 500;
+
+/** Audit note for a refused payload — visible in the decision log, never a throw. */
+const refusalNote = (/** @type {string} */ type, /** @type {any} */ detail) =>
+  `[${type} with invalid payload refused: ${JSON.stringify(detail).slice(0, 120)}]`;
+
+/**
+ * Pure event reducer. Returns a new bundle; never mutates the input.
+ * Idempotent: an event whose dedupeKey is still in the bundle's ring is a no-op.
+ * Unknown event types degrade to a decision-log note — a checkpoint must never
+ * fail because a newer adapter emitted something this core doesn't know — and
+ * journal payloads are untrusted (gate-2 fix 6): malformed shapes degrade to a
+ * refusal note and repository paths are jailed before storage.
+ * @param {any} bundle
+ * @param {{seq: number, ts: string, type: string, dedupeKey: string, writerId?: string, source?: string, payload: any}} event
+ */
+export function applyEvent(bundle, event) {
+  if (bundle.dedupeRing.includes(event.dedupeKey)) return bundle;
+
+  const out = structuredClone(bundle);
+  const { seq, ts, type, payload = {} } = structuredClone(event);
+
+  switch (type) {
+    case 'decision': {
+      /** @type {{seq: number, ts: string, summary: any, detail?: any}} */
+      const entry = { seq, ts, summary: payload.summary };
+      if (payload.detail !== undefined) entry.detail = payload.detail;
+      out.decisions.push(entry);
+      break;
+    }
+    case 'note':
+      out.decisions.push({ seq, ts, summary: payload.text });
+      // A structured StopFailure rate_limit note marks the open bundle
+      // limit-hit (gate-2 fix 3): the unsealed limit death must be visible to
+      // the next SessionStart on any platform, not buried in the decision log.
+      if (payload.structured?.kind === 'stop-failure' && payload.errorType === 'rate_limit' && out.handoff.status === 'open') {
+        out.handoff = { ...out.handoff, reason: out.handoff.reason ?? payload.text ?? null, reasonClass: 'usage-limit' };
+      }
+      break;
+    case 'plan.set':
+      if (Array.isArray(payload.steps) && payload.steps.every((/** @type {any} */ s) => s !== null && typeof s === 'object')) {
+        out.plan.steps = payload.steps;
+      } else {
+        out.decisions.push({ seq, ts, summary: refusalNote('plan.set', payload?.steps) });
+      }
+      break;
+    case 'plan.step': {
+      if (payload === null || typeof payload !== 'object' || typeof payload.id !== 'string') {
+        out.decisions.push({ seq, ts, summary: refusalNote('plan.step', payload) });
+        break;
+      }
+      const existing = out.plan.steps.find((/** @type {any} */ s) => s.id === payload.id);
+      if (existing) Object.assign(existing, payload);
+      else out.plan.steps.push(payload);
+      break;
+    }
+    case 'file.touch': {
+      const safePath = jailRelPath(payload?.path);
+      if (safePath === null) {
+        out.decisions.push({ seq, ts, summary: refusalNote('file.touch', payload?.path) });
+        break;
+      }
+      const entry = { path: safePath, op: typeof payload.op === 'string' ? payload.op : 'touch', lastTs: ts };
+      const i = out.files.touched.findIndex((/** @type {any} */ f) => f.path === safePath);
+      if (i === -1) out.files.touched.push(entry);
+      else out.files.touched[i] = entry;
+      break;
+    }
+    case 'roles.remap':
+      if (payload?.assignments !== null && typeof payload?.assignments === 'object' && !Array.isArray(payload.assignments)) {
+        out.roles.assignments = payload.assignments;
+      } else {
+        out.decisions.push({ seq, ts, summary: refusalNote('roles.remap', payload?.assignments) });
+      }
+      break;
+    case 'task.update': {
+      /** @type {Record<string, any>} */
+      const patch = {};
+      if (typeof payload?.goal === 'string') patch.goal = payload.goal;
+      if (Array.isArray(payload?.constraints) && payload.constraints.every((/** @type {any} */ c) => typeof c === 'string')) {
+        patch.constraints = payload.constraints;
+      }
+      if (Array.isArray(payload?.acceptance)) patch.acceptance = payload.acceptance;
+      if (Object.keys(patch).length === 0) {
+        out.decisions.push({ seq, ts, summary: refusalNote('task.update', payload) });
+        break;
+      }
+      out.task = { ...out.task, ...patch };
+      break;
+    }
+    case 'git.update':
+      if (payload === null || typeof payload === 'object') out.git = payload;
+      else out.decisions.push({ seq, ts, summary: refusalNote('git.update', payload) });
+      break;
+    case 'transcript.set':
+      // Opt-in transcript tail (plan §Transcript policy): stored under the
+      // literal property name `transcript` so purge-transcript strips it from
+      // every retained copy. Render never includes it.
+      if (payload?.transcript !== null && typeof payload?.transcript === 'object' && typeof payload.transcript.tail === 'string') {
+        out.transcript = {
+          capturedAt: typeof payload.transcript.capturedAt === 'string' ? payload.transcript.capturedAt : ts,
+          tail: payload.transcript.tail,
+        };
+      } else {
+        out.decisions.push({ seq, ts, summary: refusalNote('transcript.set', 'malformed payload') });
+      }
+      break;
+    default:
+      out.decisions.push({ seq, ts, summary: `[unhandled event type '${type}' recorded as note]` });
+      break;
+  }
+
+  out.updatedAt = ts;
+  // Harden against foreign/keyless entries (gate-2 fix): a missing seq must
+  // never poison journalSeq to NaN, and an absent dedupeKey must never enter
+  // the ring (undefined in the ring dedupes every later keyless event).
+  if (typeof seq === 'number' && Number.isFinite(seq)) out.journalSeq = Math.max(out.journalSeq, seq);
+  if (typeof event.dedupeKey === 'string' && event.dedupeKey.length > 0) {
+    out.dedupeRing.push(event.dedupeKey);
+    if (out.dedupeRing.length > RING_CAP) out.dedupeRing.splice(0, out.dedupeRing.length - RING_CAP);
+  }
+
+  return out;
+}
+
+exec
+/bin/zsh -lc 'rg -n "normalize|stop-failure|structured.*stop|rate_limit|transcript_path" core/src' in /Users/saksham/baton
+ succeeded in 0ms:
+core/src/commands/detect.mjs:47:      kind: platform === 'codex' ? 'exec-json' : 'stop-failure',
+core/src/commands/checkpoint.mjs:3:import { normalizeHookPayload } from '../bundle/normalize.mjs';
+core/src/commands/checkpoint.mjs:25: * not a PreCompact payload, no usable transcript_path, or an unreadable /
+core/src/commands/checkpoint.mjs:38:  const path = raw.transcript_path;
+core/src/commands/checkpoint.mjs:105:  const events = normalizeHookPayload(raw, platform, session);
+core/src/bundle/schema.mjs:111:        err(`files.touched[${i}].path`, 'must be a normalized repo-relative path (absolute and escaping paths are refused)');
+core/src/bundle/normalize.mjs:48:export function normalizeHookPayload(raw, platform, session) {
+core/src/bundle/normalize.mjs:83:          structured: { kind: 'stop-failure', errorType },
+core/src/bundle/merge.mjs:35:      // A structured StopFailure rate_limit note marks the open bundle
+core/src/bundle/merge.mjs:38:      if (payload.structured?.kind === 'stop-failure' && payload.errorType === 'rate_limit' && out.handoff.status === 'open') {
+core/src/detect/classifier.mjs:5:  rate_limit: 'usage-limit',
+core/src/detect/classifier.mjs:52:    if (structured.kind === 'stop-failure') {
+
+exec
+/bin/zsh -lc "sed -n '1,160p' core/src/bundle/normalize.mjs && sed -n '1,150p' core/src/commands/checkpoint.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+import { hostname } from 'node:os';
+
+// Best-effort extraction of baton events from raw harness hook payloads.
+// Total: any input value yields an Event[] — garbage degrades to note events,
+// never a throw, so a checkpoint can never break the host harness.
+
+/** @typedef {{host: string, pid: number, startTime: number | null}} SessionFacts */
+
+/** @type {Record<string, string>} */
+const FILE_TOOL_OPS = { Write: 'write', Edit: 'edit' };
+
+/** @returns {SessionFacts} */
+function processFacts() {
+  return { host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin) };
+}
+
+/**
+ * A process-scoped hint for payloads lacking a stable session id. Deterministic
+ * over the identity facts: one process => one hint; unstable hints never
+ * trigger foreign-session rejection on their own (enforced at the command).
+ * @param {SessionFacts | undefined} session
+ */
+function generatedHint(session) {
+  const f = session ?? processFacts();
+  return ['unstable', f.host, f.pid, f.startTime].join(':');
+}
+
+/**
+ * @param {any} raw
+ * @param {SessionFacts | undefined} session
+ * @returns {{sessionHint: string, unstable: boolean}}
+ */
+function deriveHint(raw, session) {
+  const id = raw && typeof raw === 'object' ? raw.session_id : undefined;
+  if (typeof id === 'string' && id.length > 0) return { sessionHint: id, unstable: false };
+  return { sessionHint: generatedHint(session), unstable: true };
+}
+
+/**
+ * Normalize a parsed hook payload into baton/event@1 events. Adapters that
+ * already speak baton/event@1 pass through verbatim; raw per-harness payloads
+ * get best-effort extraction; unknowns degrade to note events. Never throws.
+ * @param {any} raw parsed JS value (the caller owns JSON.parse)
+ * @param {string} platform 'claude-code' | 'codex' | 'cursor'
+ * @param {SessionFacts} [session] identity facts for generated hints; defaults to this process
+ * @returns {any[]}
+ */
+export function normalizeHookPayload(raw, platform, session) {
+  // Passthrough tier: the adapter formed the events; return them untouched.
+  if (raw && typeof raw === 'object' && raw.schema === 'baton/event@1') {
+    if (Array.isArray(raw.events)) return raw.events;
+    return [raw];
+  }
+
+  const { sessionHint, unstable } = deriveHint(raw, session);
+  /** @param {string} type @param {Record<string, any>} payload */
+  const event = (type, payload) => ({ type, payload, source: platform, sessionHint, unstable });
+  /** @param {string} trigger */
+  const note = (trigger) => event('note', { trigger, text: 'hook ' + trigger + ' observed on ' + platform });
+
+  const eventName =
+    raw && typeof raw === 'object'
+      ? (typeof raw.hook_event_name === 'string' && raw.hook_event_name) ||
+        (platform === 'cursor' && typeof raw.event === 'string' && raw.event) ||
+        null
+      : null;
+  if (!eventName) return [note('unknown')];
+
+  if (platform === 'claude-code') {
+    if (eventName === 'PostToolUse') {
+      const op = FILE_TOOL_OPS[raw.tool_name];
+      const path = raw.tool_input && typeof raw.tool_input === 'object' ? raw.tool_input.file_path : undefined;
+      if (op && typeof path === 'string') return [event('file.touch', { path, op })];
+      return [note('PostToolUse')];
+    }
+    if (eventName === 'StopFailure') {
+      const errorType = raw.error && typeof raw.error === 'object' && typeof raw.error.type === 'string' ? raw.error.type : 'unknown';
+      return [
+        event('note', {
+          trigger: 'StopFailure',
+          text: 'turn ended on API error: ' + errorType,
+          errorType,
+          structured: { kind: 'stop-failure', errorType },
+        }),
+      ];
+    }
+    return [note(eventName)];
+  }
+
+  // Codex and Cursor (and any future platform string): every lifecycle event
+  // is a note carrying its trigger; the harness is the source.
+  return [note(eventName)];
+}
+import { bundlePaths, loadBundle, writeSnapshot, appendJournal, rotateJournal } from '../bundle/store.mjs';
+import { emptyBundle } from '../bundle/schema.mjs';
+import { normalizeHookPayload } from '../bundle/normalize.mjs';
+import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
+import { dedupeKey } from '../util/ids.mjs';
+import { safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
+import { redactSecrets } from '../util/redact.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+
+// Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
+// HANDOFF.md) re-render only on an important event type, >30 s since the last
+// snapshot, or >=10 accreted events (plan §Checkpoint engine).
+const ROUTINE_TYPES = new Set(['note', 'file.touch']);
+const THROTTLE_WINDOW_MS = 30_000;
+const THROTTLE_EVENT_COUNT = 10;
+
+// Transcript tail bounds (plan §Transcript policy): last 10 messages, 8 KB cap,
+// opt-in via baton.config.json capture.transcriptTail, PreCompact only.
+const TAIL_MESSAGES = 10;
+const TAIL_BYTES = 8192;
+
+/**
+ * Opt-in transcript-tail capture (gate-2 fix 10). Returns the bounded,
+ * redacted tail or null when the gate is closed: config off (the default),
+ * not a PreCompact payload, no usable transcript_path, or an unreadable /
+ * symlinked file. The path comes from an untrusted hook payload — it is read
+ * only under explicit opt-in, must lstat as a regular file, and its content
+ * passes the secret-redaction filter before storage.
+ * @param {string} root @param {any} raw parsed hook payload @param {any} io
+ * @returns {string | null}
+ */
+function captureTranscriptTail(root, raw, io) {
+  const cfg = safeReadJson(io.fs, `${root}/baton.config.json`);
+  if (!cfg.ok || cfg.value?.capture?.transcriptTail !== true) return null;
+
+  const eventName = raw && typeof raw === 'object' ? (raw.hook_event_name ?? raw.event) : null;
+  if (typeof eventName !== 'string' || !/precompact/i.test(eventName)) return null;
+  const path = raw.transcript_path;
+  if (typeof path !== 'string' || path.length === 0) return null;
+
+  try {
+    if (!io.fs.lstatSync(path).isFile()) return null;
+    const text = io.fs.readFileSync(path, 'utf8');
+    const lines = text.split('\n').filter((/** @type {string} */ l) => l.trim() !== '');
+    let tail = lines.slice(-TAIL_MESSAGES).join('\n');
+    if (Buffer.byteLength(tail) > TAIL_BYTES) {
+      tail = Buffer.from(tail).subarray(-TAIL_BYTES).toString('utf8');
+    }
+    return redactSecrets(tail);
+  } catch {
+    return null; // unreadable transcript is never a checkpoint failure
+  }
+}
+
+/**
+ * `baton checkpoint` — mechanical checkpoint from a hook payload on stdin.
+ * Hook-safety rule: exit 0 on every soft failure so a checkpoint can never
+ * break the host harness; `--strict` opts into hard failures (CI).
+ * @param {string[]} args @param {any} io
+ * @returns {Promise<number>}
+ */
+export async function cmdCheckpoint(args, io) {
+  const { flags } = parseFlags(args);
+  const strict = flags.strict === true;
+  const platform = typeof flags.platform === 'string' ? flags.platform : null;
+  if (!platform) return usageError(io, flags, 'checkpoint', '--platform <claude-code|codex|cursor> is required');
+
+  try {
+    return await run(flags, platform, io);
+  } catch (err) {
+    const msg = /** @type {any} */ (err)?.message ?? String(err);
+    if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'checkpoint-failed', msg } });
+    io.stderr.write(`baton checkpoint: ${msg}\n`);
+    return strict ? 1 : 0;
+  }
+}
+
+/**
+ * @param {Record<string, string | boolean>} flags
+ * @param {string} platform
+ * @param {any} io
+ * @returns {Promise<number>}
+ */
+async function run(flags, platform, io) {
+  const strict = flags.strict === true;
+  const root = resolveRoot(io, flags);
+  const paths = bundlePaths(root);
+  // The --json contract (gate-2 fix 11): exactly one envelope on stdout for
+  // every exit path — the exit code stays governed by hook-safety.
+  const finish = (/** @type {any} */ env, /** @type {number} */ code) => {
+    if (flags.json) emitEnvelope(io, env);
+    return code;
+  };
+
+  /** @type {any} */
+  let raw;
+  try {
+    raw = JSON.parse(typeof io.stdin === 'string' ? io.stdin : '');
+  } catch {
+    io.stderr.write('baton checkpoint: stdin could not be parsed as JSON — input ignored\n');
+    return finish({ ok: false, error: { code: 'bad-stdin', msg: 'stdin could not be parsed as JSON' } }, strict ? 1 : 0);
+  }
+
+  const session = { host: io.host, pid: io.pid, startTime: io.startTime };
+  const events = normalizeHookPayload(raw, platform, session);
+  if (events.length === 0) return finish({ ok: true, data: { events: 0, rewritten: false } }, 0);
+
+  // Opt-in transcript tail (gate-2 fix 10): rides the journal as its own
+  // IMPORTANT event so the snapshot rewrite below persists it, and purge can
+  // strip it from every retained copy by its property name.
+  const tail = captureTranscriptTail(root, raw, io);
+  if (tail !== null) {
+    events.push({
+      type: 'transcript.set',
+      payload: { transcript: { capturedAt: io.now(), tail } },
+      source: platform,
+      sessionHint: events[0]?.sessionHint,
+      unstable: events[0]?.unstable ?? true,
+    });
+  }
+
+  const { bundle, warnings, unsafe } = loadBundle(root, io);
+  for (const w of warnings) io.stderr.write(`baton checkpoint: ${w}\n`);
+
+  // An unsafe managed tree (symlinked .handoff — gate-2 fix 6) is NOT "no
+  // bundle yet": seeding here would write through the link. Refuse everything;
+  // hook-safety keeps the refusal soft outside --strict.
+  if (unsafe === true) {
+    io.stderr.write('baton checkpoint: managed tree failed the symlink/realpath jail — nothing written\n');
+    return finish({ ok: false, error: { code: 'unsafe-tree', msg: warnings[0] ?? 'managed tree failed the jail check' } }, strict ? 1 : 0);
+  }
+
+  // Opt-in debounce (gate-2 major 14; Cursor afterFileEdit fires per edit):
+  // at most one real checkpoint per window, tracked by a per-platform stamp.
+  if (flags.debounce !== undefined) {
+    const seconds = Number(flags.debounce);
+    if (!Number.isFinite(seconds) || seconds <= 0) return usageError(io, flags, 'checkpoint', '--debounce <seconds> must be a positive number');
+    const stampPath = `${paths.logDir}/debounce-${platform}.json`;
+    const stamp = safeReadJson(io.fs, stampPath);
+    if (stamp.ok && typeof stamp.value?.at === 'string' && Date.parse(io.now()) - Date.parse(stamp.value.at) < seconds * 1000) {
+      return finish({ ok: true, data: { events: 0, rewritten: false, debounced: true } }, 0);
+    }
+    ensureDir(io.fs, paths.logDir);
+    atomicWriteJson(io.fs, stampPath, { at: io.now() });
+  }
+
+  let active = bundle;
+  let mustRewrite = false;
+
+  // Semantic isolation (plan §Concurrency): a stable foreign session or a
+
+exec
+/bin/zsh -lc "nl -ba tests/unit/redact.test.mjs | sed -n '1,70p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { redactSecrets } from '../../core/src/util/redact.mjs';
+     4	
+     5	// ---------------------------------------------------------------------------
+     6	// Gate-2 fix 10 / plan §Transcript policy: transcript tails pass through a
+     7	// secret-redaction filter before storage. Planted-secret fixtures prove each
+     8	// pattern class; ordinary prose and code survive untouched.
+     9	// ---------------------------------------------------------------------------
+    10	
+    11	const PLANTED = [
+    12	  ['anthropic/openai style key', 'my key is sk-ant-api03-AbCdEfGh1234567890xyz'],
+    13	  ['aws access key id', 'export AWS_KEY=AKIAIOSFODNN7EXAMPLE'],
+    14	  ['github token', 'push with ghp_16C7e42F292c6912E7710c838347Ae178B4a'],
+    15	  ['slack token', 'slack: xoxb-2508459822-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx'],
+    16	  ['bearer header', 'Authorization: Bearer eyAbCdEf0123456789.abcdef0123456789'],
+    17	  ['jwt', 'jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'],
+    18	  ['generic api_key assignment', 'api_key = "hunter2hunter2hunter2"'],
+    19	  ['password assignment', 'password: supersecret99'],
+    20	  ['pem private key', ['-----BEGIN RSA PRIVATE KEY-----', 'MIIEowIBAAKCAQEA7bq4', '-----END RSA PRIVATE KEY-----'].join('\n')],
+    21	];
+    22	
+    23	describe('redactSecrets — planted secrets are removed', () => {
+    24	  for (const [label, text] of PLANTED) {
+    25	    it(`redacts ${label}`, () => {
+    26	      const out = redactSecrets(text);
+    27	      assert.match(out, /\[redacted\]/, `expected a redaction marker in: ${out}`);
+    28	      // The secret material itself must be gone (check a distinctive fragment).
+    29	      const fragment = text.match(/(?:sk-ant-\S+|AKIA\w+|ghp_\w+|xoxb-\S+|eyJ\S+|hunter2\w*|supersecret99|MIIEowIBAAKCAQEA7bq4)/)?.[0];
+    30	      if (fragment) assert.ok(!out.includes(fragment), `secret fragment survived redaction: ${out}`);
+    31	    });
+    32	  }
+    33	
+    34	  it('leaves ordinary prose and code untouched', () => {
+    35	    const text = 'Refactor applyEvent in merge.mjs; the dedupe ring caps at 500 entries. See docs/design/core.md.';
+    36	    assert.equal(redactSecrets(text), text);
+    37	  });
+    38	
+    39	  it('is safe on non-strings', () => {
+    40	    assert.equal(redactSecrets(''), '');
+    41	  });
+    42	});
+
+codex
+I found one clear hollow redaction assertion: the bearer-token fixture checks for a marker but its “distinctive fragment” regex does not match that token class, so a partial redaction could leave the token behind and still pass. I’m doing one final pass over coverage mapping before I write the verdict.
+exec
+/bin/zsh -lc "nl -ba tests/commands/session-start.test.mjs | sed -n '1,150p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/commands/checkpoint-pipeline.test.mjs | sed -n '1,140p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { cmdSessionStart } from '../../core/src/commands/session-start.mjs';
+     5	
+     6	// ---------------------------------------------------------------------------
+     7	// Gate-2 fix 8 (reviewer-a finding 11): Codex and Cursor SessionStart hooks
+     8	// used to run FULL receive preparation — exit-1 noise with no bundle, a resume
+     9	// prompt for the session's own open bundle, and the wrong output shape for
+    10	// Cursor. `baton session-start` is the cheap gate the adapters call instead:
+    11	// it inspects only pending-foreign state (sealed OR limit-hit, AND from
+    12	// another platform), emits the harness-specific context shape, and ALWAYS
+    13	// exits 0 — a session-start notice must never break a session.
+    14	//
+    15	// Pending matrix mirrors the claude-code hook contract (S3):
+    16	//   positive:  foreign SEALED bundle                       -> context
+    17	//   positive:  foreign OPEN + reasonClass usage-limit      -> context
+    18	//   negative:  foreign OPEN non-limit                      -> nothing
+    19	//   negative:  own-platform sealed / open                  -> nothing
+    20	//   negative:  no bundle / no .handoff                     -> nothing
+    21	// ---------------------------------------------------------------------------
+    22	
+    23	const T0 = '2026-07-12T00:00:00.000Z';
+    24	
+    25	function bundleWith(overrides = {}) {
+    26	  const b = {
+    27	    schema: 'baton/bundle@1',
+    28	    bundleId: 'b_sessionstart00',
+    29	    generation: 1,
+    30	    createdAt: T0,
+    31	    updatedAt: T0,
+    32	    origin: { platform: 'claude-code', model: 'claude-fable-5', sessionHint: 'sess-cc', unstable: false },
+    33	    task: { goal: 'g', constraints: [], acceptance: [] },
+    34	    plan: { steps: [] },
+    35	    decisions: [],
+    36	    files: { touched: [] },
+    37	    roles: { assignments: {} },
+    38	    git: null,
+    39	    handoff: { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+    40	    journalSeq: 0,
+    41	    compaction: { droppedDecisions: 0, note: null },
+    42	    dedupeRing: [],
+    43	  };
+    44	  return { ...b, ...overrides, handoff: { ...b.handoff, ...(overrides.handoff ?? {}) }, origin: { ...b.origin, ...(overrides.origin ?? {}) } };
+    45	}
+    46	
+    47	const withBundle = (b) => makeIo({ files: { '/repo/.handoff/bundle.json': JSON.stringify(b, null, 2) + '\n' } });
+    48	
+    49	describe('session-start — pending-foreign matrix (always exit 0)', () => {
+    50	  it('foreign sealed bundle -> codex gets a plain-text notice', async () => {
+    51	    const io = withBundle(bundleWith({ handoff: { status: 'sealed', reason: 'limits', finalizedAt: T0 } }));
+    52	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    53	    const out = io.stdoutText();
+    54	    assert.match(out, /claude-code/, 'names the origin platform');
+    55	    assert.match(out, /sealed/);
+    56	    assert.match(out, /receive/, 'points at the receive flow');
+    57	    assert.doesNotMatch(out, /[{}]/, 'codex context is plain text, not JSON');
+    58	  });
+    59	
+    60	  it('foreign open limit-hit bundle (unsealed limit death) -> notice', async () => {
+    61	    const io = withBundle(bundleWith({ handoff: { status: 'open', reasonClass: 'usage-limit' } }));
+    62	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    63	    assert.match(io.stdoutText(), /limit-hit/);
+    64	  });
+    65	
+    66	  it('limit-hit visible ONLY in the journal (post-snapshot note) still surfaces', async () => {
+    67	    const io = withBundle(bundleWith({}));
+    68	    const note = {
+    69	      seq: 1,
+    70	      ts: T0,
+    71	      type: 'note',
+    72	      dedupeKey: 'k-limit',
+    73	      payload: { text: 'rate limited', structured: { kind: 'stop-failure' }, errorType: 'rate_limit' },
+    74	    };
+    75	    io.fs.writeFileSync('/repo/.handoff/journal.ndjson', JSON.stringify(note) + '\n');
+    76	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    77	    assert.match(io.stdoutText(), /limit-hit/, 'the cheap path must replay the journal, not trust the stale snapshot');
+    78	  });
+    79	
+    80	  it('foreign open NON-limit bundle -> quiet', async () => {
+    81	    const io = withBundle(bundleWith({}));
+    82	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    83	    assert.equal(io.stdoutText(), '');
+    84	  });
+    85	
+    86	  it('own-platform sealed bundle -> quiet (own work is not a pending handoff)', async () => {
+    87	    const io = withBundle(bundleWith({ origin: { platform: 'codex', model: 'gpt-5.6-sol' }, handoff: { status: 'sealed', reason: 'r' } }));
+    88	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    89	    assert.equal(io.stdoutText(), '');
+    90	  });
+    91	
+    92	  it('no .handoff at all -> quiet exit 0 (the old receive prep exited 1 here)', async () => {
+    93	    const io = makeIo({ files: { '/repo/x.txt': 'x' } });
+    94	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+    95	    assert.equal(io.stdoutText(), '');
+    96	  });
+    97	
+    98	  it('corrupt snapshot with no journal -> quiet exit 0, never a throw', async () => {
+    99	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': 'not json{{' } });
+   100	    assert.equal(await cmdSessionStart(['--platform', 'codex'], io), 0);
+   101	    assert.equal(io.stdoutText(), '');
+   102	  });
+   103	
+   104	  it('missing --platform -> exit 0 with a stderr note, nothing on stdout', async () => {
+   105	    const io = withBundle(bundleWith({ handoff: { status: 'sealed' } }));
+   106	    assert.equal(await cmdSessionStart([], io), 0);
+   107	    assert.equal(io.stdoutText(), '');
+   108	    assert.match(io.stderrText(), /--platform/);
+   109	  });
+   110	});
+   111	
+   112	describe('session-start — harness-specific context shapes', () => {
+   113	  const sealed = () => bundleWith({ handoff: { status: 'sealed', reason: 'limits', finalizedAt: T0 } });
+   114	
+   115	  it('cursor gets {"additional_context": …} JSON', async () => {
+   116	    const io = withBundle(sealed());
+   117	    assert.equal(await cmdSessionStart(['--platform', 'cursor'], io), 0);
+   118	    const parsed = JSON.parse(io.stdoutText());
+   119	    assert.equal(typeof parsed.additional_context, 'string');
+   120	    assert.match(parsed.additional_context, /claude-code/);
+   121	    assert.equal(parsed.hookSpecificOutput, undefined);
+   122	  });
+   123	
+   124	  it('claude-code gets the hookSpecificOutput shape', async () => {
+   125	    const io = withBundle(bundleWith({ origin: { platform: 'codex', model: 'gpt-5.6-sol' }, handoff: { status: 'sealed', reason: 'r' } }));
+   126	    assert.equal(await cmdSessionStart(['--platform', 'claude-code'], io), 0);
+   127	    const parsed = JSON.parse(io.stdoutText());
+   128	    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
+   129	    assert.match(parsed.hookSpecificOutput.additionalContext, /codex/);
+   130	  });
+   131	});
+
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { cmdCheckpoint } from '../../core/src/commands/checkpoint.mjs';
+     5	import { writeSnapshot } from '../../core/src/bundle/store.mjs';
+     6	import { emptyBundle } from '../../core/src/bundle/schema.mjs';
+     7	
+     8	// ---------------------------------------------------------------------------
+     9	// Gate-2 fix 10 (reviewer-a finding 4 / reviewer-b finding 8): the plan's
+    10	// checkpoint pipeline features shipped unwired — no git capture at checkpoint,
+    11	// capture.transcriptTail a dead config key, compact() never called at runtime.
+    12	// This file pins all three into the observable command surface.
+    13	// ---------------------------------------------------------------------------
+    14	
+    15	const T0 = '2026-07-12T00:00:00.000Z';
+    16	
+    17	const GIT_OK = {
+    18	  'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' },
+    19	  'git rev-parse HEAD': { stdout: 'abc1234def\n' },
+    20	  'git status --porcelain': { stdout: ' M src/a.js\n' },
+    21	  'git diff --cached': { stdout: '' },
+    22	  'git diff': { stdout: 'diff --git a/src/a.js b/src/a.js\n' },
+    23	  'git ls-files --others --exclude-standard': { stdout: '' },
+    24	};
+    25	
+    26	// An IMPORTANT event (decision is not a routine type) forces a snapshot rewrite.
+    27	const importantEvent = JSON.stringify({ schema: 'baton/event@1', type: 'decision', payload: { summary: 'chose approach A' } });
+    28	
+    29	const bundleJson = () => JSON.stringify(emptyBundle({ platform: 'claude-code', model: 'm', goal: 'g' }, T0), null, 2) + '\n';
+    30	
+    31	describe('checkpoint — bounded git refresh on important checkpoints', () => {
+    32	  it('an important event captures branch/HEAD/dirty into the snapshot', async () => {
+    33	    const io = makeIo({
+    34	      files: { '/repo/.handoff/bundle.json': bundleJson() },
+    35	      stdin: importantEvent,
+    36	      execResults: GIT_OK,
+    37	      now: T0,
+    38	    });
+    39	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    40	    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    41	    assert.equal(snap.git?.branch, 'main');
+    42	    assert.equal(snap.git?.headSha, 'abc1234def');
+    43	    assert.equal(snap.git?.dirty, true);
+    44	  });
+    45	
+    46	  it('git unavailable degrades silently — checkpoint still lands, git stays null', async () => {
+    47	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': bundleJson() }, stdin: importantEvent, now: T0 });
+    48	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    49	    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    50	    assert.equal(snap.git, null);
+    51	    assert.ok(snap.decisions.some((/** @type {any} */ d) => d.summary === 'chose approach A'));
+    52	  });
+    53	});
+    54	
+    55	describe('checkpoint — config-gated transcript tail capture (plan §Transcript policy)', () => {
+    56	  const messages = [];
+    57	  for (let i = 1; i <= 14; i++) messages.push(JSON.stringify({ role: i % 2 ? 'user' : 'assistant', content: `message-${i}` }));
+    58	  messages.push(JSON.stringify({ role: 'assistant', content: 'the key is sk-ant-api03-PLANTEDSECRET123456 ok' }));
+    59	  const transcript = messages.join('\n') + '\n';
+    60	  const preCompact = JSON.stringify({ hook_event_name: 'PreCompact', session_id: 's1', transcript_path: '/repo/.claude/t.jsonl' });
+    61	
+    62	  const files = (config) => ({
+    63	    '/repo/.handoff/bundle.json': bundleJson(),
+    64	    '/repo/.claude/t.jsonl': transcript,
+    65	    ...(config === null ? {} : { '/repo/baton.config.json': JSON.stringify(config) }),
+    66	  });
+    67	
+    68	  it('OFF by default: no transcript field even at PreCompact with a path', async () => {
+    69	    const io = makeIo({ files: files(null), stdin: preCompact, now: T0 });
+    70	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    71	    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    72	    assert.equal(snap.transcript, undefined);
+    73	    assert.doesNotMatch(io.files()['/repo/.handoff/journal.ndjson'] ?? '', /message-1/);
+    74	  });
+    75	
+    76	  it('ON: captures the bounded, redacted tail at PreCompact; HANDOFF.md never shows it', async () => {
+    77	    const io = makeIo({
+    78	      files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),
+    79	      stdin: preCompact,
+    80	      now: T0,
+    81	    });
+    82	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    83	    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    84	    assert.equal(typeof snap.transcript?.tail, 'string');
+    85	    assert.match(snap.transcript.tail, /message-14/, 'recent messages are in the tail');
+    86	    assert.doesNotMatch(snap.transcript.tail, /message-1\b/, 'only the LAST 10 messages are kept');
+    87	    assert.ok(Buffer.byteLength(snap.transcript.tail) <= 8192, '8 KB cap enforced');
+    88	    assert.doesNotMatch(snap.transcript.tail, /PLANTEDSECRET/, 'planted secret is redacted');
+    89	    assert.match(snap.transcript.tail, /\[redacted\]/);
+    90	    assert.doesNotMatch(io.files()['/repo/.handoff/HANDOFF.md'], /message-14|\[redacted\]/, 'the tail is excluded from HANDOFF.md');
+    91	  });
+    92	
+    93	  it('ON but a routine Stop event (not PreCompact): no capture', async () => {
+    94	    const io = makeIo({
+    95	      files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),
+    96	      stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 's1', transcript_path: '/repo/.claude/t.jsonl' }),
+    97	      now: T0,
+    98	    });
+    99	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+   100	    const snapText = io.files()['/repo/.handoff/bundle.json'];
+   101	    assert.doesNotMatch(snapText, /message-14/);
+   102	  });
+   103	});
+   104	
+   105	describe('writeSnapshot — compaction runs in the snapshot write path', () => {
+   106	  it('an oversized decision log is truncated with the compaction marker on disk', () => {
+   107	    const b = emptyBundle({ platform: 'claude-code', model: 'm', goal: 'g' }, T0);
+   108	    for (let i = 1; i <= 250; i++) b.decisions.push({ seq: i, ts: T0, summary: `decision-${i}` });
+   109	    b.journalSeq = 250;
+   110	    const io = makeIo({ files: { '/repo/x.txt': 'x' }, now: T0 });
+   111	    writeSnapshot('/repo', b, io);
+   112	    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+   113	    assert.ok(snap.decisions.length < 250, `decisions were compacted (got ${snap.decisions.length})`);
+   114	    assert.ok(snap.decisions.some((/** @type {any} */ d) => /compacted:/.test(d.summary)), 'the compaction marker is present');
+   115	    assert.ok(snap.compaction.droppedDecisions > 0);
+   116	    assert.ok(snap.decisions.some((/** @type {any} */ d) => d.summary === 'decision-250'), 'the newest decisions survive');
+   117	    assert.ok(snap.decisions.some((/** @type {any} */ d) => d.summary === 'decision-1'), 'the earliest decisions survive');
+   118	  });
+   119	});
+
+exec
+/bin/zsh -lc "nl -ba tests/adapters/codex-templates.test.mjs | sed -n '95,145p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    95	// ===========================================================================
+    96	describe('codex hooks.json template — event coverage (C2)', () => {
+    97	  it('configures EXACTLY Stop, PreCompact, SessionStart (no StopFailure on Codex)', () => {
+    98	    const hooks = loadHooks();
+    99	    assert.deepEqual([...Object.keys(hooks)].sort(), [...EXPECTED_EVENTS].sort());
+   100	  });
+   101	});
+   102	
+   103	// ===========================================================================
+   104	describe('codex hooks.json template — command wiring reaches baton (C1, C3)', () => {
+   105	  it('EVERY Stop + PreCompact command is checkpoint --platform codex; EVERY SessionStart command is session-start --platform codex', () => {
+   106	    const hooks = loadHooks();
+   107	    for (const event of EXPECTED_EVENTS) {
+   108	      for (const item of commandItems(hooks, event)) {
+   109	        assert.equal(item.type, 'command', `${event} hooks are command hooks`);
+   110	        assert.ok(String(item.command).includes('baton'), `${event} command invokes baton`);
+   111	      }
+   112	    }
+   113	    // (iter-2) The Windows override is a full peer of `command`: every
+   114	    // per-event expectation is asserted on BOTH strings, so a Windows machine
+   115	    // gets the same subcommand/platform/fallback wiring.
+   116	    const bothCommands = (/** @type {any} */ i) => [i.command, i.commandWindows ?? i.command_windows].filter((c) => typeof c === 'string');
+   117	    for (const event of ['Stop', 'PreCompact']) {
+   118	      for (const i of commandItems(hooks, event)) {
+   119	        for (const cmd of bothCommands(i)) {
+   120	          assert.match(String(cmd), /checkpoint/, `${event} -> checkpoint (command and Windows override)`);
+   121	          assert.match(String(cmd), /--platform codex\b/, `(V8/iter-2) the ${event} checkpoint carries --platform codex on both command strings`);
+   122	        }
+   123	      }
+   124	    }
+   125	    for (const i of commandItems(hooks, 'SessionStart')) {
+   126	      for (const cmd of bothCommands(i).map(String)) {
+   127	        assert.doesNotMatch(cmd, /checkpoint/, 'SessionStart is a pending-handoff notice, not a checkpoint (both command strings)');
+   128	        // (gate-2 fix 8) SessionStart must NOT run full receive preparation —
+   129	        // that exits 1 with no bundle and prompts for the session's own open
+   130	        // bundle. The cheap pending-foreign gate is `baton session-start`.
+   131	        assert.doesNotMatch(cmd, /receive/, '(gate-2 fix 8) SessionStart never runs receive preparation');
+   132	        assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
+   133	        assert.match(cmd, /--platform codex\b/, '(V8/iter-2) the notice carries --platform codex on both command strings');
+   134	      }
+   135	    }
+   136	  });
+   137	});
+   138	
+   139	// ===========================================================================
+   140	describe('codex hooks.json template — Windows overrides present (C4)', () => {
+   141	  it('every command hook carries a commandWindows override', () => {
+   142	    const hooks = loadHooks();
+   143	    for (const event of EXPECTED_EVENTS) {
+   144	      for (const item of commandItems(hooks, event)) {
+   145	        assert.ok(hasWinOverride(item), `${event} command carries a commandWindows override`);
+
+exec
+/bin/zsh -lc "nl -ba tests/adapters/cursor-templates.test.mjs | sed -n '105,150p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   105	});
+   106	
+   107	// ===========================================================================
+   108	describe('cursor hooks.json template — command wiring (U1, U4)', () => {
+   109	  it('every item is a flat {command} invoking baton; EVERY checkpoint item carries --platform cursor; sessionStart is session-start --platform cursor', () => {
+   110	    const { hooks } = loadCfg();
+   111	    for (const event of EXPECTED_EVENTS) {
+   112	      for (const item of items(hooks, event)) {
+   113	        assert.ok(typeof item.command === 'string' && item.command.length > 0, `${event} item is a flat {command} string`);
+   114	        assert.ok(item.command.includes('baton'), `${event} command invokes baton`);
+   115	      }
+   116	    }
+   117	    for (const event of CHECKPOINT_EVENTS) {
+   118	      for (const i of items(hooks, event)) {
+   119	        assert.match(String(i.command), /checkpoint/, `${event} -> checkpoint`);
+   120	        assert.match(String(i.command), /--platform cursor\b/, `(V9) the ${event} checkpoint carries --platform cursor`);
+   121	      }
+   122	    }
+   123	    for (const i of items(hooks, 'sessionStart')) {
+   124	      const cmd = String(i.command);
+   125	      assert.doesNotMatch(cmd, /checkpoint/, 'sessionStart is a pending-handoff notice, not a checkpoint');
+   126	      // (gate-2 fix 8) sessionStart must NOT run full receive preparation —
+   127	      // exit-1 noise with no bundle, prompts for own open bundles, and the
+   128	      // wrong output shape for Cursor. `baton session-start` emits the Cursor
+   129	      // additional_context JSON and always exits 0.
+   130	      assert.doesNotMatch(cmd, /receive/, '(gate-2 fix 8) sessionStart never runs receive preparation');
+   131	      assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
+   132	      assert.match(cmd, /--platform cursor\b/, '(V9) the notice carries --platform cursor');
+   133	    }
+   134	  });
+   135	});
+   136	
+   137	// ===========================================================================
+   138	describe('cursor hooks.json template — git-commit matcher + no Windows override (U5, U6)', () => {
+   139	  it('beforeShellExecution carries a matcher that SPECIFICALLY identifies git commits (git-anchored, not bare "commit")', () => {
+   140	    const { hooks } = loadCfg();
+   141	    const matchers = items(hooks, 'beforeShellExecution').map((i) => String(i.matcher ?? ''));
+   142	    // (V10) 'git' must precede 'commit' in the matcher — a bare /commit/ matcher
+   143	    // (which would also fire on e.g. `svn commit` or `commitlint`) fails this.
+   144	    // (iter-2) EVERY item must carry a git-anchored matcher: `some` would let a
+   145	    // valid matcher coexist with an unfiltered sibling that still fires on
+   146	    // non-git commits.
+   147	    assert.ok(matchers.length > 0, 'beforeShellExecution carries at least one hook item');
+   148	    for (const m of matchers) {
+   149	      assert.match(
+   150	        m,
+
+exec
+/bin/zsh -lc 'rg -n "print-prompt|receive --print-prompt|lockRetry|session-start|PLANTEDSECRET|Bearer" tests/adapters/codex-templates.test.mjs tests/adapters/cursor-templates.test.mjs tests/integration/e2e-failover.test.mjs tests/unit/redact.test.mjs tests/integration/lock-concurrency.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+tests/unit/redact.test.mjs:16:  ['bearer header', 'Authorization: Bearer eyAbCdEf0123456789.abcdef0123456789'],
+tests/adapters/codex-templates.test.mjs:33://       pending-foreign gate `session-start --platform codex` (gate-2 fix 8 —
+tests/adapters/codex-templates.test.mjs:105:  it('EVERY Stop + PreCompact command is checkpoint --platform codex; EVERY SessionStart command is session-start --platform codex', () => {
+tests/adapters/codex-templates.test.mjs:130:        // bundle. The cheap pending-foreign gate is `baton session-start`.
+tests/adapters/codex-templates.test.mjs:132:        assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
+tests/adapters/cursor-templates.test.mjs:34://       the cheap pending-foreign gate `session-start --platform cursor`
+tests/adapters/cursor-templates.test.mjs:109:  it('every item is a flat {command} invoking baton; EVERY checkpoint item carries --platform cursor; sessionStart is session-start --platform cursor', () => {
+tests/adapters/cursor-templates.test.mjs:128:      // wrong output shape for Cursor. `baton session-start` emits the Cursor
+tests/adapters/cursor-templates.test.mjs:131:      assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
+tests/integration/e2e-failover.test.mjs:130:    lockRetry: { attempts: 2, delayMs: 5 },
+tests/integration/e2e-failover.test.mjs:316:    // --print-prompt is read-only: prints the prompt, mutates nothing.
+tests/integration/e2e-failover.test.mjs:319:    assert.equal(await cmdReceive(['--platform', 'codex', '--print-prompt', '--origin', 'claude-code', '--reason', CC_LIMIT], printIo), 0);
+tests/integration/e2e-failover.test.mjs:320:    assert.ok(printIo.stdoutText().includes(GOAL), '--print-prompt writes the prompt to stdout');
+tests/integration/e2e-failover.test.mjs:321:    assert.deepEqual(snapshotTree(cwd), before, '--print-prompt mutates nothing under .handoff/');
+
+exec
+/bin/zsh -lc "nl -ba tests/templates/templates-contract.test.mjs | sed -n '55,150p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    55	  let end = lines.length;
+    56	  for (let i = start + 1; i < lines.length; i++) {
+    57	    if (/^## /.test(lines[i])) {
+    58	      end = i;
+    59	      break;
+    60	    }
+    61	  }
+    62	  return lines.slice(start, end);
+    63	}
+    64	
+    65	describe('AGENTS.md.tpl — ten-section contract within budgets', () => {
+    66	  it('carries all ten mandated sections', () => {
+    67	    for (const re of SECTIONS) assert.match(AGENTS, re, `missing section ${re}`);
+    68	  });
+    69	
+    70	  it('fits the 220-line budget; the handoff section fits 25 lines', () => {
+    71	    assert.ok(AGENTS.split('\n').length <= 220, `AGENTS.md.tpl is ${AGENTS.split('\n').length} lines (budget 220)`);
+    72	    assert.ok(sectionLines(AGENTS, /^##.*handoff/i).length <= 25, 'handoff section exceeds its 25-line budget');
+    73	  });
+    74	
+    75	  it('states the attribution invariant, commit cadence, and never-commit-.handoff', () => {
+    76	    assert.match(AGENTS, /NEVER.*(AI attribution|Co-Authored-By)/is, 'the zero-AI-attribution invariant is stated');
+    77	    assert.match(AGENTS, /commit after every completed subtask/i);
+    78	    assert.match(AGENTS, /NEVER commit `?\.handoff/i);
+    79	  });
+    80	
+    81	  it('review gates carry the 5-iteration hard cap', () => {
+    82	    assert.match(sectionLines(AGENTS, /^##.*review gates/i).join('\n'), /5 iterations/i);
+    83	  });
+    84	
+    85	  it('roles section points at the resolver, never hardcoded model names', () => {
+    86	    const s = sectionLines(AGENTS, /^##.*roles and models/i).join('\n');
+    87	    assert.match(s, /baton remap/);
+    88	    assert.match(s, /[Nn]ever hardcode model names/);
+    89	  });
+    90	
+    91	  it('uses {{TEST_CMD}} in validation so init can fill it from detection', () => {
+    92	    assert.match(sectionLines(AGENTS, /^##.*validation/i).join('\n'), /\{\{TEST_CMD\}\}/);
+    93	  });
+    94	});
+    95	
+    96	describe('CLAUDE.md.tpl — @AGENTS.md shim', () => {
+    97	  it('first line is the @AGENTS.md import', () => {
+    98	    assert.equal(CLAUDE.split('\n')[0].trim(), '@AGENTS.md');
+    99	  });
+   100	
+   101	  it('has at most 8 bullets and stays a shim (<= 20 lines)', () => {
+   102	    const bullets = CLAUDE.split('\n').filter((l) => /^\s*-\s/.test(l));
+   103	    assert.ok(bullets.length <= 8, `${bullets.length} bullets (budget 8)`);
+   104	    assert.ok(CLAUDE.split('\n').length <= 20, 'CLAUDE.md.tpl must stay a shim');
+   105	  });
+   106	});
+   107	
+   108	describe('planInit — {{VAR}} filling from detection', () => {
+   109	  it('fills TEST_CMD from package.json scripts.test and leaves no {{ in previews', () => {
+   110	    const io = makeIo({ files: seedFiles({ '/repo/package.json': JSON.stringify({ name: 'demo-app', scripts: { test: 'node --test' } }) }) });
+   111	    const actions = planInit('/repo', {}, io);
+   112	    const agents = actions.find((a) => a.id === 'agents');
+   113	    assert.equal(agents.op, 'write');
+   114	    assert.match(agents.preview, /npm test/);
+   115	    for (const a of actions) {
+   116	      if (typeof a.preview === 'string') assert.doesNotMatch(a.preview, /\{\{/, `${a.id} preview still contains an unfilled {{VAR}}`);
+   117	    }
+   118	  });
+   119	
+   120	  it('falls back to an explicit fill-me hint when nothing is detectable', () => {
+   121	    const io = makeIo({ files: seedFiles({ '/repo/x.txt': 'x' }) });
+   122	    const agents = planInit('/repo', {}, io).find((a) => a.id === 'agents');
+   123	    assert.doesNotMatch(agents.preview, /\{\{/);
+   124	  });
+   125	});
+   126	
+   127	describe('init --check — CI drift gate', () => {
+   128	  const seeded = () => makeIo({ files: seedFiles({ '/repo/package.json': JSON.stringify({ name: 'demo', scripts: { test: 'node --test' } }) }) });
+   129	
+   130	  it('fails before init (everything would be written), passes right after init', async () => {
+   131	    const io = seeded();
+   132	    assert.equal(await cmdInit(['--check', '--root', '/repo'], io), 1, 'a fresh tree drifts by definition');
+   133	
+   134	    const io2 = seeded();
+   135	    assert.equal(await cmdInit(['--root', '/repo'], io2), 0);
+   136	    const before = io2.files();
+   137	    assert.equal(await cmdInit(['--check', '--root', '/repo'], io2), 0, 'freshly scaffolded tree has no drift');
+   138	    assert.deepEqual(io2.files(), before, '--check is read-only');
+   139	  });
+   140	
+   141	  it('detects drift inside a managed block', async () => {
+   142	    const io = seeded();
+   143	    await cmdInit(['--root', '/repo'], io);
+   144	    const tampered = io.fs.readFileSync('/repo/AGENTS.md', 'utf8').replace('baton remap', 'hardcoded-model');
+   145	    io.fs.writeFileSync('/repo/AGENTS.md', tampered);
+   146	    assert.equal(await cmdInit(['--check', '--root', '/repo'], io), 1);
+   147	    assert.match(io.stderrText() + io.stdoutText(), /drift|would write/i);
+   148	  });
+   149	});
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/envelopes.test.mjs | sed -n '1,100p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { run } from '../../core/src/cli.mjs';
+     5	import { cmdCheckpoint } from '../../core/src/commands/checkpoint.mjs';
+     6	import { cmdDetect } from '../../core/src/commands/detect.mjs';
+     7	import { cmdFinalize } from '../../core/src/commands/finalize.mjs';
+     8	import { cmdReceive } from '../../core/src/commands/receive.mjs';
+     9	import { cmdRemap } from '../../core/src/commands/remap.mjs';
+    10	
+    11	// ---------------------------------------------------------------------------
+    12	// Gate-2 fix 11 (reviewer-b finding 9): the --json contract is "exactly one
+    13	// compact envelope {ok,data,warnings,error} on stdout" for EVERY exit path —
+    14	// checkpoint emitted none and usage errors bypassed the envelope everywhere.
+    15	// ---------------------------------------------------------------------------
+    16	
+    17	/** stdout must be exactly one parseable envelope line. */
+    18	function theEnvelope(io) {
+    19	  const out = io.stdoutText().trim();
+    20	  const lines = out === '' ? [] : out.split('\n');
+    21	  assert.equal(lines.length, 1, `expected exactly one stdout line, got: ${JSON.stringify(io.stdoutText())}`);
+    22	  const env = JSON.parse(lines[0]);
+    23	  for (const k of ['ok', 'data', 'warnings', 'error']) assert.ok(k in env, `envelope carries ${k}`);
+    24	  return env;
+    25	}
+    26	
+    27	const EVENT = JSON.stringify({ schema: 'baton/event@1', type: 'decision', payload: { summary: 's' } });
+    28	
+    29	describe('checkpoint --json emits the envelope on every path', () => {
+    30	  it('success: ok:true with applied-event data', async () => {
+    31	    const io = makeIo({ stdin: EVENT });
+    32	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--json'], io), 0);
+    33	    const env = theEnvelope(io);
+    34	    assert.equal(env.ok, true);
+    35	    assert.equal(typeof env.data.events, 'number');
+    36	  });
+    37	
+    38	  it('usage error (no --platform): envelope with a usage error, exit 2', async () => {
+    39	    const io = makeIo({ stdin: EVENT });
+    40	    assert.equal(await cmdCheckpoint(['--json'], io), 2);
+    41	    const env = theEnvelope(io);
+    42	    assert.equal(env.ok, false);
+    43	    assert.equal(env.error.code, 'usage');
+    44	  });
+    45	
+    46	  it('garbage stdin: envelope ok:false, exit stays 0 (hook-safety)', async () => {
+    47	    const io = makeIo({ stdin: 'not json{{' });
+    48	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--json'], io), 0);
+    49	    const env = theEnvelope(io);
+    50	    assert.equal(env.ok, false);
+    51	  });
+    52	});
+    53	
+    54	describe('usage errors emit envelopes across commands', () => {
+    55	  it('detect without --platform', () => {
+    56	    const io = makeIo({});
+    57	    assert.equal(cmdDetect(['--json'], io), 2);
+    58	    assert.equal(theEnvelope(io).error.code, 'usage');
+    59	  });
+    60	
+    61	  it('finalize without --reason', async () => {
+    62	    const io = makeIo({});
+    63	    assert.equal(await cmdFinalize(['--json'], io), 2);
+    64	    assert.equal(theEnvelope(io).error.code, 'usage');
+    65	  });
+    66	
+    67	  it('receive without --platform', async () => {
+    68	    const io = makeIo({});
+    69	    assert.equal(await cmdReceive(['--json'], io), 2);
+    70	    assert.equal(theEnvelope(io).error.code, 'usage');
+    71	  });
+    72	
+    73	  it('remap without --to', () => {
+    74	    const io = makeIo({});
+    75	    assert.equal(cmdRemap(['--json'], io), 2);
+    76	    assert.equal(theEnvelope(io).error.code, 'usage');
+    77	  });
+    78	
+    79	  it('cli: unknown command with --json', async () => {
+    80	    const io = makeIo({});
+    81	    assert.equal(await run(['no-such-cmd', '--json'], io), 2);
+    82	    assert.equal(theEnvelope(io).error.code, 'usage');
+    83	  });
+    84	});
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/doctor-gaps.test.mjs | sed -n '30,210p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    30	const checkById = (io, id) => checksOf(io).find((/** @type {any} */ c) => c.id === id);
+    31	
+    32	describe('doctor — version floors and tested-version cap', () => {
+    33	  it('codex below the 0.144 floor fails with a protocol-only degradation note', async () => {
+    34	    const io = makeIo({
+    35	      now: T0,
+    36	      execResults: { ...baseExec(), 'codex --version': { stdout: 'codex-cli 0.100.0\n' } },
+    37	    });
+    38	    await cmdDoctor(['--json'], io);
+    39	    const c = checkById(io, 'version-codex');
+    40	    assert.ok(c, 'a version-codex check exists');
+    41	    assert.equal(c.ok, false);
+    42	    assert.match(c.detail, /0\.144/);
+    43	    assert.match(c.detail, /protocol-only|Tier C/i);
+    44	  });
+    45	
+    46	  it('cursor newer than tested stays ok with an explicit untested info line', async () => {
+    47	    const io = makeIo({
+    48	      now: T0,
+    49	      execResults: { ...baseExec(), 'cursor-agent --version': { stdout: '2027.01.00-abcdef\n' } },
+    50	    });
+    51	    await cmdDoctor(['--json'], io);
+    52	    const c = checkById(io, 'version-cursor');
+    53	    assert.equal(c.ok, true);
+    54	    assert.match(c.detail, /newer than tested/i);
+    55	  });
+    56	
+    57	  it('an unprobeable version never fails the check', async () => {
+    58	    const io = makeIo({ now: T0, execResults: baseExec() });
+    59	    await cmdDoctor(['--json'], io);
+    60	    for (const id of ['version-claude-code', 'version-codex', 'version-cursor']) {
+    61	      const c = checkById(io, id);
+    62	      assert.ok(c, `${id} exists`);
+    63	      assert.equal(c.ok, true, `${id} must not fail when the binary is absent`);
+    64	      assert.match(c.detail, /unverifiable|not installed|unknown/i);
+    65	    }
+    66	  });
+    67	});
+    68	
+    69	describe('doctor — codex/cursor hook trust + canary states', () => {
+    70	  const HOOKS = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'baton checkpoint --platform codex' }] }] } });
+    71	
+    72	  it('not installed: named, with the init pointer', async () => {
+    73	    const io = makeIo({ now: T0, execResults: baseExec() });
+    74	    await cmdDoctor(['--json'], io);
+    75	    const c = checkById(io, 'codex-hooks');
+    76	    assert.ok(c);
+    77	    assert.match(c.detail, /not installed/i);
+    78	    assert.match(c.detail, /init --codex/);
+    79	  });
+    80	
+    81	  it('installed but never observed executing: fidelity claim gated on the canary', async () => {
+    82	    const io = makeIo({ now: T0, execResults: baseExec(), files: { '/repo/.codex/hooks.json': HOOKS } });
+    83	    await cmdDoctor(['--json'], io);
+    84	    const c = checkById(io, 'codex-hooks');
+    85	    assert.match(c.detail, /installed/i);
+    86	    assert.match(c.detail, /not.*observed|pending|gated/i);
+    87	    assert.match(c.detail, /trust|\/hooks/i);
+    88	  });
+    89	
+    90	  it('journal evidence of a codex-sourced event flips the canary to observed', async () => {
+    91	    const entry = JSON.stringify({ seq: 1, ts: T0, type: 'note', dedupeKey: 'k1', source: 'codex', payload: { text: 'hook Stop observed on codex' } });
+    92	    const io = makeIo({
+    93	      now: T0,
+    94	      execResults: baseExec(),
+    95	      files: { '/repo/.codex/hooks.json': HOOKS, '/repo/.handoff/journal.ndjson': entry + '\n' },
+    96	    });
+    97	    await cmdDoctor(['--json'], io);
+    98	    assert.match(checkById(io, 'codex-hooks').detail, /observed/i);
+    99	  });
+   100	
+   101	  it('cursor check exists and names the trusted-workspace requirement', async () => {
+   102	    const io = makeIo({
+   103	      now: T0,
+   104	      execResults: baseExec(),
+   105	      files: { '/repo/.cursor/hooks.json': JSON.stringify({ version: 1, hooks: { stop: [{ command: 'baton checkpoint --platform cursor' }] } }) },
+   106	    });
+   107	    await cmdDoctor(['--json'], io);
+   108	    assert.match(checkById(io, 'cursor-hooks').detail, /trusted workspace/i);
+   109	  });
+   110	});
+   111	
+   112	describe('doctor — network filesystem detection', () => {
+   113	  it('an SMB/NFS-looking mount source fails the filesystem check', async () => {
+   114	    const io = makeIo({
+   115	      now: T0,
+   116	      execResults: {
+   117	        ...baseExec(),
+   118	        'df -P /repo': { stdout: 'Filesystem 512-blocks Used Available Capacity Mounted on\n//user@server/share 100 1 99 1% /repo\n' },
+   119	      },
+   120	    });
+   121	    await cmdDoctor(['--json'], io);
+   122	    const c = checkById(io, 'filesystem');
+   123	    assert.equal(c.ok, false);
+   124	    assert.match(c.detail, /network/i);
+   125	  });
+   126	
+   127	  it('a local mount stays ok; df unavailability degrades to the static boundary note', async () => {
+   128	    const local = makeIo({
+   129	      now: T0,
+   130	      execResults: { ...baseExec(), 'df -P /repo': { stdout: 'Filesystem 512-blocks Used Available Capacity Mounted on\n/dev/disk3s5 100 1 99 1% /\n' } },
+   131	    });
+   132	    await cmdDoctor(['--json'], local);
+   133	    assert.equal(checkById(local, 'filesystem').ok, true);
+   134	
+   135	    const unknown = makeIo({ now: T0, execResults: baseExec() });
+   136	    await cmdDoctor(['--json'], unknown);
+   137	    const c = checkById(unknown, 'filesystem');
+   138	    assert.equal(c.ok, true);
+   139	    assert.match(c.detail, /local filesystems only/i);
+   140	  });
+   141	});
+   142	
+   143	describe('probe cache is consumed, not decorative', () => {
+   144	  const cache = (outcome) =>
+   145	    JSON.stringify({
+   146	      at: T0,
+   147	      records: [
+   148	        { platform: 'claude-code', capability: 'reachable', outcome: 'ok' },
+   149	        { platform: 'codex', capability: 'authenticated', outcome },
+   150	        { platform: 'cursor', capability: 'reachable', outcome: 'ok' },
+   151	      ],
+   152	    });
+   153	
+   154	  it('remap skips a rate-limited platform from the fresh cache, audited in skipped[]', () => {
+   155	    const io = makeIo({
+   156	      now: T0,
+   157	      files: { '/repo/baton.config.json': CONFIG, '/repo/.handoff/log/probe-cache.json': cache('rate-limited') },
+   158	    });
+   159	    assert.equal(cmdRemap(['--to', 'codex', '--json'], io), 0);
+   160	    const { assignments } = JSON.parse(io.stdoutText()).data;
+   161	    const a = assignments['plan-reviewer']; // chain: codex first, claude-code second
+   162	    assert.notEqual(a.platform, 'codex', 'the rate-limited platform is not selected');
+   163	    assert.ok(
+   164	      a.skipped.some((/** @type {any} */ s) => s.platform === 'codex' && s.why === 'rate-limited'),
+   165	      `the skip is audited: ${JSON.stringify(a.skipped)}`,
+   166	    );
+   167	  });
+   168	
+   169	  it('a probe-cache change between prepare and commit is token drift (rejected, re-prepare required)', async () => {
+   170	    const sealed = {
+   171	      schema: 'baton/bundle@1',
+   172	      bundleId: 'b_probe00000000',
+   173	      generation: 1,
+   174	      createdAt: T0,
+   175	      updatedAt: T0,
+   176	      origin: { platform: 'claude-code', model: 'm', sessionHint: 'sess-1', unstable: false },
+   177	      task: { goal: 'g', constraints: [], acceptance: [] },
+   178	      plan: { steps: [] },
+   179	      decisions: [],
+   180	      files: { touched: [] },
+   181	      roles: { assignments: {} },
+   182	      git: null,
+   183	      handoff: { status: 'sealed', reason: 'limits', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] },
+   184	      journalSeq: 0,
+   185	      compaction: { droppedDecisions: 0, note: null },
+   186	      dedupeRing: [],
+   187	    };
+   188	    const files = {
+   189	      '/repo/baton.config.json': CONFIG,
+   190	      '/repo/.handoff/bundle.json': JSON.stringify(sealed, null, 2) + '\n',
+   191	      '/repo/.handoff/log/probe-cache.json': cache('ok'),
+   192	    };
+   193	    const io = makeIo({ now: T0, files });
+   194	    assert.equal(await cmdReceive(['--platform', 'codex', '--json'], io), 0);
+   195	    const token = JSON.parse(io.stdoutText()).data.token;
+   196	
+   197	    io.fs.writeFileSync('/repo/.handoff/log/probe-cache.json', cache('rate-limited'));
+   198	    const code = await cmdReceive(['--platform', 'codex', '--commit', token, '--json'], io);
+   199	    assert.equal(code, 1, 'the probe snapshot is BOUND into the token — drift rejects the commit');
+   200	    const out = io.stdoutText().trim().split('\n');
+   201	    const env = JSON.parse(out[out.length - 1]);
+   202	    assert.match(env.error.msg, /stale|drift|re-?prepare/i);
+   203	  });
+   204	});
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/recover.test.mjs | sed -n '1,90p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { cmdRecover } from '../../core/src/commands/recover.mjs';
+     5	
+     6	// ---------------------------------------------------------------------------
+     7	// Gate-2 fix 11 (reviewer-a finding 14): `recover` sat in the frozen command
+     8	// list returning not-implemented. cmdRecover wraps recoverLock and keeps its
+     9	// one hard rule: exactly ONE state recovers — a provably-dead same-host owner.
+    10	// `--force` is an intent flag only; live, cross-host, and torn states refuse
+    11	// with the same reasons, force or not.
+    12	// ---------------------------------------------------------------------------
+    13	
+    14	const OWNER = (over = {}) => JSON.stringify({ host: 'host-A', pid: 999, startTime: 5, fencingToken: 't', acquiredAt: 'x', heartbeatAt: 'x', ...over });
+    15	
+    16	describe('cmdRecover — the one recoverable state', () => {
+    17	  it('free lock: exit 0, nothing to do', async () => {
+    18	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}' } });
+    19	    assert.equal(await cmdRecover([], io), 0);
+    20	    assert.match(io.stdoutText(), /recovered|free|nothing/i);
+    21	  });
+    22	
+    23	  it('provably-dead same-host owner: cleared, journal note recorded, exit 0', async () => {
+    24	    const io = makeIo({ files: { '/repo/.handoff/lock/owner.json': OWNER() } });
+    25	    // default processAlive: only THIS io's pid/startTime is alive -> 999 is dead
+    26	    assert.equal(await cmdRecover([], io), 0);
+    27	    assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'stale lock removed');
+    28	    assert.match(io.files()['/repo/.handoff/journal.ndjson'] ?? '', /recovery/i);
+    29	  });
+    30	
+    31	  it('live same-host owner: refused with exit 1, EVEN with --force', async () => {
+    32	    const files = { '/repo/.handoff/lock/owner.json': OWNER() };
+    33	    const alive = () => true;
+    34	    const io = makeIo({ files, processAlive: alive });
+    35	    assert.equal(await cmdRecover([], io), 1);
+    36	    assert.match(io.stderrText(), /live process/i);
+    37	    assert.equal(io.fs.existsSync('/repo/.handoff/lock'), true, 'the live owner keeps its lock');
+    38	
+    39	    const io2 = makeIo({ files, processAlive: alive });
+    40	    assert.equal(await cmdRecover(['--force'], io2), 1, 'force never overrides a live owner');
+    41	    assert.equal(io2.fs.existsSync('/repo/.handoff/lock'), true);
+    42	  });
+    43	
+    44	  it('cross-host owner: refused, exit 1', async () => {
+    45	    const io = makeIo({ files: { '/repo/.handoff/lock/owner.json': OWNER({ host: 'other-host' }) } });
+    46	    assert.equal(await cmdRecover(['--force'], io), 1);
+    47	    assert.match(io.stderrText(), /another host/i);
+    48	  });
+    49	
+    50	  it('torn metadata (lock dir without owner.json): refused, exit 1', async () => {
+    51	    const io = makeIo({ files: {} });
+    52	    io.fs.mkdirSync('/repo/.handoff/lock', { recursive: true });
+    53	    assert.equal(await cmdRecover([], io), 1);
+    54	    assert.match(io.stderrText(), /torn|unsupported/i);
+    55	  });
+    56	
+    57	  it('--json emits exactly one envelope for both outcomes', async () => {
+    58	    const io = makeIo({ files: { '/repo/.handoff/lock/owner.json': OWNER() } });
+    59	    assert.equal(await cmdRecover(['--json'], io), 0);
+    60	    const env = JSON.parse(io.stdoutText());
+    61	    assert.equal(env.ok, true);
+    62	    assert.equal(env.data.recovered, true);
+    63	
+    64	    const io2 = makeIo({ files: { '/repo/.handoff/lock/owner.json': OWNER({ host: 'other' }) } });
+    65	    assert.equal(await cmdRecover(['--json'], io2), 1);
+    66	    const env2 = JSON.parse(io2.stdoutText());
+    67	    assert.equal(env2.ok, false);
+    68	    assert.equal(env2.data?.recovered ?? false, false);
+    69	  });
+    70	});
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/majors-minors.test.mjs | sed -n '25,230p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    25	const EVENT = (summary) => JSON.stringify({ schema: 'baton/event@1', type: 'decision', payload: { summary }, sessionHint: 'mm-sess', unstable: false });
+    26	
+    27	const validBundle = () => emptyBundle({ platform: 'claude-code', model: 'm', goal: 'g' }, T0);
+    28	const snapText = (b) => JSON.stringify(b, null, 2) + '\n';
+    29	
+    30	// === major 14 ==============================================================
+    31	describe('checkpoint --debounce (cursor afterFileEdit)', () => {
+    32	  it('second call inside the window is skipped; a later one lands', async () => {
+    33	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(validBundle()) }, stdin: EVENT('edit-1'), now: T0 });
+    34	    assert.equal(await cmdCheckpoint(['--platform', 'cursor', '--debounce', '120'], io), 0);
+    35	
+    36	    io.stdin = EVENT('edit-2');
+    37	    io.setNow(plus(T0, 30_000)); // 30 s later — inside the 120 s window
+    38	    assert.equal(await cmdCheckpoint(['--platform', 'cursor', '--debounce', '120'], io), 0);
+    39	
+    40	    io.stdin = EVENT('edit-3');
+    41	    io.setNow(plus(T0, 121_000)); // past the window
+    42	    assert.equal(await cmdCheckpoint(['--platform', 'cursor', '--debounce', '120'], io), 0);
+    43	
+    44	    const journal = io.files()['/repo/.handoff/journal.ndjson'];
+    45	    assert.match(journal, /edit-1/);
+    46	    assert.doesNotMatch(journal, /edit-2/, 'the in-window event is debounced away');
+    47	    assert.match(journal, /edit-3/);
+    48	  });
+    49	
+    50	  it('without the flag every event lands (debounce is opt-in per hook)', async () => {
+    51	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(validBundle()) }, stdin: EVENT('a'), now: T0 });
+    52	    await cmdCheckpoint(['--platform', 'cursor'], io);
+    53	    io.stdin = EVENT('b');
+    54	    await cmdCheckpoint(['--platform', 'cursor'], io);
+    55	    const journal = io.files()['/repo/.handoff/journal.ndjson'];
+    56	    assert.match(journal, /"a"/);
+    57	    assert.match(journal, /"b"/);
+    58	  });
+    59	
+    60	  it('the cursor template wires --debounce onto afterFileEdit and nothing else', () => {
+    61	    const here = dirname(fileURLToPath(import.meta.url));
+    62	    const cfg = JSON.parse(readFileSync(join(here, '..', '..', 'adapters', 'cursor', 'hooks.json'), 'utf8'));
+    63	    for (const item of cfg.hooks.afterFileEdit) assert.match(item.command, /--debounce \d+/);
+    64	    for (const ev of ['stop', 'preCompact', 'beforeShellExecution']) {
+    65	      for (const item of cfg.hooks[ev]) assert.doesNotMatch(item.command, /--debounce/, `${ev} must checkpoint un-debounced`);
+    66	    }
+    67	  });
+    68	});
+    69	
+    70	// === major 15 ==============================================================
+    71	describe('.bak validate-before-backup + journal seed events', () => {
+    72	  it('a corrupt active snapshot never overwrites a good .bak', () => {
+    73	    const good = snapText(validBundle());
+    74	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': 'corrupt{{{', '/repo/.handoff/bundle.json.bak': good }, now: T0 });
+    75	    writeSnapshot('/repo', { ...validBundle(), bundleId: 'b_after00000000' }, io);
+    76	    assert.equal(io.files()['/repo/.handoff/bundle.json.bak'], good, 'the good backup survives a corrupt-current write');
+    77	    assert.match(io.files()['/repo/.handoff/bundle.json'], /b_after00000000/, 'the new snapshot still lands');
+    78	  });
+    79	
+    80	  it('a valid current snapshot still rotates into .bak', () => {
+    81	    const first = validBundle();
+    82	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(first) }, now: T0 });
+    83	    writeSnapshot('/repo', { ...validBundle(), bundleId: 'b_second0000000' }, io);
+    84	    assert.match(io.files()['/repo/.handoff/bundle.json.bak'], new RegExp(first.bundleId));
+    85	  });
+    86	
+    87	  it('auto-seed writes a journal seed record so a journal-only rebuild keeps the origin facts', async () => {
+    88	    const io = makeIo({ stdin: EVENT('first-work'), now: T0 });
+    89	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code', '--model', 'claude-fable-5'], io), 0);
+    90	    assert.match(io.files()['/repo/.handoff/journal.ndjson'], /seed/i);
+    91	
+    92	    // Kill snapshot AND backup: the journal alone must still tell the story.
+    93	    io.fs.unlinkSync('/repo/.handoff/bundle.json');
+    94	    io.fs.rmSync('/repo/.handoff/bundle.json.bak', { force: true });
+    95	    const { bundle } = loadBundle('/repo', io);
+    96	    assert.ok(bundle, 'journal-only rebuild works');
+    97	    assert.ok(
+    98	      bundle.decisions.some((/** @type {any} */ d) => /seed/i.test(d.summary) && /claude-code/.test(d.summary)),
+    99	      'the seed record survives replay and names the seeding platform',
+   100	    );
+   101	  });
+   102	});
+   103	
+   104	// === minors 16 =============================================================
+   105	describe('finalize --reason-class validation', () => {
+   106	  it('rejects an unknown class with usage exit 2', async () => {
+   107	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(validBundle()) }, now: T0 });
+   108	    assert.equal(await cmdFinalize(['--reason', 'r', '--reason-class', 'bogus', '--json'], io), 2);
+   109	    assert.equal(JSON.parse(io.stdoutText()).error.code, 'usage');
+   110	  });
+   111	
+   112	  it('accepts each of the four classes', async () => {
+   113	    for (const cls of ['usage-limit', 'auth', 'throttle', 'other-error']) {
+   114	      const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(validBundle()) }, now: T0 });
+   115	      assert.equal(await cmdFinalize(['--reason', 'r', '--reason-class', cls], io), 0, `${cls} is a valid class`);
+   116	      assert.equal(JSON.parse(io.files()['/repo/.handoff/bundle.json']).handoff.reasonClass, cls);
+   117	    }
+   118	  });
+   119	});
+   120	
+   121	describe('purge marker — auto-resume and read-path visibility', () => {
+   122	  it('a leftover purge marker is surfaced by loadBundle and resumed by the next purge run', async () => {
+   123	    const b = { ...validBundle(), transcript: { capturedAt: T0, tail: 'SECRET-tail' } };
+   124	    const io = makeIo({
+   125	      files: { '/repo/.handoff/bundle.json': snapText(b), '/repo/.handoff/purge.marker.json': JSON.stringify({ startedAt: T0 }) },
+   126	      now: T0,
+   127	    });
+   128	
+   129	    const { warnings } = loadBundle('/repo', io);
+   130	    assert.ok(warnings.some((w) => /purge/i.test(w)), `read paths surface the interrupted purge: ${JSON.stringify(warnings)}`);
+   131	
+   132	    assert.equal(await cmdPurgeTranscript([], io), 0);
+   133	    assert.match(io.stderrText(), /resum/i, 'the rerun names that it resumed an interrupted purge');
+   134	    assert.equal(io.fs.existsSync('/repo/.handoff/purge.marker.json'), false);
+   135	    assert.doesNotMatch(io.files()['/repo/.handoff/bundle.json'], /SECRET-tail/);
+   136	  });
+   137	});
+   138	
+   139	describe('rotation-marker reconciliation respects the repo lock', () => {
+   140	  it('a held lock defers reconciliation with a warning instead of writing un-locked', () => {
+   141	    const marker = JSON.stringify({ kind: 'finalize', startedAt: T0, seq: 0 });
+   142	    const io = makeIo({
+   143	      files: {
+   144	        '/repo/.handoff/bundle.json': snapText(validBundle()),
+   145	        '/repo/.handoff/rotation.marker.json': marker,
+   146	        '/repo/.handoff/lock/owner.json': JSON.stringify({ host: 'host-A', pid: 777, startTime: 1, fencingToken: 'x' }),
+   147	      },
+   148	      now: T0,
+   149	      processAlive: () => true, // the lock holder is alive
+   150	    });
+   151	    const { warnings } = loadBundle('/repo', io);
+   152	    assert.equal(io.fs.existsSync('/repo/.handoff/rotation.marker.json'), true, 'the marker is untouched while the lock is held');
+   153	    assert.ok(warnings.some((w) => /defer/i.test(w)), `deferral is surfaced: ${JSON.stringify(warnings)}`);
+   154	  });
+   155	});
+   156	
+   157	describe('status runs through the recovery ladder', () => {
+   158	  it('a corrupt snapshot with a good .bak still reports the bundle', async () => {
+   159	    const good = validBundle();
+   160	    const io = makeIo({
+   161	      files: { '/repo/.handoff/bundle.json': 'corrupt{{{', '/repo/.handoff/bundle.json.bak': snapText(good) },
+   162	      now: T0,
+   163	    });
+   164	    assert.equal(await run(['status', '--json'], io), 0, 'status recovers instead of failing on a corrupt snapshot');
+   165	    const env = JSON.parse(io.stdoutText());
+   166	    assert.equal(env.ok, true);
+   167	    assert.equal(env.data.bundleId, good.bundleId);
+   168	  });
+   169	
+   170	  it('no bundle stays exit 1 with the no-bundle envelope', async () => {
+   171	    const io = makeIo({ files: { '/repo/x.txt': 'x' } });
+   172	    assert.equal(await run(['status', '--json'], io), 1);
+   173	    assert.equal(JSON.parse(io.stdoutText()).error.code, 'no-bundle');
+   174	  });
+   175	});
+   176	
+   177	describe('hook errors land in .handoff/log with bounded, metadata-only entries', () => {
+   178	  const PLUGIN_ROOT = '/repo';
+   179	  const hookIo = (files = {}) => {
+   180	    const io = makeIo({ env: { CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT }, stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 's', secret_payload: 'sk-ant-SUPERSECRET' }), files, now: T0 });
+   181	    io.execFile = () => Promise.reject(Object.assign(new Error('spawn node ENOENT'), { code: 'ENOENT' }));
+   182	    return io;
+   183	  };
+   184	
+   185	  it('a failing core invocation logs {ts, event, code} — never the payload', async () => {
+   186	    const io = hookIo();
+   187	    assert.equal(await runHook(['Stop'], io), 0, 'still fail-open');
+   188	    const log = io.files()['/repo/.handoff/log/hook-errors.jsonl'];
+   189	    assert.ok(log, 'the error log exists');
+   190	    const entry = JSON.parse(log.trim().split('\n')[0]);
+   191	    assert.equal(entry.event, 'Stop');
+   192	    assert.ok(entry.ts);
+   193	    assert.doesNotMatch(log, /SUPERSECRET/, 'metadata only — raw hook payloads never enter the log');
+   194	  });
+   195	
+   196	  it('retention: at most 50 entries survive a write', async () => {
+   197	    const old = Array.from({ length: 60 }, (_, i) => JSON.stringify({ ts: T0, event: `old-${i}`, code: null })).join('\n') + '\n';
+   198	    const io = hookIo({ '/repo/.handoff/log/hook-errors.jsonl': old });
+   199	    await runHook(['Stop'], io);
+   200	    const lines = io.files()['/repo/.handoff/log/hook-errors.jsonl'].trim().split('\n');
+   201	    assert.ok(lines.length <= 50, `retention holds: ${lines.length} entries`);
+   202	    assert.match(lines[lines.length - 1], /"Stop"/, 'the newest entry is present');
+   203	  });
+   204	});
+   205	
+   206	describe('history freeze copies are atomic', () => {
+   207	  it('the frozen snapshot first appears via rename, never as a partial write', () => {
+   208	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': snapText(validBundle()), '/repo/.handoff/journal.ndjson': '' }, now: T0 });
+   209	    const stem = rotateJournal('/repo', 'finalize', io);
+   210	    const freezePath = `/repo/.handoff/history/${stem}.json`;
+   211	    assert.ok(io.fs.existsSync(freezePath));
+   212	    const firstAppearance = io.fs.__history.find((/** @type {any} */ h) => freezePath in h.files);
+   213	    assert.ok(firstAppearance, 'the freeze landed');
+   214	    assert.equal(firstAppearance.op, 'renameSync', `the freeze must land atomically (tmp+rename); first seen via ${firstAppearance.op}`);
+   215	  });
+   216	});
+
+exec
+/bin/zsh -lc "nl -ba tests/unit/regex-hardening.test.mjs | sed -n '32,95p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/unit/jail.test.mjs | sed -n '15,105p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    32	}
+    33	
+    34	describe('regex lint — structural scanner', () => {
+    35	  const rejected = [
+    36	    ['(a|a)*x', 'the live-repro alternation'],
+    37	    ['(a|aa)+$', 'ambiguous alternation reviewer A fed the old lint'],
+    38	    ['(a+b)*', 'inner quantifier not adjacent to the group close'],
+    39	    ['((a|a))*', 'nesting one group deep'],
+    40	    ['(x(a|b)y)+', 'alternation nested inside a quantified outer group'],
+    41	    ['(a*)+', 'the classic nested star'],
+    42	    ['(a|b){2,}', 'open-ended brace quantifier over alternation'],
+    43	  ];
+    44	  for (const [pattern, why] of rejected) {
+    45	    it(`rejects ${pattern} (${why})`, () => {
+    46	      assert.throws(() => loadWithOverlay(pattern), /overlay-x/);
+    47	    });
+    48	  }
+    49	
+    50	  const accepted = [
+    51	    ["You've hit your \\S+ limit", 'builtin claude-code matcher'],
+    52	    ['usage limit exceeded|quota exceeded', 'top-level alternation, no quantified group'],
+    53	    ['resets ([^\\n]+)', 'builtin resetHint shape — group is unquantified'],
+    54	    ['(abc)+', 'quantified group with a fixed literal body'],
+    55	    ['(a|b)?', 'optional group — bounded, never repeats'],
+    56	  ];
+    57	  for (const [pattern, why] of accepted) {
+    58	    it(`accepts ${pattern} (${why})`, () => {
+    59	      const merged = loadWithOverlay(pattern);
+    60	      assert.ok(merged.signatures.some((s) => s.id === 'overlay-x'));
+    61	    });
+    62	  }
+    63	
+    64	  it('the shipped builtin table passes the strengthened lint', () => {
+    65	    const io = makeIo({ files: { '/builtin.json': readFileSync(BUILTIN, 'utf8') } });
+    66	    const t = loadSignatures({ builtinPath: '/builtin.json' }, io);
+    67	    assert.ok(Array.isArray(t.signatures) && t.signatures.length > 0);
+    68	  });
+    69	});
+    70	
+    71	describe('worker probe — hard deadline for group-free pathological shapes', () => {
+    72	  // 25 chained stars followed by an unmatchable tail: no groups, so no
+    73	  // structural scanner can see it, but backtracking is combinatorial — the
+    74	  // verified repro hangs >3 s on a 64-char input.
+    75	  const STAR_CHAIN = 'a*'.repeat(25) + 'x';
+    76	
+    77	  it('probeRegexSafe kills the star chain at the deadline', () => {
+    78	    const started = Date.now();
+    79	    const r = probeRegexSafe(STAR_CHAIN, '');
+    80	    assert.equal(r.safe, false);
+    81	    assert.match(r.reason, /pathological|deadline|exceeded/i);
+    82	    assert.ok(Date.now() - started < 10_000, 'probe must return in bounded time, not hang');
+    83	  });
+    84	
+    85	  it('probeRegexSafe passes ordinary limit-string patterns', () => {
+    86	    assert.equal(probeRegexSafe("You've hit your \\S+ limit", '').safe, true);
+    87	    assert.equal(probeRegexSafe('usage limit exceeded|quota exceeded', 'i').safe, true);
+    88	  });
+    89	
+    90	  it('loadSignatures rejects a star-chain overlay in bounded time (the 93.8 s repro)', () => {
+    91	    const started = Date.now();
+    92	    assert.throws(() => loadWithOverlay(STAR_CHAIN), /overlay-x/);
+    93	    assert.ok(Date.now() - started < 10_000, 'rejection must be bounded, not a hang');
+    94	  });
+    95	});
+
+ succeeded in 0ms:
+    15	
+    16	describe('jailRelPath — repo-relative path jail', () => {
+    17	  it('accepts and normalizes ordinary relative paths', () => {
+    18	    assert.equal(jailRelPath('src/a.js'), 'src/a.js');
+    19	    assert.equal(jailRelPath('a'), 'a');
+    20	    assert.equal(jailRelPath('./src//a.js'), 'src/a.js');
+    21	    assert.equal(jailRelPath('a/b/../c'), 'a/c');
+    22	    assert.equal(jailRelPath('deep/x/./y.txt'), 'deep/x/y.txt');
+    23	  });
+    24	
+    25	  it('normalizes backslashes as separators before jailing', () => {
+    26	    assert.equal(jailRelPath('src\\win\\a.js'), 'src/win/a.js');
+    27	  });
+    28	
+    29	  it('refuses absolute paths (posix, windows drive, UNC)', () => {
+    30	    assert.equal(jailRelPath('/etc/passwd'), null);
+    31	    assert.equal(jailRelPath('C:\\secrets\\k.json'), null);
+    32	    assert.equal(jailRelPath('c:/secrets/k.json'), null);
+    33	    assert.equal(jailRelPath('\\\\server\\share\\f'), null);
+    34	  });
+    35	
+    36	  it('refuses escaping traversals, including post-normalization escapes', () => {
+    37	    assert.equal(jailRelPath('../x'), null);
+    38	    assert.equal(jailRelPath('a/../../x'), null);
+    39	    assert.equal(jailRelPath('a\\..\\..\\x'), null);
+    40	  });
+    41	
+    42	  it('refuses non-strings, empties, dot-only, and NUL bytes', () => {
+    43	    assert.equal(jailRelPath(null), null);
+    44	    assert.equal(jailRelPath(undefined), null);
+    45	    assert.equal(jailRelPath(42), null);
+    46	    assert.equal(jailRelPath(''), null);
+    47	    assert.equal(jailRelPath('.'), null);
+    48	    assert.equal(jailRelPath('..'), null);
+    49	    assert.equal(jailRelPath(`a${NUL}b`), null);
+    50	  });
+    51	});
+    52	
+    53	describe('checkHandoffTree — managed-tree guard (fake fs happy paths)', () => {
+    54	  it('ok when no .handoff exists', () => {
+    55	    const io = makeIo({ files: { '/repo/x.txt': 'x' } });
+    56	    assert.equal(checkHandoffTree('/repo', io).ok, true);
+    57	  });
+    58	
+    59	  it('ok on a plain tree with nested history and log dirs', () => {
+    60	    const io = makeIo({
+    61	      files: {
+    62	        '/repo/.handoff/bundle.json': '{}',
+    63	        '/repo/.handoff/journal.ndjson': '',
+    64	        '/repo/.handoff/history/2026.finalize.json': '{}',
+    65	        '/repo/.handoff/log/probe-cache.json': '{}',
+    66	      },
+    67	    });
+    68	    assert.equal(checkHandoffTree('/repo', io).ok, true);
+    69	  });
+    70	
+    71	  it('refuses when the tree cannot be verified (lstat throwing)', () => {
+    72	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}' } });
+    73	    io.fs.lstatSync = () => {
+    74	      throw new Error('EIO: probe failed');
+    75	    };
+    76	    const r = checkHandoffTree('/repo', io);
+    77	    assert.equal(r.ok, false);
+    78	    assert.match(r.problem, /verif/i);
+    79	  });
+    80	
+    81	  it('refuses when an entry reports as a symlink', () => {
+    82	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}', '/repo/.handoff/evil.json': '{}' } });
+    83	    const realLstat = io.fs.lstatSync.bind(io.fs);
+    84	    io.fs.lstatSync = (p) => {
+    85	      const st = realLstat(p);
+    86	      if (String(p).endsWith('evil.json')) return { ...st, isSymbolicLink: () => true };
+    87	      return st;
+    88	    };
+    89	    const r = checkHandoffTree('/repo', io);
+    90	    assert.equal(r.ok, false);
+    91	    assert.match(r.problem, /symlink/i);
+    92	    assert.match(r.problem, /evil\.json/);
+    93	  });
+    94	
+    95	  it('refuses when .handoff realpath escapes the root', () => {
+    96	    const io = makeIo({ files: { '/repo/.handoff/bundle.json': '{}' } });
+    97	    const realReal = io.fs.realpathSync.bind(io.fs);
+    98	    io.fs.realpathSync = (p) => (String(p) === '/repo/.handoff' ? '/elsewhere/.handoff' : realReal(p));
+    99	    const r = checkHandoffTree('/repo', io);
+   100	    assert.equal(r.ok, false);
+   101	    assert.match(r.problem, /outside/i);
+   102	  });
+   103	});
+
+exec
+/bin/zsh -lc "nl -ba tests/unit/schema-deep.test.mjs | sed -n '30,95p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    30	    b.files.touched = [{ path: 'src/a.js', op: 'edit', lastTs: 'ts' }];
+    31	    assert.deepEqual(validateBundle(b), { ok: true, errors: [] });
+    32	  });
+    33	
+    34	  it("rejects the reviewer's render-crash repro: string task.constraints", () => {
+    35	    const b = base();
+    36	    b.task.constraints = 'be careful';
+    37	    failsAt(b, 'task.constraints');
+    38	  });
+    39	
+    40	  it('rejects non-string entries inside task.constraints', () => {
+    41	    const b = base();
+    42	    b.task.constraints = ['fine', { evil: true }];
+    43	    failsAt(b, 'task.constraints[1]');
+    44	  });
+    45	
+    46	  it('rejects non-array task.acceptance', () => {
+    47	    const b = base();
+    48	    b.task.acceptance = 'ship it';
+    49	    failsAt(b, 'task.acceptance');
+    50	  });
+    51	
+    52	  it('rejects non-object plan steps', () => {
+    53	    const b = base();
+    54	    b.plan.steps = ['just a string'];
+    55	    failsAt(b, 'plan.steps[0]');
+    56	  });
+    57	
+    58	  it('rejects non-object decision entries', () => {
+    59	    const b = base();
+    60	    b.decisions = ['loose string'];
+    61	    failsAt(b, 'decisions[0]');
+    62	  });
+    63	
+    64	  it('rejects non-object files.touched entries', () => {
+    65	    const b = base();
+    66	    b.files.touched = ['src/a.js'];
+    67	    failsAt(b, 'files.touched[0]');
+    68	  });
+    69	
+    70	  it('rejects absolute files.touched paths', () => {
+    71	    const b = base();
+    72	    b.files.touched = [{ path: '/etc/passwd', op: 'edit', lastTs: 'ts' }];
+    73	    failsAt(b, 'files.touched[0].path');
+    74	  });
+    75	
+    76	  it('rejects escaping files.touched paths', () => {
+    77	    const b = base();
+    78	    b.files.touched = [{ path: '../../home/user/.ssh/id_rsa', op: 'read', lastTs: 'ts' }];
+    79	    failsAt(b, 'files.touched[0].path');
+    80	  });
+    81	
+    82	  it('rejects non-object roles.assignments', () => {
+    83	    const b = base();
+    84	    b.roles.assignments = 'implementer=me';
+    85	    failsAt(b, 'roles.assignments');
+    86	  });
+    87	
+    88	  it('rejects non-array handoff.receive_log', () => {
+    89	    const b = base();
+    90	    b.handoff.receive_log = 'received once';
+    91	    failsAt(b, 'handoff.receive_log');
+    92	  });
+    93	});
+
+exec
+/bin/zsh -lc "nl -ba tests/unit/merge-hardening.test.mjs | sed -n '15,110p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    15	const ev = (type, payload) => ({ seq: ++n, ts: '2026-07-12T00:00:01.000Z', type, dedupeKey: `k-${type}-${n}`, payload });
+    16	
+    17	const lastNote = (b) => b.decisions[b.decisions.length - 1]?.summary ?? '';
+    18	
+    19	describe('applyEvent — file.touch path jail', () => {
+    20	  it('refuses an absolute path: nothing stored, audit note recorded', () => {
+    21	    const out = applyEvent(base(), ev('file.touch', { path: '/etc/passwd', op: 'edit' }));
+    22	    assert.equal(out.files.touched.length, 0);
+    23	    assert.match(lastNote(out), /file\.touch/);
+    24	    assert.match(lastNote(out), /refused/i);
+    25	  });
+    26	
+    27	  it('refuses an escaping traversal path', () => {
+    28	    const out = applyEvent(base(), ev('file.touch', { path: '../../home/u/.ssh/id_rsa', op: 'read' }));
+    29	    assert.equal(out.files.touched.length, 0);
+    30	    assert.match(lastNote(out), /refused/i);
+    31	  });
+    32	
+    33	  it('stores the normalized form of a messy-but-safe path', () => {
+    34	    const out = applyEvent(base(), ev('file.touch', { path: './src//sub/../a.js', op: 'edit' }));
+    35	    assert.deepEqual(
+    36	      out.files.touched.map((f) => f.path),
+    37	      ['src/a.js'],
+    38	    );
+    39	  });
+    40	
+    41	  it('dedupes by the normalized path, not the raw spelling', () => {
+    42	    let b = applyEvent(base(), ev('file.touch', { path: 'src/a.js', op: 'create' }));
+    43	    b = applyEvent(b, ev('file.touch', { path: './src/./a.js', op: 'edit' }));
+    44	    assert.equal(b.files.touched.length, 1);
+    45	    assert.equal(b.files.touched[0].op, 'edit');
+    46	  });
+    47	});
+    48	
+    49	describe('applyEvent — payload shape hardening', () => {
+    50	  it('plan.set with a non-array steps payload degrades to a note', () => {
+    51	    const out = applyEvent(base(), ev('plan.set', { steps: 'do everything' }));
+    52	    assert.deepEqual(out.plan.steps, []);
+    53	    assert.match(lastNote(out), /plan\.set/);
+    54	  });
+    55	
+    56	  it('plan.set with non-object entries degrades to a note', () => {
+    57	    const out = applyEvent(base(), ev('plan.set', { steps: ['a', 'b'] }));
+    58	    assert.deepEqual(out.plan.steps, []);
+    59	    assert.match(lastNote(out), /plan\.set/);
+    60	  });
+    61	
+    62	  it('plan.step without an object payload carrying an id degrades to a note', () => {
+    63	    const out = applyEvent(base(), ev('plan.step', 'done'));
+    64	    assert.deepEqual(out.plan.steps, []);
+    65	    assert.match(lastNote(out), /plan\.step/);
+    66	  });
+    67	
+    68	  it('roles.remap with a non-object assignments payload degrades to a note', () => {
+    69	    const out = applyEvent(base(), ev('roles.remap', { assignments: ['implementer'] }));
+    70	    assert.deepEqual(out.roles.assignments, {});
+    71	    assert.match(lastNote(out), /roles\.remap/);
+    72	  });
+    73	
+    74	  it('task.update applies only typed known fields and drops the rest', () => {
+    75	    const out = applyEvent(base(), ev('task.update', { goal: 'new goal', constraints: 'be careful', acceptance: ['done'] }));
+    76	    assert.equal(out.task.goal, 'new goal');
+    77	    assert.deepEqual(out.task.constraints, [], 'a string constraints payload must not replace the array');
+    78	    assert.deepEqual(out.task.acceptance, ['done']);
+    79	  });
+    80	
+    81	  it('task.update with nothing valid degrades to a note', () => {
+    82	    const out = applyEvent(base(), ev('task.update', { goal: 42, constraints: 'x' }));
+    83	    assert.equal(out.task.goal, 'g');
+    84	    assert.match(lastNote(out), /task\.update/);
+    85	  });
+    86	
+    87	  it('git.update with a non-object payload degrades to a note', () => {
+    88	    const out = applyEvent(base(), ev('git.update', 'HEAD moved'));
+    89	    assert.equal(out.git, null);
+    90	    assert.match(lastNote(out), /git\.update/);
+    91	  });
+    92	
+    93	  it('a bundle replayed through hostile events still renders (no crash downstream)', async () => {
+    94	    const { renderHandoffMd } = await import('../../core/src/bundle/render.mjs');
+    95	    let b = base();
+    96	    for (const e of [
+    97	      ev('file.touch', { path: '/abs' }),
+    98	      ev('plan.set', { steps: 'x' }),
+    99	      ev('roles.remap', { assignments: 'x' }),
+   100	      ev('task.update', { constraints: 'x' }),
+   101	      ev('git.update', 'x'),
+   102	      ev('file.touch', { path: 'ok/fine.js', op: 'edit' }),
+   103	    ]) {
+   104	      b = applyEvent(b, e);
+   105	    }
+   106	    const md = renderHandoffMd(b);
+   107	    assert.match(md, /ok\/fine\.js/);
+   108	  });
+   109	});
+
+exec
+/bin/zsh -lc "nl -ba tests/integration/limit-death-chain.test.mjs | sed -n '25,80p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/commands/session-adoption.test.mjs | sed -n '65,150p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    25	const dirs = [];
+    26	after(() => {
+    27	  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    28	});
+    29	
+    30	describe('unsealed limit death → cross-platform session start (full production chain)', () => {
+    31	  it('StopFailure(rate_limit) via the hook, then codex session-start surfaces the pending handoff', () => {
+    32	    const cwd = mkdtempSync(join(tmpdir(), 'baton-chain-'));
+    33	    dirs.push(cwd);
+    34	
+    35	    // 1. The dying Claude Code session: hooks.json invokes the hook script.
+    36	    const stopFailure = spawnSync('node', [HOOK, 'StopFailure'], {
+    37	      cwd,
+    38	      input: JSON.stringify({ hook_event_name: 'StopFailure', session_id: 'chain-sess', cwd, error: { type: 'rate_limit' } }),
+    39	      encoding: 'utf8',
+    40	      env: { ...process.env, CLAUDE_PLUGIN_ROOT: repoRoot },
+    41	      timeout: 60_000,
+    42	    });
+    43	    assert.equal(stopFailure.status, 0, `hook exits 0; stderr: ${stopFailure.stderr}`);
+    44	
+    45	    const bundle = JSON.parse(readFileSync(join(cwd, '.handoff', 'bundle.json'), 'utf8'));
+    46	    assert.equal(bundle.handoff.status, 'open', 'no seal was written — the degraded shape');
+    47	    assert.equal(bundle.handoff.reasonClass, 'usage-limit', 'the limit death is persisted state, not a log line');
+    48	
+    49	    // 2. The NEXT session on another platform: its SessionStart hook runs the
+    50	    // cheap gate and must surface the pending handoff.
+    51	    const codexStart = spawnSync('node', [BATON, 'session-start', '--platform', 'codex', '--root', cwd], {
+    52	      cwd,
+    53	      encoding: 'utf8',
+    54	      timeout: 60_000,
+    55	    });
+    56	    assert.equal(codexStart.status, 0, `session-start always exits 0; stderr: ${codexStart.stderr}`);
+    57	    assert.match(codexStart.stdout, /claude-code/, 'the notice names the origin platform');
+    58	    assert.match(codexStart.stdout, /limit-hit/, 'the notice names the unsealed limit death');
+    59	    assert.match(codexStart.stdout, /receive/, 'the notice points at the receive flow');
+    60	
+    61	    // 3. Same platform as the origin: quiet — a session's own bundle is not a
+    62	    // pending handoff, and the gate never exits nonzero.
+    63	    const ownStart = spawnSync('node', [BATON, 'session-start', '--platform', 'claude-code', '--root', cwd], {
+    64	      cwd,
+    65	      encoding: 'utf8',
+    66	      timeout: 60_000,
+    67	    });
+    68	    assert.equal(ownStart.status, 0);
+    69	    assert.equal(ownStart.stdout.trim(), '', 'own-platform bundle stays quiet');
+    70	  });
+    71	});
+
+ succeeded in 0ms:
+    65	  };
+    66	}
+    67	
+    68	// ===========================================================================
+    69	describe('session adoption — auto-seed adopts the first stable session (B5)', () => {
+    70	  it('a seed created by a stable-hint event is OWNED by that session; a foreign stable hint is then rejected', async () => {
+    71	    const io = makeIo({ stdin: event({ type: 'decision', payload: { summary: 'first' }, sessionHint: 'real-sess-1', unstable: false }) });
+    72	
+    73	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    74	    const owned = loadBundle(ROOT, io).bundle;
+    75	    assert.equal(owned.origin.sessionHint, 'real-sess-1', 'the seed adopted the first stable session as owner');
+    76	    assert.equal(owned.origin.unstable, false);
+    77	
+    78	    // A different stable session now hits the same bundle: isolation must engage.
+    79	    io.stdin = event({ type: 'decision', payload: { summary: 'intruder' }, sessionHint: 'other-sess', unstable: false });
+    80	    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0, 'rejection is still hook-safe');
+    81	    assert.match(io.stderrText(), /--take-over/, 'the foreign session is told about --take-over');
+    82	    assert.ok(!loadBundle(ROOT, io).bundle.decisions.some((d) => d.summary === 'intruder'), 'the foreign event did not merge');
+    83	  });
+    84	});
+    85	
+    86	// ===========================================================================
+    87	describe('session adoption — post-receive first-party checkpoint (B3)', () => {
+    88	  it('after a receive with NO --session, a checkpoint carrying a hint receive never saw is ACCEPTED and adopts ownership', async () => {
+    89	    const io = makeIo({
+    90	      files: {
+    91	        [SIG_PATH]: SIG_CONTENT,
+    92	        [`${ROOT}/baton.config.json`]: CONFIG_TEXT,
+    93	        [paths.snapshot]: JSON.stringify(sealedBundle(), null, 2) + '\n',
+    94	        [paths.journal]: '',
+    95	      },
+    96	      execResults: GIT_CLEAN,
+    97	    });
+    98	
+    99	    // Receive on codex with the DEFAULTED session hint (no --session flag).
+   100	    const prep = await cmdReceive(['--platform', 'codex', '--prepare', '--origin', 'claude-code', '--reason', 'limit', '--json'], io);
+   101	    assert.equal(prep, 0);
+   102	    const { token } = JSON.parse(io.stdoutText()).data;
+   103	    assert.equal(await cmdReceive(['--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'limit', '--json'], io), 0);
+   104	
+   105	    const adopted = loadBundle(ROOT, io).bundle;
+   106	    assert.equal(adopted.origin.platform, 'codex');
+   107	    assert.equal(adopted.origin.unstable, true, 'a defaulted host-derived hint is marked unstable — not a verified session id');
+   108	
+   109	    // The real harness session now checkpoints with ITS OWN id — one the
+   110	    // receive never saw. This must be first-party, not foreign.
+   111	    io.stdin = event({ type: 'decision', payload: { summary: 'post-receive-work' }, sessionHint: 'codex-real-session-xyz', unstable: false, source: 'codex' });
+   112	    assert.equal(await cmdCheckpoint(['--platform', 'codex'], io), 0);
+   113	
+   114	    const after = loadBundle(ROOT, io).bundle;
+   115	    assert.ok(after.decisions.some((d) => d.summary === 'post-receive-work'), "the receiving session's first real checkpoint is ACCEPTED (plan: subsequent checkpoints are first-party)");
+   116	    assert.equal(after.origin.sessionHint, 'codex-real-session-xyz', 'ownership adopted to the real harness session');
+   117	    assert.equal(after.origin.unstable, false);
+   118	    assert.doesNotMatch(io.stderrText(), /--take-over/, 'no foreign-session rejection fired');
+   119	  });
+   120	
+   121	  it('an explicit --session keeps a STABLE owner that later foreign hints cannot displace', async () => {
+   122	    const io = makeIo({
+   123	      files: {
+   124	        [SIG_PATH]: SIG_CONTENT,
+   125	        [`${ROOT}/baton.config.json`]: CONFIG_TEXT,
+   126	        [paths.snapshot]: JSON.stringify(sealedBundle(), null, 2) + '\n',
+   127	        [paths.journal]: '',
+   128	      },
+   129	      execResults: GIT_CLEAN,
+   130	    });
+   131	    const prep = await cmdReceive(['--platform', 'codex', '--prepare', '--origin', 'claude-code', '--reason', 'limit', '--session', 'codex-known-sess', '--json'], io);
+   132	    assert.equal(prep, 0);
+   133	    const { token } = JSON.parse(io.stdoutText()).data;
+   134	    assert.equal(
+   135	      await cmdReceive(['--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'limit', '--session', 'codex-known-sess', '--json'], io),
+   136	      0,
+   137	    );
+   138	
+   139	    const adopted = loadBundle(ROOT, io).bundle;
+   140	    assert.equal(adopted.origin.sessionHint, 'codex-known-sess');
+   141	    assert.equal(adopted.origin.unstable, false, 'an explicit session id is a verified stable owner');
+   142	
+   143	    io.stdin = event({ type: 'decision', payload: { summary: 'intruder' }, sessionHint: 'someone-else', unstable: false, source: 'codex' });
+   144	    assert.equal(await cmdCheckpoint(['--platform', 'codex'], io), 0);
+   145	    assert.match(io.stderrText(), /--take-over/, 'a foreign stable hint against a verified owner is rejected');
+   146	    assert.ok(!loadBundle(ROOT, io).bundle.decisions.some((d) => d.summary === 'intruder'));
+   147	  });
+   148	});
+
+exec
+/bin/zsh -lc "nl -ba tests/adapters/claude-code-hook-spawn.test.mjs | sed -n '44,90p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    44	describe('hook.mjs — spawn-level (production invocation shape)', () => {
+    45	  it('a Stop event with a baton/event@1 payload creates/extends .handoff/ in the hook cwd', () => {
+    46	    const cwd = scratch();
+    47	    const payload = JSON.stringify({
+    48	      schema: 'baton/event@1',
+    49	      type: 'decision',
+    50	      payload: { summary: 'spawned-hook-checkpoint' },
+    51	      source: 'claude-code',
+    52	      sessionHint: 'spawn-sess-1',
+    53	      unstable: false,
+    54	    });
+    55	
+    56	    const r = runHookProcess(cwd, 'Stop', payload);
+    57	    assert.equal(r.status, 0, `the hook exits 0; stderr: ${r.stderr}`);
+    58	
+    59	    const snapshot = join(cwd, '.handoff', 'bundle.json');
+    60	    assert.ok(existsSync(snapshot), 'the real hook invocation produced a bundle — the adapter is not a no-op');
+    61	    const bundle = JSON.parse(readFileSync(snapshot, 'utf8'));
+    62	    assert.ok(
+    63	      bundle.decisions.some((/** @type {any} */ d) => d.summary === 'spawned-hook-checkpoint'),
+    64	      'the stdin payload reached the core CLI through the child stdin (execFile input forwarding)',
+    65	    );
+    66	  });
+    67	
+    68	  it('garbage stdin still exits 0 and mutates nothing (fail-open at spawn altitude)', () => {
+    69	    const cwd = scratch();
+    70	    const r = runHookProcess(cwd, 'Stop', 'not json at all {');
+    71	    assert.equal(r.status, 0, `fail-open: garbage payload exits 0; stderr: ${r.stderr}`);
+    72	    assert.ok(!existsSync(join(cwd, '.handoff', 'journal.ndjson')), 'an ignored payload appends nothing');
+    73	  });
+    74	
+    75	  it('a rate_limit StopFailure persists the limit-hit state: bundle.handoff.reasonClass becomes usage-limit (gate-2 fix 3)', () => {
+    76	    const cwd = scratch();
+    77	    const payload = JSON.stringify({ hook_event_name: 'StopFailure', session_id: 'spawn-sess-sf', cwd, error: { type: 'rate_limit' } });
+    78	
+    79	    const r = runHookProcess(cwd, 'StopFailure', payload);
+    80	    assert.equal(r.status, 0, `StopFailure handling is fail-open; stderr: ${r.stderr}`);
+    81	
+    82	    const bundle = JSON.parse(readFileSync(join(cwd, '.handoff', 'bundle.json'), 'utf8'));
+    83	    assert.equal(bundle.handoff.reasonClass, 'usage-limit', 'the unsealed limit death is marked on the bundle, not just logged');
+    84	    assert.equal(bundle.handoff.status, 'open', 'the bundle stays open (no seal was written) — the degraded-receive shape');
+    85	  });
+    86	
+    87	  it('SessionStart with no bundle is a quiet exit-0 no-op', () => {
+    88	    const cwd = scratch();
+    89	    const r = runHookProcess(cwd, 'SessionStart', JSON.stringify({ hook_event_name: 'SessionStart' }));
+    90	    assert.equal(r.status, 0);
+
+codex
+VERDICT: BLOCKED
+
+1. [major] — tests/integration/lock-concurrency.test.mjs:82 — The holder child retries forever and the parent waits on `Promise.all` with no child timeout, so a lock regression can hang the suite instead of failing deterministically. — Bound the retry loop and child lifetime with a timeout/abort path that kills children and fails with captured stderr/state.
+
+2. [major] — tests/unit/redact.test.mjs:29 — The secret-fragment assertion regex misses the bearer-token fixture at tests/unit/redact.test.mjs:16, so a partial redaction could leave that token behind while the test still passes. — Give each planted fixture an explicit forbidden fragment and assert it is absent unconditionally.
+
+3. [minor] — tests/unit/redact.test.mjs:39 — The “non-strings” test only passes an empty string, so it does not prove non-string input handling. — Pass actual non-string values or rename the case to match the exercised contract.
+
+| Finding | Covered honestly? | Test file(s) |
+|---|---|---|
+| 6 | yes | tests/unit/jail.test.mjs:16; tests/unit/regex-hardening.test.mjs:34; tests/unit/schema-deep.test.mjs:34; tests/unit/merge-hardening.test.mjs:19; tests/integration/symlink-escape.test.mjs:76; tests/helpers/memfs.mjs:183 |
+| 8 | yes | tests/adapters/codex-templates.test.mjs:125; tests/adapters/cursor-templates.test.mjs:123; tests/commands/session-start.test.mjs:49; tests/integration/limit-death-chain.test.mjs:30 |
+| 9 | yes | tests/templates/templates-contract.test.mjs:65; tests/templates/templates-contract.test.mjs:127 |
+| 10 | partial | tests/commands/checkpoint-pipeline.test.mjs:31; tests/commands/checkpoint-pipeline.test.mjs:55; tests/commands/checkpoint-pipeline.test.mjs:105; tests/unit/redact.test.mjs:23, but see finding 2 |
+| 11 | yes | tests/commands/envelopes.test.mjs:29; tests/commands/envelopes.test.mjs:54; tests/commands/recover.test.mjs:16 |
+| 12 | partial | tests/adapters/claude-code-hook-spawn.test.mjs:44; tests/integration/e2e-failover.test.mjs:128; tests/helpers/fakeio.mjs:83; tests/integration/lock-concurrency.test.mjs:96, but see finding 1 |
+| 13 | yes | tests/commands/doctor-gaps.test.mjs:32; tests/commands/doctor-gaps.test.mjs:69; tests/commands/doctor-gaps.test.mjs:112; tests/commands/doctor-gaps.test.mjs:143 |
+| 14 | yes | tests/commands/majors-minors.test.mjs:31 |
+| 15 | yes | tests/commands/majors-minors.test.mjs:71 |
+| 16 | yes | tests/commands/majors-minors.test.mjs:105; tests/commands/majors-minors.test.mjs:121; tests/commands/majors-minors.test.mjs:139; tests/commands/majors-minors.test.mjs:157; tests/commands/majors-minors.test.mjs:177; tests/commands/majors-minors.test.mjs:206 |
+tokens used
+151,254
+VERDICT: BLOCKED
+
+1. [major] — tests/integration/lock-concurrency.test.mjs:82 — The holder child retries forever and the parent waits on `Promise.all` with no child timeout, so a lock regression can hang the suite instead of failing deterministically. — Bound the retry loop and child lifetime with a timeout/abort path that kills children and fails with captured stderr/state.
+
+2. [major] — tests/unit/redact.test.mjs:29 — The secret-fragment assertion regex misses the bearer-token fixture at tests/unit/redact.test.mjs:16, so a partial redaction could leave that token behind while the test still passes. — Give each planted fixture an explicit forbidden fragment and assert it is absent unconditionally.
+
+3. [minor] — tests/unit/redact.test.mjs:39 — The “non-strings” test only passes an empty string, so it does not prove non-string input handling. — Pass actual non-string values or rename the case to match the exercised contract.
+
+| Finding | Covered honestly? | Test file(s) |
+|---|---|---|
+| 6 | yes | tests/unit/jail.test.mjs:16; tests/unit/regex-hardening.test.mjs:34; tests/unit/schema-deep.test.mjs:34; tests/unit/merge-hardening.test.mjs:19; tests/integration/symlink-escape.test.mjs:76; tests/helpers/memfs.mjs:183 |
+| 8 | yes | tests/adapters/codex-templates.test.mjs:125; tests/adapters/cursor-templates.test.mjs:123; tests/commands/session-start.test.mjs:49; tests/integration/limit-death-chain.test.mjs:30 |
+| 9 | yes | tests/templates/templates-contract.test.mjs:65; tests/templates/templates-contract.test.mjs:127 |
+| 10 | partial | tests/commands/checkpoint-pipeline.test.mjs:31; tests/commands/checkpoint-pipeline.test.mjs:55; tests/commands/checkpoint-pipeline.test.mjs:105; tests/unit/redact.test.mjs:23, but see finding 2 |
+| 11 | yes | tests/commands/envelopes.test.mjs:29; tests/commands/envelopes.test.mjs:54; tests/commands/recover.test.mjs:16 |
+| 12 | partial | tests/adapters/claude-code-hook-spawn.test.mjs:44; tests/integration/e2e-failover.test.mjs:128; tests/helpers/fakeio.mjs:83; tests/integration/lock-concurrency.test.mjs:96, but see finding 1 |
+| 13 | yes | tests/commands/doctor-gaps.test.mjs:32; tests/commands/doctor-gaps.test.mjs:69; tests/commands/doctor-gaps.test.mjs:112; tests/commands/doctor-gaps.test.mjs:143 |
+| 14 | yes | tests/commands/majors-minors.test.mjs:31 |
+| 15 | yes | tests/commands/majors-minors.test.mjs:71 |
+| 16 | yes | tests/commands/majors-minors.test.mjs:105; tests/commands/majors-minors.test.mjs:121; tests/commands/majors-minors.test.mjs:139; tests/commands/majors-minors.test.mjs:157; tests/commands/majors-minors.test.mjs:177; tests/commands/majors-minors.test.mjs:206 |
