@@ -238,7 +238,13 @@ function commitLocked(root, token, opts, io, fence) {
       sessionHint: opts.sessionHint,
       unstable: opts.sessionUnstable === true,
     },
-    handoff: { ...receivedSeal.handoff, status: 'open' },
+    // The fresh writable generation has NO switch reason yet (iter-4 I3): the
+    // sealed reason/reasonClass/finalizedAt/toPlatformHint describe the PRIOR
+    // handoff, not this one. Carrying them forward made the next prepare trust a
+    // stale class as a high-confidence seal (silently auto-avoiding the healthy
+    // adopted origin) and poisoned both the 12 h staleness reference and the
+    // sessionStart limit-hit signal. Keep only receive_log (the audit chain).
+    handoff: { ...receivedSeal.handoff, status: 'open', reason: null, reasonClass: null, finalizedAt: null, toPlatformHint: null },
   };
   writeSnapshotIn(root, next, io, fence);
 

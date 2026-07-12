@@ -319,6 +319,43 @@ describe('receive-txn.commit — open -> received (degraded seal)', () => {
     const res = commit(ROOT, token, o, io);
     assert.equal(readHistoryFreeze(io, res.archivedTo).handoff.reasonClass, 'usage-limit', 'explicit intake seals');
   });
+
+  it('(iter-4 I3) the fresh open generation carries NO prior reason/class/finalizedAt/toPlatformHint', () => {
+    // Even a HIGH-confidence sealed usage-limit receive must not leave its class
+    // on the new writable generation: the next prepare treats a sealed
+    // reasonClass as high-confidence and would auto-avoid the freshly adopted
+    // origin. Only receive_log (the audit chain) carries forward.
+    const io = makeTxnIo({ bundle: sealedBundle(), journal: '' });
+    const o = opts();
+    const { token } = prepare(ROOT, o, io);
+    const res = commit(ROOT, token, o, io);
+    assert.equal(res.generation, 2);
+
+    const { bundle } = loadBundle(ROOT, io);
+    assert.equal(bundle.handoff.status, 'open', 'a fresh writable generation');
+    assert.equal(bundle.handoff.reason, null, 'no carried reason');
+    assert.equal(bundle.handoff.reasonClass, null, 'no carried class (would launder as high-confidence next hop)');
+    assert.equal(bundle.handoff.finalizedAt, null, 'no carried finalizedAt (would poison the staleness reference)');
+    assert.equal(bundle.handoff.toPlatformHint, null, 'no carried toPlatformHint');
+    assert.ok(Array.isArray(bundle.handoff.receive_log) && bundle.handoff.receive_log.length >= 1, 'the receive_log audit chain is kept');
+  });
+
+  it('(iter-4 I3) a receive off the adopted generation does NOT auto-avoid the healthy origin', () => {
+    // End-to-end of the laundering fix: after a sealed usage-limit receive to
+    // claude-code, a NEXT receive (open generation, no seal) must re-classify at
+    // true confidence, not trust a carried class → claude-code stays selectable.
+    const io = makeTxnIo({ bundle: sealedBundle(), journal: '' });
+    const o1 = opts(); // claude-code -> codex per the helper default
+    commit(ROOT, prepare(ROOT, o1, io).token, o1, io);
+    // Now generation 2 is open, owned by codex. Receive it onward with a benign
+    // (non-limit) reason; the carried class must not drive avoidance.
+    const o2 = opts({ platform: 'claude-code', origin: 'codex', reason: 'switching back', sessionHint: 'cc-2' });
+    const { assignments } = prepare(ROOT, o2, io);
+    const avoidedCodex = Object.values(assignments).every((/** @type {any} */ a) =>
+      (a.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'codex' && s.why === 'avoided'),
+    );
+    assert.equal(avoidedCodex, false, 'no carried class silently avoids the adopted origin');
+  });
 });
 
 // ===========================================================================
