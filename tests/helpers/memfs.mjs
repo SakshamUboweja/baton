@@ -95,13 +95,39 @@ export function makeMemfs(initialFiles = {}) {
     renameSync(from, to) {
       const nf = normalize(from);
       const nt = normalize(to);
-      if (!store.has(nf)) throw fsError('ENOENT', 'rename', nf);
-      ensureParent(nt, 'rename');
-      const content = store.get(nf);
-      store.delete(nf);
-      store.set(nt, content);
-      touch(nt);
-      record('renameSync', [nf, nt]);
+      if (store.has(nf)) {
+        ensureParent(nt, 'rename');
+        const content = store.get(nf);
+        store.delete(nf);
+        store.set(nt, content);
+        touch(nt);
+        record('renameSync', [nf, nt]);
+        return;
+      }
+      // Directory rename (atomic move of the node and all descendants) — the
+      // lock's dead-reclaim arbitration renames the stale lock dir aside.
+      if (dirs.has(nf)) {
+        ensureParent(nt, 'rename');
+        const pre = nf + '/';
+        dirs.delete(nf);
+        dirs.add(nt);
+        for (const k of [...store.keys()]) {
+          if (k.startsWith(pre)) {
+            store.set(nt + k.slice(nf.length), store.get(k));
+            store.delete(k);
+          }
+        }
+        for (const d of [...dirs]) {
+          if (d !== nt && d.startsWith(pre)) {
+            dirs.add(nt + d.slice(nf.length));
+            dirs.delete(d);
+          }
+        }
+        touch(nt);
+        record('renameSync', [nf, nt]);
+        return;
+      }
+      throw fsError('ENOENT', 'rename', nf);
     },
 
     mkdirSync(p, opts = {}) {

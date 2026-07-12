@@ -73,33 +73,37 @@ const sealed = () => ({
   dedupeRing: [],
 });
 
-describe('M7 — two commit processes race one receipt: exactly one wins', () => {
-  it('one generation bump, one receive_log entry, loser rejected with state untouched', async () => {
+describe('M7 — two INDEPENDENTLY-prepared receivers race to commit: exactly one wins', () => {
+  it('one generation bump, one receive archive, loser rejected with state untouched', async () => {
     const root = scratch('baton-recvconc-');
     const barrier = scratch('baton-recvconc-barrier-');
     mkdirSync(join(root, '.handoff'), { recursive: true });
     writeFileSync(join(root, '.handoff', 'bundle.json'), JSON.stringify(sealed(), null, 2) + '\n');
 
-    // Prepare once (read-only) to get the receipt token both contenders use.
-    const prep = spawnSync('node', [BATON, 'receive', '--platform', 'codex', '--json', '--origin', 'claude-code', '--reason', 'limits', '--root', root], { encoding: 'utf8' });
-    assert.equal(prep.status, 0, `prepare exits 0; stderr: ${prep.stderr}`);
-    const token = JSON.parse(prep.stdout.trim().split('\n').pop()).data.token;
-    assert.ok(token, 'a receipt token was minted');
-
-    const commit = `
+    // Each child runs its OWN prepare (against the same sealed state) and then
+    // its own commit — the faithful competing-receivers race, not a shared
+    // single receipt double-committed. Both prepares complete before the
+    // barrier; the barrier releases both COMMITs together. The winner bumps the
+    // generation/receive_log, so the loser's re-derivation under the lock no
+    // longer matches its token → stale-receipt rejection, zero mutation.
+    const receiver = `
 import { writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-const [bin, root, token, idx, barrierDir] = process.argv.slice(2);
+const [bin, root, idx, barrierDir] = process.argv.slice(2);
+const args = ['--platform', 'codex', '--origin', 'claude-code', '--reason', 'limits', '--root', root];
+const prep = spawnSync('node', [bin, 'receive', '--json', ...args], { encoding: 'utf8' });
+if (prep.status !== 0) { writeFileSync(barrierDir + '/prep-fail-' + idx, prep.stderr || ''); process.exit(2); }
+const token = JSON.parse(prep.stdout.trim().split('\\n').pop()).data.token;
 writeFileSync(barrierDir + '/ready-' + idx, '');
-while (!existsSync(barrierDir + '/go')) { /* barrier */ }
-const r = spawnSync('node', [bin, 'receive', '--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'limits', '--root', root], { encoding: 'utf8' });
+while (!existsSync(barrierDir + '/go')) { /* barrier: both prepared, race the commit */ }
+const r = spawnSync('node', [bin, 'receive', '--commit', token, ...args], { encoding: 'utf8' });
 writeFileSync(barrierDir + '/done-' + idx, JSON.stringify({ status: r.status }));
 process.exit(r.status ?? 1);
 `;
-    const commitPath = join(barrier, 'commit.mjs');
-    writeFileSync(commitPath, commit);
+    const receiverPath = join(barrier, 'receiver.mjs');
+    writeFileSync(receiverPath, receiver);
 
-    const kids = [1, 2].map((i) => spawned(commitPath, [BATON, root, token, String(i), barrier]));
+    const kids = [1, 2].map((i) => spawned(receiverPath, [BATON, root, String(i), barrier]));
     await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
     writeFileSync(join(barrier, 'go'), '');
     const results = await Promise.all(kids);

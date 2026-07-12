@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import * as nodeFs from 'node:fs';
 import { pathToFileURL } from 'node:url';
+import { checkHandoffTree } from '../../../core/src/util/jail.mjs';
 
 /** @param {any} io */
 const batonBin = (io) => `${io.env?.CLAUDE_PLUGIN_ROOT ?? '.'}/core/bin/baton.mjs`;
@@ -47,6 +48,11 @@ const HOOK_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 /** @param {any} io @param {string} event @param {any} err */
 function logHookError(io, event, err) {
   try {
+    // The diagnostics log rides .handoff/, so it passes the same managed-tree
+    // jail as every other write (threat model): refuse to create or write
+    // through a symlinked/escaped .handoff. Diagnostics must never be the hole
+    // the jail closes elsewhere — and this stays fail-open (skip, don't throw).
+    if (!checkHandoffTree(io.cwd, io).ok) return;
     const dir = `${io.cwd}/.handoff/log`;
     io.fs.mkdirSync(dir, { recursive: true });
     const path = `${dir}/hook-errors.jsonl`;

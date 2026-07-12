@@ -52,8 +52,13 @@ export function checkHandoffTree(root, io) {
     if (io.fs.lstatSync(dir).isSymbolicLink()) {
       return { ok: false, problem: `.handoff is a symlink — refusing to operate through a linked managed tree` };
     }
-    const rootReal = io.fs.realpathSync(root);
-    const dirReal = io.fs.realpathSync(dir);
+    // Separator-normalize before comparing (Windows: realpathSync returns
+    // backslash paths, so a raw compare against `${rootReal}/.handoff` would
+    // mismatch on EVERY managed tree and refuse all operations). Comparing on a
+    // canonical forward-slash spelling makes containment platform-neutral.
+    const norm = (/** @type {string} */ s) => String(s).replace(/\\/g, '/');
+    const rootReal = norm(io.fs.realpathSync(root));
+    const dirReal = norm(io.fs.realpathSync(dir));
     if (dirReal !== `${rootReal}/.handoff`) {
       return { ok: false, problem: `.handoff resolves outside the repository root (${dirReal}) — refusing` };
     }

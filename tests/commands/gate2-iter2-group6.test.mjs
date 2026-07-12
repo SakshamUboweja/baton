@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { resolveRoot } from '../../core/src/commands/shared.mjs';
-import { jailRelPath } from '../../core/src/util/jail.mjs';
+import { jailRelPath, checkHandoffTree } from '../../core/src/util/jail.mjs';
 import { resolveRoles } from '../../core/src/roles/resolve.mjs';
 import { prepare } from '../../core/src/receive/txn.mjs';
 import { cmdDoctor } from '../../core/src/commands/doctor.mjs';
@@ -58,6 +58,50 @@ describe('M2 — Windows path handling', () => {
     assert.equal(jailRelPath('C:\\Windows\\system32\\x'), null);
     assert.equal(jailRelPath('src\\a\\b.js'), 'src/a/b.js');
   });
+
+  // checkHandoffTree's realpath containment compares dirReal against
+  // `${rootReal}/.handoff`. On Windows realpathSync returns BACKSLASH paths, so
+  // an un-normalized compare mismatches on every managed tree and refuses ALL
+  // operations. The memfs fake can't model drive-letter roots (it registers
+  // dirs as '/'-absolute), so use a precise hand-built io.fs that returns the
+  // Windows realpath spellings for the two paths checkHandoffTree resolves.
+  const DIR = 'C:/repo/.handoff';
+  const winIo = (rootReal, dirReal) => ({
+    fs: {
+      existsSync: (/** @type {any} */ p) => String(p) === DIR,
+      lstatSync: (/** @type {any} */ p) => ({
+        isSymbolicLink: () => false,
+        isDirectory: () => String(p) === DIR,
+        isFile: () => String(p) !== DIR,
+      }),
+      realpathSync: (/** @type {any} */ p) => {
+        const s = String(p);
+        if (s === 'C:/repo') return rootReal;
+        if (s === DIR) return dirReal;
+        return s;
+      },
+      readdirSync: () => [], // empty tree: the walk finds nothing to refuse
+    },
+  });
+
+  it('checkHandoffTree ACCEPTS an in-tree .handoff whose realpath is backslash-spelled', () => {
+    const io = winIo('C:\\repo', 'C:\\repo\\.handoff');
+    assert.deepEqual(checkHandoffTree('C:/repo', io), { ok: true });
+  });
+
+  it('checkHandoffTree REFUSES a .handoff realpath outside the root (backslash)', () => {
+    const io = winIo('C:\\repo', 'C:\\elsewhere\\.handoff');
+    const r = checkHandoffTree('C:/repo', io);
+    assert.equal(r.ok, false);
+    assert.match(r.problem, /outside the repository root/i);
+  });
+
+  it('checkHandoffTree REFUSES a cross-volume .handoff realpath', () => {
+    const io = winIo('C:\\repo', 'D:\\repo\\.handoff');
+    const r = checkHandoffTree('C:/repo', io);
+    assert.equal(r.ok, false);
+    assert.match(r.problem, /outside the repository root/i);
+  });
 });
 
 describe('M3 — doctor probe dimensions', () => {
@@ -98,6 +142,20 @@ describe('M3 — doctor probe dimensions', () => {
 });
 
 describe('M4 — low-confidence usage-limit does not silently avoid', () => {
+  // The origin is cursor, and this role puts cursor FIRST-eligible. Avoidance is
+  // therefore OBSERVABLE: not avoiding cursor means the role resolves to cursor;
+  // avoiding it makes the role fall through to claude-code. (The template's
+  // implementer chain has cursor LAST, so claude-code wins regardless — the
+  // earlier "not avoided" assertion could not fail, i.e. it was vacuous.)
+  const CURSOR_FIRST_CONFIG = JSON.stringify({
+    schema: 'baton/config@1',
+    roles: { cursorFirst: ['cursor/composer', 'claude-code/claude-fable-5'] },
+    platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+    defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+  });
+  const avoidedCursor = (/** @type {any} */ role) =>
+    (role.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
+
   const sealed = (reasonClass) => ({
     schema: 'baton/bundle@1',
     bundleId: 'b_conf0000000000',
@@ -120,40 +178,34 @@ describe('M4 — low-confidence usage-limit does not silently avoid', () => {
 
   function prep(reason, extraOpts = {}) {
     const io = makeIo({
-      files: { '/repo/baton.config.json': CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed(null), null, 2) + '\n' },
+      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed(null), null, 2) + '\n' },
       now: T0,
     });
     return prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason, probes: null, sessionHint: 'cli', ...extraOpts }, io);
   }
 
-  it('a low-confidence "quota exceeded" reason warns and does NOT avoid cursor', () => {
+  it('a low-confidence "quota exceeded" reason warns and KEEPS cursor selected (first-eligible)', () => {
     const { assignments, warnings } = prep('quota exceeded');
     assert.ok(warnings.some((w) => /low confidence|heuristic|--reason-class/i.test(w)), `a low-confidence warning is surfaced: ${JSON.stringify(warnings)}`);
-    // cursor still appears in some chain (not auto-avoided) — implementer chain has cursor.
-    const cursorSkippedEverywhere = Object.values(assignments).every((/** @type {any} */ a) =>
-      (a.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided'),
-    );
-    assert.equal(cursorSkippedEverywhere, false, 'a low-confidence heuristic must not silently avoid the origin');
+    // Not avoiding cursor is observable: the first-eligible role resolves TO it.
+    assert.equal(assignments.cursorFirst.platform, 'cursor', 'a low-confidence heuristic must not silently avoid the origin — cursor stays selected');
+    assert.equal(avoidedCursor(assignments.cursorFirst), false, 'cursor is not skipped-as-avoided');
   });
 
-  it('an explicit --reason-class usage-limit DOES avoid the origin (confirmed intake)', () => {
+  it('an explicit --reason-class usage-limit DOES avoid cursor (role falls through to claude-code)', () => {
     const { assignments } = prep('quota exceeded', { reasonClass: 'usage-limit' });
-    const implementer = assignments['implementer']; // chain includes cursor/composer
-    const avoided = (implementer.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
-    assert.ok(avoided || implementer.platform !== 'cursor', 'explicit confirmation avoids the dead origin');
+    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'explicit confirmation avoids cursor — the role falls through');
+    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
   });
 
-  it('a HIGH-confidence usage-limit reason still avoids without needing confirmation', () => {
-    // The claude-code verbatim limit string is high confidence for its own platform;
-    // here the origin is cursor and a high-confidence cursor signal is the JSON heuristic —
-    // use the sealed reasonClass path instead to represent a trusted classification.
+  it('a HIGH-confidence (sealed reasonClass) usage-limit avoids cursor without confirmation', () => {
+    // A sealed usage-limit reasonClass is a trusted, high-confidence classification.
     const io = makeIo({
-      files: { '/repo/baton.config.json': CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed('usage-limit'), null, 2) + '\n' },
+      files: { '/repo/baton.config.json': CURSOR_FIRST_CONFIG, [SIG_PATH]: SIG_TABLE, '/repo/.handoff/bundle.json': JSON.stringify(sealed('usage-limit'), null, 2) + '\n' },
       now: T0,
     });
     const { assignments } = prepare('/repo', { platform: 'claude-code', origin: 'cursor', reason: 'sealed reason', probes: null, sessionHint: 'cli' }, io);
-    const implementer = assignments['implementer'];
-    const avoided = (implementer.skipped ?? []).some((/** @type {any} */ s) => s.platform === 'cursor' && s.why === 'avoided');
-    assert.ok(avoided || implementer.platform !== 'cursor', 'a sealed usage-limit reasonClass avoids the dead origin');
+    assert.equal(assignments.cursorFirst.platform, 'claude-code', 'a sealed usage-limit reasonClass avoids cursor');
+    assert.equal(avoidedCursor(assignments.cursorFirst), true, 'cursor is recorded as avoided');
   });
 });

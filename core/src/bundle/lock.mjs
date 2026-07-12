@@ -148,12 +148,33 @@ function acquire(io, p) {
       // message; recovery semantics (recoverLock) are unchanged: never steal.
       throw new LockHeldError(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
     case 'dead': {
-      // Atomic re-claim (gate-2 iter-2 B1): remove the stale lock dir and WIN
-      // a fresh mkdir before publishing. Two contenders racing the same dead
-      // owner arbitrate on that mkdir — the loser gets EEXIST and retries —
-      // instead of both republishing owner.json into one shared dir. The
-      // fencing token remains the write-time backstop.
-      io.fs.rmSync(p.lockDir, { recursive: true, force: true });
+      // Atomic dead-lock reclaim (gate-2 iter-2 B1, hardened iter-3 finding-1).
+      // rm-then-mkdir is NOT mutually exclusive: two contenders can both observe
+      // 'dead' before either removes the stale dir, then both rm+mkdir — the
+      // second silently clobbers the first, yielding two simultaneous holders and
+      // two takeover notes. rename() is the atomic arbiter instead: the stale
+      // lock dir has exactly one name, so only one process can move it aside (the
+      // rest get ENOENT). Winning the rename IS winning the reclaim; a contender
+      // that recreated the dir via the 'free' path first makes our mkdir EEXIST →
+      // transient contention. The fencing token stays the write-time backstop.
+      const aside = `${p.lockDir}.reclaim-${io.pid}-${io.newFencingToken()}`;
+      try {
+        io.fs.renameSync(p.lockDir, aside);
+      } catch (err) {
+        // Source already gone → another contender is reclaiming it; wait+retry.
+        if (/** @type {any} */ (err)?.code === 'ENOENT') {
+          throw new LockHeldError('a competitor is reclaiming the dead lock — transient contention');
+        }
+        throw err;
+      }
+      // Winning the atomic rename IS the takeover — exactly one process can, so
+      // journal it HERE, before recreating. If we then lose the fresh-mkdir race
+      // to a competitor that grabbed the freed slot via the 'free' path, the
+      // audit trail still records who cleared the stale lock (recording it after
+      // publish would drop the note in that interleaving — the clearer isn't
+      // always the eventual holder).
+      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
+      io.fs.rmSync(aside, { recursive: true, force: true });
       try {
         io.fs.mkdirSync(p.lockDir);
       } catch (err) {
@@ -162,9 +183,7 @@ function acquire(io, p) {
         }
         throw err;
       }
-      const token = publishOwner(io, p);
-      journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
-      return token;
+      return publishOwner(io, p);
     }
     /* c8 ignore next 2 */
     default:

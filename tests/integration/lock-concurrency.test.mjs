@@ -1,8 +1,8 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
 import * as nodeFs from 'node:fs';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'node:fs';
+import { tmpdir, hostname } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { join, dirname } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -108,6 +108,86 @@ for (;;) {
 }
 writeFileSync(barrierDir + '/interval-' + idx, JSON.stringify({ t0, t1 }));
 `;
+
+// One provably-dead owner, two real reclaimers released together. Each does a
+// read-modify-write of a shared file INSIDE withLock (no fencing helper — the
+// lock alone must serialize). A non-atomic reclaim (rm-then-mkdir) would let
+// both hold at once → a lost update AND two takeover notes (iter-3 finding-1).
+const RECLAIMER = `
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
+import * as fs from 'node:fs';
+import { hostname } from 'node:os';
+const [lockUrl, root, idx, barrierDir, deadPid] = process.argv.slice(2);
+const { withLock } = await import(lockUrl);
+const io = {
+  fs, host: hostname(), pid: process.pid, startTime: Math.round(performance.timeOrigin),
+  now: () => new Date().toISOString(),
+  processAlive: (pid) => String(pid) !== deadPid, // the seeded owner is provably dead
+  newFencingToken: () => 't-' + process.pid + '-' + Math.random().toString(36).slice(2),
+};
+const orderFile = root + '/.handoff/order.txt';
+writeFileSync(barrierDir + '/ready-' + idx, '');
+while (!existsSync(barrierDir + '/go')) { /* barrier */ }
+const deadline = Date.now() + 20000;
+for (;;) {
+  if (Date.now() > deadline) { writeFileSync(barrierDir + '/err-' + idx, 'never acquired'); process.exit(1); }
+  try {
+    withLock(root, io, () => {
+      let cur = '';
+      try { cur = readFileSync(orderFile, 'utf8'); } catch {}
+      const end = Date.now() + 80; while (Date.now() < end) { /* widen the critical section */ }
+      writeFileSync(orderFile, cur + idx + '\\n');
+    });
+    break;
+  } catch (e) { /* held/contended — retry until the deadline */ }
+}
+writeFileSync(barrierDir + '/done-' + idx, 'ok');
+`;
+
+describe('dead-lock reclaim under a real barrier-released race (iter-3 finding-1)', () => {
+  it('two reclaimers, one dead owner: exactly one takeover, both mutate serialized (no lost update)', async () => {
+    const root = scratch('baton-reclaim-root-');
+    const barrier = scratch('baton-reclaim-barrier-');
+    const DEAD_PID = '999999';
+    // Seed a provably-dead owner on THIS host so both children agree it is dead.
+    mkdirSync(join(root, '.handoff', 'lock'), { recursive: true });
+    writeFileSync(
+      join(root, '.handoff', 'lock', 'owner.json'),
+      JSON.stringify({ host: hostname(), pid: Number(DEAD_PID), startTime: 1, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' }),
+    );
+    const reclaimerPath = join(barrier, 'reclaimer.mjs');
+    writeFileSync(reclaimerPath, RECLAIMER);
+
+    const kids = [1, 2].map((i) => spawned(reclaimerPath, [LOCK_URL, root, String(i), barrier, DEAD_PID]));
+    await until(() => existsSync(join(barrier, 'ready-1')) && existsSync(join(barrier, 'ready-2')));
+    writeFileSync(join(barrier, 'go'), '');
+    const results = await Promise.all(kids);
+    for (const [i, r] of results.entries()) {
+      assert.equal(r.code, 0, `reclaimer ${i + 1} exited 0 (signal ${r.signal}); stderr: ${r.stderr}`);
+    }
+
+    // Mutual exclusion: both critical sections ran serialized, so the order file
+    // carries BOTH ids exactly once. A non-atomic reclaim would have lost one
+    // read-modify-write (two simultaneous holders clobbering each other).
+    const order = readFileSync(join(root, '.handoff', 'order.txt'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .sort();
+    assert.deepEqual(order, ['1', '2'], `both reclaimers mutated exactly once under the lock; got ${JSON.stringify(order)}`);
+
+    // Exactly one dead-lock takeover was journaled: the loser of the atomic
+    // rename acquires the freed lock via the 'free' path, which does not journal.
+    const journal = existsSync(join(root, '.handoff', 'journal.ndjson'))
+      ? readFileSync(join(root, '.handoff', 'journal.ndjson'), 'utf8')
+          .split('\n')
+          .filter((l) => l.trim() !== '')
+          .map((l) => JSON.parse(l))
+      : [];
+    const takeovers = journal.filter((e) => e.type === 'note' && /took over stale lock from dead/.test(e.payload?.text ?? ''));
+    assert.equal(takeovers.length, 1, `exactly one dead-lock takeover occurred; got ${takeovers.length}`);
+    assert.equal(existsSync(join(root, '.handoff', 'lock')), false, 'the lock dir is released after both operations');
+  });
+});
 
 describe('barrier-released concurrent writers (real processes, real fs)', () => {
   it('4 simultaneous checkpoints: every event lands, seqs unique, journalSeq sane', async () => {

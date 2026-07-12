@@ -15,35 +15,65 @@ const OWNER = '/repo/.handoff/lock/owner.json';
 const deadOwner = JSON.stringify({ host: 'host-A', pid: 999, startTime: 5, fencingToken: 'STALE', acquiredAt: 'x', heartbeatAt: 'x' });
 
 describe('dead-takeover re-claims the lock dir atomically (B1)', () => {
-  it('takeover recreates the lock dir, not just owner.json in place', () => {
-    // Only pid 4242 (this io) is alive → pid 999 is provably dead.
+  it('takeover renames the stale lock dir ASIDE then claims a fresh one (never in-place rm)', () => {
+    // Only pid 4242 (this io) is alive → pid 999 is provably dead. The reclaim
+    // must be arbitrated by an atomic rename of the SOURCE lock dir, not an
+    // rm-then-mkdir that two contenders could both perform (iter-3 finding-1).
+    // We trace lock-dir ops in order: the CLAIM must be rename→(rm aside)→mkdir,
+    // with no in-place rm of the live /lock before the fresh mkdir. (The final
+    // rm of /lock at release, AFTER the mkdir, is correct and expected.)
     const io = makeIo({ files: { [OWNER]: deadOwner } });
-    let removed = false;
-    let recreated = false;
+    const LOCK = '/repo/.handoff/lock';
+    /** @type {string[]} */
+    const trace = [];
+    const realRename = io.fs.renameSync.bind(io.fs);
     const realRm = io.fs.rmSync.bind(io.fs);
     const realMkdir = io.fs.mkdirSync.bind(io.fs);
+    io.fs.renameSync = (from, to) => {
+      if (String(from) === LOCK) trace.push(`rename:${/\/lock\.reclaim-/.test(String(to)) ? 'aside' : 'other'}`);
+      return realRename(from, to);
+    };
     io.fs.rmSync = (p, opts) => {
-      if (String(p).endsWith('/lock')) removed = true;
+      if (String(p) === LOCK) trace.push('rm:lock');
+      else if (/\/lock\.reclaim-/.test(String(p))) trace.push('rm:aside');
       return realRm(p, opts);
     };
     io.fs.mkdirSync = (p, opts) => {
-      if (String(p).endsWith('/lock') && !(opts && opts.recursive)) recreated = true;
+      if (String(p) === LOCK && !(opts && opts.recursive)) trace.push('mkdir:lock');
       return realMkdir(p, opts);
     };
     const token = withLock('/repo', io, (t) => t);
-    assert.ok(removed, 'the stale lock dir is removed as part of the claim');
-    assert.ok(recreated, 'the lock dir is re-created (mkdir EEXIST is the claim primitive), not reused in place');
+
+    // Trace shape: mkdir:lock (initial EEXIST probe) → rename:aside → rm:aside →
+    // mkdir:lock (the winning claim) → rm:lock (release, AFTER the claim).
+    const claimMkdir = trace.lastIndexOf('mkdir:lock');
+    const renameAt = trace.indexOf('rename:aside');
+    const rmAsideAt = trace.indexOf('rm:aside');
+    assert.ok(renameAt >= 0, `the stale lock dir is moved aside by an atomic rename; trace ${JSON.stringify(trace)}`);
+    assert.ok(renameAt < rmAsideAt && rmAsideAt < claimMkdir, 'the claim order is rename-aside → rm-aside → fresh mkdir');
+    const beforeClaim = trace.slice(0, claimMkdir);
+    assert.equal(beforeClaim.includes('rm:lock'), false, 'the live lock dir is never rm-ed in place during the claim (only renamed aside)');
     assert.ok(typeof token === 'string' && token.length > 0, 'a fresh token is published after the atomic claim');
   });
 
-  it('two contenders against one dead lock: exactly one takes over per claim attempt', () => {
-    // Model the race: contender 1 removes the dead lock, contender 2 tries to
-    // claim the now-empty slot. With an atomic mkdir-claim, the second mkdir of
-    // an already-claimed dir throws EEXIST → contention, never a double publish.
+  it('a contender that loses the rename sees ENOENT-as-contention, not a second takeover', () => {
+    // Simulate the rename losing the race: the stale dir is already gone when we
+    // try to move it aside → LockHeldError (retryable), never a duplicate claim.
+    const io = makeIo({ files: { [OWNER]: deadOwner }, lockRetry: { attempts: 0, delayMs: 0 } });
+    const realRename = io.fs.renameSync.bind(io.fs);
+    io.fs.renameSync = (from, to) => {
+      if (String(from).endsWith('/lock') && /\/lock\.reclaim-/.test(String(to))) {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      }
+      return realRename(from, to);
+    };
+    assert.throws(() => withLock('/repo', io, (t) => t), /reclaiming the dead lock|transient contention/i);
+  });
+
+  it('after release the lock is free and the next acquisition mints its own token', () => {
     const io = makeIo({ files: { [OWNER]: deadOwner } });
     const first = withLock('/repo', io, (t) => t);
     assert.ok(first, 'first contender takes over the dead lock');
-    // After release the dir is gone; a fresh acquire on the free slot succeeds.
     assert.equal(io.fs.existsSync('/repo/.handoff/lock'), false, 'lock released after the operation');
     const second = withLock('/repo', io, (t) => t);
     assert.ok(second && second !== first, 'the next acquisition gets its own fresh token');
