@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      {
+        "command": "baton checkpoint --platform cursor"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": "baton checkpoint --platform cursor"
+      }
+    ],
+    "beforeShellExecution": [
+      {
+        "command": "baton checkpoint --platform cursor",
+        "matcher": "git commit"
+      }
+    ],
+    "sessionStart": [
+      {
+        "command": "baton receive --platform cursor --print-prompt"
+      }
+    ],
+    "preCompact": [
+      {
+        "command": "baton checkpoint --platform cursor"
+      }
+    ]
+  }
+}

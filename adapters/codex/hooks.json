@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "baton checkpoint --platform codex",
+            "commandWindows": "cmd /c baton checkpoint --platform codex"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "baton checkpoint --platform codex",
+            "commandWindows": "cmd /c baton checkpoint --platform codex"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "baton receive --platform codex --print-prompt",
+            "commandWindows": "cmd /c baton receive --platform codex --print-prompt"
+          }
+        ]
+      }
+    ]
+  }
+}
