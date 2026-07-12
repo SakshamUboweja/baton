@@ -125,6 +125,9 @@ function makeRealIo(cwd, { stdin = '', now = NOW, processAlive } = {}) {
     pid: 4242,
     startTime: 111000,
     processAlive: processAlive || ((pid) => pid === 4242),
+    // Small retry budget (gate-2 fix 12): the live-lock refusal fixture below
+    // pins the drop-after-bounded-wait behavior without the 3 s production wait.
+    lockRetry: { attempts: 2, delayMs: 5 },
     newFencingToken: () => `e2e-tok-${(tokenN += 1)}`,
     stdoutText: () => out.join(''),
     stderrText: () => err.join(''),

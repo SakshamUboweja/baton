@@ -119,8 +119,17 @@ function acquire(io, p) {
   const s = inspect(io, p);
   switch (s.state) {
     case 'free':
-      // Raced a release between mkdir failure and inspection; retry once.
-      io.fs.mkdirSync(p.lockDir);
+      // Raced a release between mkdir failure and inspection; retry once. A
+      // competitor can win THIS mkdir too (gate-2 fix 12: observed under real
+      // barrier-released contention) — that is contention, not corruption.
+      try {
+        io.fs.mkdirSync(p.lockDir);
+      } catch (err) {
+        if (/** @type {any} */ (err)?.code === 'EEXIST') {
+          throw new LockHeldError('lock was re-acquired by a competitor mid-inspection — transient contention');
+        }
+        throw err;
+      }
       return publishOwner(io, p);
     case 'live':
       throw new LockHeldError(
@@ -131,7 +140,12 @@ function acquire(io, p) {
         `lock is held from another host ('${s.owner.host}', this is '${io.host}') — cross-host locks are never provably safe to steal. ${ESCAPE_HATCH}`,
       );
     case 'torn':
-      throw new Error(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
+      // During ACQUIRE, torn metadata is usually a competitor caught between
+      // its mkdir and owner.json publication — transient by construction, so
+      // LockHeldError lets withLock wait it out (gate-2 fix 12). A genuinely
+      // crashed publisher exhausts the retry budget and surfaces this same
+      // message; recovery semantics (recoverLock) are unchanged: never steal.
+      throw new LockHeldError(`${s.cause} — unsupported for automatic recovery. ${ESCAPE_HATCH}`);
     case 'dead': {
       const token = publishOwner(io, p);
       journalNote(io, p, `lock takeover: took over stale lock from dead pid ${s.owner.pid} (start time ${s.owner.startTime})`);
@@ -159,14 +173,41 @@ function release(io, p, token) {
   io.fs.rmSync(p.lockDir, { recursive: true, force: true });
 }
 
+// A live same-host holder is transient by design — operation-scoped locks are
+// held for milliseconds — so contention waits briefly instead of dropping the
+// operation (gate-2 fix 12: simultaneous checkpoints must all land). Every
+// other contended state (torn, cross-host) stays fail-fast: waiting cannot
+// make those provably safe.
+const DEFAULT_RETRY = { attempts: 120, delayMs: 25 };
+
+/** Synchronous sleep without burning a core: Atomics.wait on a throwaway buffer. */
+const sleepMs = (/** @type {number} */ ms) => {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+};
+
 /**
  * Acquire → run fn(token) → release (also on throw). Synchronous by design:
- * everything the lock guards is sync fs work.
+ * everything the lock guards is sync fs work. Live-held locks are retried on
+ * a bounded budget (override via io.lockRetry = {attempts, delayMs}).
  * @param {string} root @param {any} io @param {(token: string) => any} fn
  */
 export function withLock(root, io, fn) {
   const p = lockPaths(root);
-  const token = acquire(io, p);
+  const retry = io.lockRetry ?? DEFAULT_RETRY;
+  /** @type {string} */
+  let token;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      token = acquire(io, p);
+      break;
+    } catch (err) {
+      if (err instanceof LockHeldError && attempt < retry.attempts) {
+        sleepMs(retry.delayMs);
+        continue;
+      }
+      throw err;
+    }
+  }
   try {
     return fn(token);
   } finally {

@@ -80,6 +80,9 @@ export function makeIo({
     pid,
     startTime,
     processAlive: processAlive || defaultAlive,
+    // Tiny retry budget: unit tests exercising live-lock refusal stay fast
+    // while the retry code path itself still runs (production default: 120x25ms).
+    lockRetry: { attempts: 2, delayMs: 2 },
     newFencingToken: () => `tok-${++tokenCounter}`,
     stdoutText: () => outChunks.join(''),
     stderrText: () => errChunks.join(''),
