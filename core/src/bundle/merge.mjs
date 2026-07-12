@@ -24,6 +24,12 @@ export function applyEvent(bundle, event) {
     }
     case 'note':
       out.decisions.push({ seq, ts, summary: payload.text });
+      // A structured StopFailure rate_limit note marks the open bundle
+      // limit-hit (gate-2 fix 3): the unsealed limit death must be visible to
+      // the next SessionStart on any platform, not buried in the decision log.
+      if (payload.structured?.kind === 'stop-failure' && payload.errorType === 'rate_limit' && out.handoff.status === 'open') {
+        out.handoff = { ...out.handoff, reason: out.handoff.reason ?? payload.text ?? null, reasonClass: 'usage-limit' };
+      }
       break;
     case 'plan.set':
       out.plan.steps = payload.steps;

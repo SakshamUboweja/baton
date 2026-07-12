@@ -72,6 +72,18 @@ describe('hook.mjs — spawn-level (production invocation shape)', () => {
     assert.ok(!existsSync(join(cwd, '.handoff', 'journal.ndjson')), 'an ignored payload appends nothing');
   });
 
+  it('a rate_limit StopFailure persists the limit-hit state: bundle.handoff.reasonClass becomes usage-limit (gate-2 fix 3)', () => {
+    const cwd = scratch();
+    const payload = JSON.stringify({ hook_event_name: 'StopFailure', session_id: 'spawn-sess-sf', cwd, error: { type: 'rate_limit' } });
+
+    const r = runHookProcess(cwd, 'StopFailure', payload);
+    assert.equal(r.status, 0, `StopFailure handling is fail-open; stderr: ${r.stderr}`);
+
+    const bundle = JSON.parse(readFileSync(join(cwd, '.handoff', 'bundle.json'), 'utf8'));
+    assert.equal(bundle.handoff.reasonClass, 'usage-limit', 'the unsealed limit death is marked on the bundle, not just logged');
+    assert.equal(bundle.handoff.status, 'open', 'the bundle stays open (no seal was written) — the degraded-receive shape');
+  });
+
   it('SessionStart with no bundle is a quiet exit-0 no-op', () => {
     const cwd = scratch();
     const r = runHookProcess(cwd, 'SessionStart', JSON.stringify({ hook_event_name: 'SessionStart' }));
