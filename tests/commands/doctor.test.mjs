@@ -233,7 +233,7 @@ describe('doctor — envelope + check aggregation', () => {
 
 // ===========================================================================
 describe('doctor — per-platform probe records expose BOTH dimensions (F5)', () => {
-  it('with every probe healthy: capability is the top ladder rung "reachable" and outcome is "ok" for all three platforms', async () => {
+  it('with every probe healthy: outcome is "ok"; capability reflects what each probe PROVES (gate-2 iter-2 M3)', async () => {
     const io = makeDoctorIo({ files: { ...ATTR_FILES } });
     await cmdDoctor(['--json'], io);
     const records = platformRecords(envelope(io));
@@ -241,9 +241,15 @@ describe('doctor — per-platform probe records expose BOTH dimensions (F5)', ()
     for (const r of records) {
       assert.ok(LADDER.includes(r.capability), `${r.platform}: capability must be a ladder rung (${LADDER.join('→')}); got ${JSON.stringify(r.capability)}`);
       assert.ok(OUTCOMES.includes(r.outcome), `${r.platform}: outcome must be one of ${OUTCOMES.join('|')}; got ${JSON.stringify(r.outcome)}`);
-      assert.equal(r.capability, 'reachable', `${r.platform}: a clean probe verifies the full ladder`);
       assert.equal(r.outcome, 'ok', `${r.platform}: a clean probe outcome is ok`);
     }
+    const cap = Object.fromEntries(records.map((/** @type {any} */ r) => [r.platform, r.capability]));
+    // claude-code's probe is `claude --version` — a clean exit proves only that
+    // the binary is INSTALLED, not that the server was reached or auth is valid.
+    assert.equal(cap['claude-code'], 'installed', 'a --version probe proves installed, never reachable/authenticated');
+    // codex/cursor probes are auth-checking status commands → a clean exit reaches.
+    assert.equal(cap.codex, 'reachable', 'a clean auth-status probe verifies the full ladder');
+    assert.equal(cap.cursor, 'reachable', 'a clean auth-status probe verifies the full ladder');
   });
 
   it('probe fixtures A: installed-only (auth failure), rate-limited (proves auth), reachable (clean)', async () => {

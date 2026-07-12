@@ -12,19 +12,22 @@ import { dedupeKey } from '../util/ids.mjs';
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
 
-/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string, sessionUnstable?: boolean}} ReceiveOpts */
+/** @typedef {{platform: string, origin: string, reason: string, gitSnapshot: any, probes?: any, sessionHint: string, sessionUnstable?: boolean, reasonClass?: string}} ReceiveOpts */
 
 /**
+ * Classify the switch reason, KEEPING confidence (gate-2 iter-2 M4): a
+ * low-confidence heuristic (e.g. Cursor's "quota exceeded") must not silently
+ * drive an avoid[] decision — the caller warns and defers to explicit intake.
  * @param {string} reason @param {string} originPlatform @param {any} io
- * @returns {string | null}
+ * @returns {{class: string | null, confidence: string | null}}
  */
 function classifyReason(reason, originPlatform, io) {
   try {
     const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
     const verdict = classify({ text: reason, exitCode: 0, platform: originPlatform, table, structured: null });
-    return verdict.class === 'ok' ? null : verdict.class;
+    return verdict.class === 'ok' ? { class: null, confidence: null } : { class: verdict.class, confidence: verdict.confidence };
   } catch {
-    return null;
+    return { class: null, confidence: null };
   }
 }
 
@@ -51,6 +54,10 @@ function deriveToken(root, bundle, opts, io) {
     receives: Array.isArray(bundle.handoff?.receive_log) ? bundle.handoff.receive_log.length : 0,
     origin: opts.origin,
     reason: opts.reason,
+    // Explicit --reason-class is a bound intake input (gate-2 iter-2 M4): it
+    // changes the avoid[] decision, so a change between prepare and commit is
+    // drift that must re-prepare.
+    reasonClass: opts.reasonClass ?? null,
     configDigest,
     gitDigest: dedupeKey(opts.gitSnapshot ?? null),
     probesDigest: dedupeKey(opts.probes ?? null),
@@ -106,11 +113,36 @@ export function prepare(root, opts, io) {
     // The dead origin comes from the BUNDLE first (its sealed reasonClass and
     // recorded origin platform); typed intake only fills the gaps — a user
     // should not need to retype the verbatim limit string to keep roles off
-    // the platform that died (gate-2 reviewer-b finding 4).
-    const reasonClass = bundle.handoff?.reasonClass ?? classifyReason(opts.reason, opts.origin, io);
+    // the platform that died (gate-2 reviewer-b finding 4). Confidence gates
+    // auto-avoidance (gate-2 iter-2 M4): an explicit --reason-class or a sealed
+    // reasonClass is trusted; a live text classification only auto-avoids at
+    // medium+ confidence, else it warns and defers to explicit intake.
+    let reasonClass;
+    let confidence;
+    if (typeof opts.reasonClass === 'string') {
+      reasonClass = opts.reasonClass;
+      confidence = 'high'; // explicit user intake
+    } else if (typeof bundle.handoff?.reasonClass === 'string') {
+      reasonClass = bundle.handoff.reasonClass;
+      confidence = 'high'; // trusted seal
+    } else {
+      const v = classifyReason(opts.reason, opts.origin, io);
+      reasonClass = v.class;
+      confidence = v.confidence;
+    }
     const deadOrigin =
       typeof bundle.origin?.platform === 'string' && bundle.origin.platform !== 'unknown' ? bundle.origin.platform : opts.origin;
-    const avoid = reasonClass === 'usage-limit' ? [deadOrigin] : [];
+    /** @type {string[]} */
+    let avoid = [];
+    if (reasonClass === 'usage-limit') {
+      if (confidence === 'low') {
+        warnings.push(
+          `the switch reason matched a usage-limit heuristic only at LOW confidence — not auto-avoiding ${deadOrigin}; pass --reason-class usage-limit to confirm the failover away from it`,
+        );
+      } else {
+        avoid = [deadOrigin];
+      }
+    }
     assignments = resolveRoles({ config, to: opts.platform, avoid, nativeOnly: false, probes: opts.probes ?? null }).assignments;
   } else {
     warnings.push(`role matrix unavailable (${errors.map((e) => e.msg).join('; ')}) — no role table in this prompt`);
@@ -166,7 +198,8 @@ function commitLocked(root, token, opts, io, fence) {
       ...(degraded
         ? {
             reason: opts.reason,
-            reasonClass: classifyReason(opts.reason, opts.origin, io),
+            // Explicit intake wins; else the live text classification's class.
+            reasonClass: typeof opts.reasonClass === 'string' ? opts.reasonClass : classifyReason(opts.reason, opts.origin, io).class,
             finalizedAt: io.now(),
           }
         : {}),

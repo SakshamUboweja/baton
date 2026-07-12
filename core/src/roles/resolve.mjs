@@ -25,8 +25,12 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
     return null;
   }
 
+  // A selection is degraded when its availability is UNVERIFIED (gate-2 iter-2
+  // M3): with no probe cache at all, resolution is offline and EVERY selection
+  // is degraded (plan: "Offline resolution always succeeds, flagged degraded");
+  // with a partial cache, only the platforms the cache is missing are.
   /** @param {string} platform */
-  const probeUnverified = (platform) => probes !== null && probes !== undefined && !probes[platform];
+  const probeUnverified = (platform) => probes == null || !probes[platform];
 
   /** @type {Record<string, any>} */
   const assignments = {};

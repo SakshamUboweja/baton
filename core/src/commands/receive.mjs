@@ -28,6 +28,9 @@ export async function cmdReceive(args, io) {
     // The fresh probe cache is a bound token input (probesDigest): remap uses
     // it at prepare, and a cache change before commit is drift → re-prepare.
     probes: readProbeCache(root, io),
+    // Explicit reason-class intake (gate-2 iter-2 M4): confirms a failover away
+    // from a low-confidence-classified origin; bound into the token.
+    ...(typeof flags['reason-class'] === 'string' ? { reasonClass: flags['reason-class'] } : {}),
     sessionHint: hasSession ? /** @type {string} */ (flags.session) : `cli:${io.host}`,
     // A defaulted host-derived hint is NOT the harness session id — mark it
     // unstable so the receiving session's first real hook checkpoint adopts

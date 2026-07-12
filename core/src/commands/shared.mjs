@@ -32,7 +32,12 @@ export function usageError(io, flags, cmd, msg) {
  */
 export function resolveRoot(io, flags) {
   if (typeof flags.root === 'string' && flags.root.length > 0) return flags.root;
-  let dir = String(io.cwd);
+  // Normalize separators up front (gate-2 iter-2 M2): a Windows cwd arrives
+  // backslash-separated, but Node fs accepts forward slashes, so the ascent
+  // and the marker checks work in one forward-slash space. The last separator
+  // is either kind; the loop stops at a drive/UNC or filesystem root.
+  const start = String(io.cwd).replace(/\\/g, '/');
+  let dir = start;
   while (true) {
     try {
       if (io.fs.existsSync(`${dir}/.handoff`) || io.fs.existsSync(`${dir}/baton.config.json`)) return dir;
@@ -40,11 +45,14 @@ export function resolveRoot(io, flags) {
     } catch {
       break;
     }
-    const parent = dir.slice(0, dir.lastIndexOf('/')) || '/';
-    if (parent === dir) break;
+    const cut = dir.lastIndexOf('/');
+    if (cut < 0) break;
+    // A drive-relative root ("C:/") or the filesystem root ("/") is the ceiling.
+    const parent = cut === 0 ? '/' : dir.slice(0, cut);
+    if (parent === dir || /^[A-Za-z]:$/.test(parent)) break;
     dir = parent;
   }
-  return String(io.cwd);
+  return start;
 }
 
 /**

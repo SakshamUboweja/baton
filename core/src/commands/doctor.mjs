@@ -105,10 +105,15 @@ function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
 }
 
 // Noninteractive status probes per platform (docs/design/platform-notes.md CLIs).
+// capOnSuccess caps what a clean exit PROVES (gate-2 iter-2 M3): `claude
+// --version` proves the binary is INSTALLED, not that the server was reached or
+// that auth is valid, so its capability is capped at "installed". The codex/
+// cursor probes are auth-checking status commands, so a clean exit legitimately
+// proves "reachable".
 const PROBES = [
-  { platform: 'claude-code', bin: 'claude', args: ['--version'] },
-  { platform: 'codex', bin: 'codex', args: ['login', 'status'] },
-  { platform: 'cursor', bin: 'cursor-agent', args: ['status'] },
+  { platform: 'claude-code', bin: 'claude', args: ['--version'], capOnSuccess: 'installed' },
+  { platform: 'codex', bin: 'codex', args: ['login', 'status'], capOnSuccess: 'reachable' },
+  { platform: 'cursor', bin: 'cursor-agent', args: ['status'], capOnSuccess: 'reachable' },
 ];
 
 // Word-boundary-safe AI-attribution trailer patterns (plan §Attribution guard).
@@ -131,12 +136,12 @@ function readOrNull(io, path) {
  * Classify one probe invocation per the two-dimension record: capability is
  * the ordered ladder verified as far as the evidence goes; outcome is what the
  * probe itself did. A server-issued limit response proves authentication.
- * @param {{platform: string, bin: string, args: string[]}} probe @param {any} io @param {any} table
+ * @param {{platform: string, bin: string, args: string[], capOnSuccess?: string}} probe @param {any} io @param {any} table
  */
 async function runProbe(probe, io, table) {
   try {
     await io.execFile(probe.bin, probe.args, { timeout: PROBE_TIMEOUT_MS });
-    return { platform: probe.platform, capability: 'reachable', outcome: 'ok' };
+    return { platform: probe.platform, capability: probe.capOnSuccess ?? 'reachable', outcome: 'ok' };
   } catch (err) {
     const e = /** @type {any} */ (err);
     if (e?.code === 'ENOENT') return { platform: probe.platform, capability: null, outcome: 'error' };

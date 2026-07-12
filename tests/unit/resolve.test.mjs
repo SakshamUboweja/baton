@@ -34,7 +34,8 @@ import { resolveRoles } from '../../core/src/roles/resolve.mjs';
 //      ≠ 'rate-limited' is eligible.
 //   3. DEGRADED. If probes is a non-null object but has NO entry for the chosen
 //      platform (unverifiable), the entry is selectable with degraded === true.
-//      probes === null disables probing entirely (no degraded from probing).
+//      probes === null means OFFLINE resolution: still selectable, but every
+//      selection is flagged degraded (gate-2 iter-2 M3; plan: offline always degraded).
 //      Non-degraded assignments have a falsy `degraded` (absent or false).
 //   4. MODE. First surviving entry: mode 'native' iff entry.platform === to,
 //      else 'delegated'. chainIndex = that entry's index in the ORIGINAL chain.
@@ -342,14 +343,14 @@ describe('resolveRoles — probe eligibility & degraded flag', () => {
     assert.equal(assignments.r.degraded, true);
   });
 
-  it('probes === null disables probing: eligible and not degraded', () => {
+  it('probes === null (offline) resolves eligible but flagged degraded (gate-2 iter-2 M3; plan: offline always degraded)', () => {
     const { assignments } = resolveRoles({
       config: oneRole([e('codex', 'a')]),
       to: 'codex',
       probes: null,
     });
-    assert.equal(assignments.r.mode, 'native');
-    assert.ok(!assignments.r.degraded);
+    assert.equal(assignments.r.mode, 'native', 'the platform is still selectable offline');
+    assert.ok(assignments.r.degraded, 'offline resolution is flagged degraded — the weakening is auditable, never silent');
   });
 });
 
