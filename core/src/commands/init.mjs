@@ -1,5 +1,6 @@
 import { dirname } from 'node:path';
 import { planInit } from '../scaffold/plan.mjs';
+import { planHarnessInit } from '../scaffold/harness.mjs';
 import { atomicWriteText, ensureDir } from '../util/fsx.mjs';
 import { emitEnvelope, parseFlags } from './shared.mjs';
 
@@ -17,7 +18,14 @@ export async function cmdInit(args, io) {
   /** @type {ReturnType<typeof planInit>} */
   let actions;
   try {
-    actions = planInit(io.cwd, { force: flags.force === true }, io);
+    actions = [
+      ...planInit(io.cwd, { force: flags.force === true }, io),
+      ...planHarnessInit(
+        io.cwd,
+        { codex: flags.codex === true, cursor: flags.cursor === true, withLegacyPrompts: flags['with-legacy-prompts'] === true },
+        io,
+      ),
+    ];
   } catch (err) {
     const msg = /** @type {any} */ (err)?.message ?? String(err);
     if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'plan-failed', msg } });
