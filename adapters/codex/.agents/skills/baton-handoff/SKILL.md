@@ -15,7 +15,7 @@ Cross-platform task continuity via the baton CLI. Invoke as `$baton-handoff` or 
 
 ## While working
 
-- Checkpoint after each completed subtask and before risky operations: pipe `baton/event@1` events to `baton checkpoint --platform codex`.
+- Checkpoint after each completed subtask and before risky operations: pipe one JSON object — `{"schema":"baton/event@1","events":[{"type":"decision","payload":{"summary":"…"}}]}` — to `baton checkpoint --platform codex`.
 - Codex has no limit-death event; the Stop hook bounds staleness to one turn — keep narrative checkpoints flowing at milestones.
 
 ## Handing off

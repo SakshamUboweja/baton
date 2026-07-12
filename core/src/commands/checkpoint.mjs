@@ -85,6 +85,55 @@ function captureTranscriptTail(root, raw, io) {
   }
 }
 
+/** Event-shaped: an object carrying a string `type`. */
+const isEventShaped = (/** @type {any} */ v) => v !== null && typeof v === 'object' && !Array.isArray(v) && typeof v.type === 'string';
+
+/**
+ * Tolerant stdin parse (live /baton:handoff failure: a model sent one event
+ * per line and the whole narrative checkpoint silently failed). Accept the
+ * canonical single JSON value, a bare array of events, or NDJSON where every
+ * line is an event object or a {schema, events} wrapper. All-or-nothing: one
+ * non-event element fails the whole parse — never a partial apply.
+ * @param {string} text @returns {{ok: true, raw: any} | {ok: false}}
+ */
+function parseStdin(text) {
+  let single;
+  let singleOk = false;
+  try {
+    single = JSON.parse(text);
+    singleOk = true;
+  } catch {
+    singleOk = false;
+  }
+  if (singleOk) {
+    if (Array.isArray(single)) {
+      return single.every(isEventShaped) ? { ok: true, raw: { schema: 'baton/event@1', events: single } } : { ok: false };
+    }
+    return { ok: true, raw: single };
+  }
+  const lines = text.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+  if (lines.length === 0) return { ok: false };
+  /** @type {any[]} */
+  const events = [];
+  for (const line of lines) {
+    let v;
+    try {
+      v = JSON.parse(line);
+    } catch {
+      return { ok: false };
+    }
+    if (v && typeof v === 'object' && v.schema === 'baton/event@1' && Array.isArray(v.events)) {
+      if (!v.events.every(isEventShaped)) return { ok: false };
+      events.push(...v.events);
+    } else if (isEventShaped(v)) {
+      events.push(v);
+    } else {
+      return { ok: false };
+    }
+  }
+  return { ok: true, raw: { schema: 'baton/event@1', events } };
+}
+
 /**
  * `baton checkpoint` — mechanical checkpoint from a hook payload on stdin.
  * Hook-safety rule: exit 0 on every soft failure so a checkpoint can never
@@ -125,14 +174,12 @@ async function run(flags, platform, io) {
     return code;
   };
 
-  /** @type {any} */
-  let raw;
-  try {
-    raw = JSON.parse(typeof io.stdin === 'string' ? io.stdin : '');
-  } catch {
-    io.stderr.write('baton checkpoint: stdin could not be parsed as JSON — input ignored\n');
-    return finish({ ok: false, error: { code: 'bad-stdin', msg: 'stdin could not be parsed as JSON' } }, strict ? 1 : 0);
+  const parsed = parseStdin(typeof io.stdin === 'string' ? io.stdin : '');
+  if (!parsed.ok) {
+    io.stderr.write('baton checkpoint: stdin could not be parsed — send one JSON value ({"schema":"baton/event@1","events":[…]}), a JSON array of events, or NDJSON event lines\n');
+    return finish({ ok: false, error: { code: 'bad-stdin', msg: 'stdin could not be parsed as JSON, an event array, or NDJSON event lines' } }, strict ? 1 : 0);
   }
+  const raw = parsed.raw;
 
   const session = { host: io.host, pid: io.pid, startTime: io.startTime };
   // The hook command declares which event it is (--trigger), so event identity

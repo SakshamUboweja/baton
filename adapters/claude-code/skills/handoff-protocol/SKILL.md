@@ -15,7 +15,7 @@ The main thread owns a received task — never delegate the continuation itself 
 
 ## While working
 
-- Checkpoint after each completed subtask, before risky operations, and at wind-down: send `baton/event@1` events (decision, plan.step, file.touch) to `baton checkpoint --platform claude-code` on stdin.
+- Checkpoint after each completed subtask, before risky operations, and at wind-down: pipe one JSON object — `{"schema":"baton/event@1","events":[{"type":"decision","payload":{"summary":"…"}}]}` (event types: decision, plan.step, note, file.touch) — to `baton checkpoint --platform claude-code`.
 - Keep decisions honest: record verified-done vs claimed-done separately.
 
 ## Handing off

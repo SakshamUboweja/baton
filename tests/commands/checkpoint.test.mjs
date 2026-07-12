@@ -316,6 +316,63 @@ describe('checkpoint — foreign session isolation', () => {
   });
 });
 
+describe('checkpoint — tolerant stdin shapes (live /baton:handoff failure)', () => {
+  // Field finding: the handoff command says "send baton/event@1 events on
+  // stdin" and a live model sent one event PER LINE (NDJSON). The old parser
+  // rejected everything but a single JSON value, so the narrative checkpoint
+  // silently failed. Accept the shapes a model plausibly produces: a single
+  // {schema, events} object (canonical), a bare array of events, and NDJSON
+  // where every line is an event object — anything else stays bad-stdin.
+  it('NDJSON stdin (one event per line) journals every line', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin:
+        JSON.stringify({ schema: 'baton/event@1', type: 'decision', payload: { summary: 'ndjson-line-1' } }) +
+        '\n' +
+        JSON.stringify({ type: 'decision', payload: { summary: 'ndjson-line-2' } }) +
+        '\n',
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code'], io);
+    assert.equal(code, 0);
+    const sums = journalEntries(io).map((e) => e.payload?.summary);
+    assert.ok(sums.includes('ndjson-line-1') && sums.includes('ndjson-line-2'), `both NDJSON events journaled; got ${sums}`);
+  });
+
+  it('a bare JSON array of events journals every element', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify([
+        { type: 'decision', payload: { summary: 'arr-1' } },
+        { type: 'note', payload: { text: 'arr-2' } },
+      ]),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code'], io);
+    assert.equal(code, 0);
+    const entries = journalEntries(io);
+    assert.equal(entries.length, 2, 'both array elements journaled');
+  });
+
+  it('NDJSON with a non-event line is still bad-stdin (no partial application)', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify({ type: 'decision', payload: { summary: 'good' } }) + '\nnot json at all\n',
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code', '--strict'], io);
+    assert.equal(code, 1, 'strict mode hard-fails');
+    assert.equal(journalEntries(io).length, 0, 'nothing was journaled from the torn input');
+  });
+
+  it('an array with a non-event element is bad-stdin, not a partial apply', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify([{ type: 'decision', payload: { summary: 'good' } }, 'garbage-string']),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code', '--strict'], io);
+    assert.equal(code, 1);
+    assert.equal(journalEntries(io).length, 0);
+  });
+});
+
 describe('checkpoint — --trigger stamps the event identity (GUI-app canary fix)', () => {
   it('a raw cursor stop payload (no event field) + --trigger stop journals trigger=stop', async () => {
     // Cursor's stop payload names the event nowhere normalize can find it, so
