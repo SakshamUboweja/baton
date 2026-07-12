@@ -293,7 +293,20 @@ async function run(flags, platform, io) {
       // "important" events — refreshes git; unavailability degrades to the
       // previous git state (or null), never a failure.
       const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
-      if (git !== null) merged.git = git;
+      if (git !== null) {
+        merged.git = git;
+      } else {
+        // git refresh failed/timed out (iter-4 I2/F5): NEVER retain the prior
+        // snapshot — stale HEAD/dirty presented as current corrupts the
+        // receive-side evidence audit (plan §Root discovery & degraded modes).
+        // Clear to an explicit unavailable (null) state and warn; receive
+        // re-derives git live. A repo that was never git (git already null)
+        // warns nothing — there is no stale state to clear.
+        if (merged.git !== null) {
+          io.stderr.write('baton checkpoint: git refresh failed — clearing stale git state (marked unavailable; receive re-derives it live)\n');
+        }
+        merged.git = null;
+      }
       writeSnapshot(root, merged, io);
       rewritten = true;
     }

@@ -50,6 +50,19 @@ describe('checkpoint — bounded git refresh on important checkpoints', () => {
     assert.equal(snap.git, null);
     assert.ok(snap.decisions.some((/** @type {any} */ d) => d.summary === 'chose approach A'));
   });
+
+  it('git refresh FAILURE clears a prior git section, never presents stale (iter-4 I2/F5)', async () => {
+    // A bundle that already carries a git snapshot, then a checkpoint where git
+    // is unavailable (no execResults). The stale HEAD/dirty must NOT survive —
+    // receive audits git claims against live state, so stale-as-current is a bug.
+    const withGit = JSON.parse(bundleJson());
+    withGit.git = { branch: 'main', headSha: 'OLDSHA', dirty: false, dirtySummary: [], contentDigest: 'old', summaryTruncated: false };
+    const io = makeIo({ files: { '/repo/.handoff/bundle.json': JSON.stringify(withGit, null, 2) + '\n' }, stdin: importantEvent, now: T0 });
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(snap.git, null, 'stale git is cleared to explicit unavailable, not retained');
+    assert.match(io.stderrText(), /git refresh failed|git.*unavailable|stale git/i, 'a degradation warning is surfaced');
+  });
 });
 
 describe('checkpoint — config-gated transcript tail capture (plan §Transcript policy)', () => {
