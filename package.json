@@ -13,8 +13,8 @@
     "core/",
     "adapters/",
     "templates/",
-    "README.md",
-    "LICENSE"
+    ".claude-plugin/",
+    "baton.config.json"
   ],
   "scripts": {
     "test": "node --test",
@@ -37,5 +37,9 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "typescript": "^5.6.0"
+  },
+  "exports": {
+    ".": "./core/src/cli.mjs",
+    "./package.json": "./package.json"
   }
 }
