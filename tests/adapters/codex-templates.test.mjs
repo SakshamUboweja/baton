@@ -29,9 +29,9 @@ import { join, dirname, relative } from 'node:path';
 //       Codex).
 //   C3. Every command reaches baton. (Verifier fold V8: exact stamping) EVERY
 //       Stop and EVERY PreCompact command invokes `checkpoint` carrying
-//       `--platform codex`; EVERY SessionStart command is the universal-fallback
-//       pending-handoff notice `receive --print-prompt --platform codex`, never
-//       a `checkpoint`.
+//       `--platform codex`; EVERY SessionStart command is the cheap
+//       pending-foreign gate `session-start --platform codex` (gate-2 fix 8 —
+//       never full receive preparation, never a `checkpoint`).
 //   C4. Every command hook carries a Windows override (commandWindows /
 //       command_windows) — Codex is the only harness with a Windows-specific
 //       command field (platform-notes).
@@ -102,7 +102,7 @@ describe('codex hooks.json template — event coverage (C2)', () => {
 
 // ===========================================================================
 describe('codex hooks.json template — command wiring reaches baton (C1, C3)', () => {
-  it('EVERY Stop + PreCompact command is checkpoint --platform codex; EVERY SessionStart command is receive --print-prompt --platform codex', () => {
+  it('EVERY Stop + PreCompact command is checkpoint --platform codex; EVERY SessionStart command is session-start --platform codex', () => {
     const hooks = loadHooks();
     for (const event of EXPECTED_EVENTS) {
       for (const item of commandItems(hooks, event)) {
@@ -125,8 +125,11 @@ describe('codex hooks.json template — command wiring reaches baton (C1, C3)', 
     for (const i of commandItems(hooks, 'SessionStart')) {
       for (const cmd of bothCommands(i).map(String)) {
         assert.doesNotMatch(cmd, /checkpoint/, 'SessionStart is a pending-handoff notice, not a checkpoint (both command strings)');
-        assert.match(cmd, /receive/, '(V8) the SessionStart notice runs baton receive');
-        assert.match(cmd, /--print-prompt\b/, '(V8) the notice uses the universal --print-prompt fallback (prepare-only, no mutation)');
+        // (gate-2 fix 8) SessionStart must NOT run full receive preparation —
+        // that exits 1 with no bundle and prompts for the session's own open
+        // bundle. The cheap pending-foreign gate is `baton session-start`.
+        assert.doesNotMatch(cmd, /receive/, '(gate-2 fix 8) SessionStart never runs receive preparation');
+        assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
         assert.match(cmd, /--platform codex\b/, '(V8/iter-2) the notice carries --platform codex on both command strings');
       }
     }

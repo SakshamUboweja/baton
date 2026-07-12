@@ -27,8 +27,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "baton receive --platform codex --print-prompt",
-            "commandWindows": "cmd /c baton receive --platform codex --print-prompt"
+            "command": "baton session-start --platform codex",
+            "commandWindows": "cmd /c baton session-start --platform codex"
           }
         ]
       }

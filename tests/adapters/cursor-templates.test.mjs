@@ -30,9 +30,9 @@ import { join, dirname, relative } from 'node:path';
 //       beforeShellExecution, sessionStart, preCompact — and NO others.
 //   U4. Every command invokes baton. (Verifier fold V9: exact stamping) EVERY
 //       item of stop / afterFileEdit / beforeShellExecution / preCompact invokes
-//       `checkpoint` carrying `--platform cursor`; EVERY sessionStart item is the
-//       universal-fallback notice `receive --print-prompt --platform cursor`,
-//       never a `checkpoint`.
+//       `checkpoint` carrying `--platform cursor`; EVERY sessionStart item is
+//       the cheap pending-foreign gate `session-start --platform cursor`
+//       (gate-2 fix 8 — never full receive preparation, never a `checkpoint`).
 //   U5. beforeShellExecution carries a matcher that SPECIFICALLY identifies git
 //       commits — 'git' preceding 'commit' (e.g. 'git commit' or a git-anchored
 //       pattern), not any command containing 'commit' (verifier fold V10).
@@ -106,7 +106,7 @@ describe('cursor hooks.json template — version + event coverage (U2, U3)', () 
 
 // ===========================================================================
 describe('cursor hooks.json template — command wiring (U1, U4)', () => {
-  it('every item is a flat {command} invoking baton; EVERY checkpoint item carries --platform cursor; sessionStart is receive --print-prompt --platform cursor', () => {
+  it('every item is a flat {command} invoking baton; EVERY checkpoint item carries --platform cursor; sessionStart is session-start --platform cursor', () => {
     const { hooks } = loadCfg();
     for (const event of EXPECTED_EVENTS) {
       for (const item of items(hooks, event)) {
@@ -123,8 +123,12 @@ describe('cursor hooks.json template — command wiring (U1, U4)', () => {
     for (const i of items(hooks, 'sessionStart')) {
       const cmd = String(i.command);
       assert.doesNotMatch(cmd, /checkpoint/, 'sessionStart is a pending-handoff notice, not a checkpoint');
-      assert.match(cmd, /receive/, '(V9) the sessionStart notice runs baton receive');
-      assert.match(cmd, /--print-prompt\b/, '(V9) the notice uses the universal --print-prompt fallback (prepare-only, no mutation)');
+      // (gate-2 fix 8) sessionStart must NOT run full receive preparation —
+      // exit-1 noise with no bundle, prompts for own open bundles, and the
+      // wrong output shape for Cursor. `baton session-start` emits the Cursor
+      // additional_context JSON and always exits 0.
+      assert.doesNotMatch(cmd, /receive/, '(gate-2 fix 8) sessionStart never runs receive preparation');
+      assert.match(cmd, /session-start\b/, '(gate-2 fix 8) the notice is the cheap session-start gate (pending-foreign only, always exit 0)');
       assert.match(cmd, /--platform cursor\b/, '(V9) the notice carries --platform cursor');
     }
   });

@@ -9,7 +9,11 @@ import { cmdReceive } from './commands/receive.mjs';
 import { cmdInit } from './commands/init.mjs';
 import { cmdDoctor } from './commands/doctor.mjs';
 import { cmdPurgeTranscript } from './commands/purge-transcript.mjs';
+import { cmdSessionStart } from './commands/session-start.mjs';
 
+// The ten user-facing commands are the frozen v1 contract; session-start is an
+// adapter-facing addition prescribed by gate-2 finding 8 (the cheap
+// SessionStart gate Codex/Cursor hooks call — always exit 0).
 const COMMANDS = [
   'checkpoint',
   'finalize',
@@ -21,6 +25,7 @@ const COMMANDS = [
   'status',
   'purge-transcript',
   'recover',
+  'session-start',
 ];
 
 function version() {
@@ -120,6 +125,7 @@ export function run(argv, io) {
   if (cmd === 'init') return cmdInit(rest, io);
   if (cmd === 'doctor') return cmdDoctor(rest, io);
   if (cmd === 'purge-transcript') return cmdPurgeTranscript(rest, io);
+  if (cmd === 'session-start') return cmdSessionStart(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {

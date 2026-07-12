@@ -19,7 +19,7 @@
     ],
     "sessionStart": [
       {
-        "command": "baton receive --platform cursor --print-prompt"
+        "command": "baton session-start --platform cursor"
       }
     ],
     "preCompact": [
