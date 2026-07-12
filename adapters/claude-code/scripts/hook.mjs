@@ -117,6 +117,11 @@ function parsePayload(io) {
  * @param {any} io
  */
 function sessionStart(io) {
+  // The bundle is untrusted input (threat model): refuse a symlinked/escaped
+  // managed tree before reading, and never interpolate a raw bundle field into
+  // the injected context (iter-3 F12) — a hostile committed .handoff/bundle.json
+  // could otherwise steer session context with an arbitrary origin string.
+  if (!checkHandoffTree(io.cwd, io).ok) return 0;
   let bundle;
   try {
     bundle = JSON.parse(io.fs.readFileSync(`${io.cwd}/.handoff/bundle.json`, 'utf8'));
@@ -127,11 +132,13 @@ function sessionStart(io) {
   const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
   const foreign = typeof origin === 'string' && origin !== 'claude-code';
   if (pending && foreign) {
+    // Allowlist the origin label — never echo the untrusted string verbatim.
+    const label = origin === 'codex' || origin === 'cursor' ? origin : 'another platform';
     io.stdout.write(
       JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'SessionStart',
-          additionalContext: `A handoff bundle from ${origin} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
+          additionalContext: `A handoff bundle from ${label} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
         },
       }) + '\n',
     );

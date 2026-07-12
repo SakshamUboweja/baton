@@ -189,6 +189,22 @@ function commitLocked(root, token, opts, io, fence) {
     ...(degraded ? { degradedSeal: true } : {}),
   };
 
+  // The degraded seal must NOT persist a LOW-confidence classification (iter-3
+  // F10): a sealed reasonClass is trusted as high-confidence by the next
+  // prepare, so laundering a low-confidence heuristic here would silently
+  // auto-avoid the origin one hop later. Explicit intake is high-confidence and
+  // seals; a live classification seals ONLY at medium+ confidence, else null
+  // (the next receive re-classifies the reason text at its true confidence).
+  let sealedReasonClass = null;
+  if (degraded) {
+    if (typeof opts.reasonClass === 'string') {
+      sealedReasonClass = opts.reasonClass;
+    } else {
+      const v = classifyReason(opts.reason, opts.origin, io);
+      sealedReasonClass = v.confidence === 'low' ? null : v.class;
+    }
+  }
+
   const receivedSeal = {
     ...bundle,
     updatedAt: io.now(),
@@ -198,8 +214,7 @@ function commitLocked(root, token, opts, io, fence) {
       ...(degraded
         ? {
             reason: opts.reason,
-            // Explicit intake wins; else the live text classification's class.
-            reasonClass: typeof opts.reasonClass === 'string' ? opts.reasonClass : classifyReason(opts.reason, opts.origin, io).class,
+            reasonClass: sealedReasonClass,
             finalizedAt: io.now(),
           }
         : {}),

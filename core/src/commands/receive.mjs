@@ -17,6 +17,15 @@ export async function cmdReceive(args, io) {
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
   if (!platform) return usageError(io, flags, 'receive', '--platform <claude-code|codex|cursor> is required');
 
+  // Validate --reason-class against the class vocabulary BEFORE it is trusted as
+  // explicit intake and bound into the receipt token (iter-3 F11): finalize
+  // already does this, so receive must too — an out-of-enum class would seal a
+  // meaningless reasonClass verbatim.
+  const REASON_CLASSES = ['usage-limit', 'auth', 'throttle', 'other-error'];
+  if (flags['reason-class'] !== undefined && !REASON_CLASSES.includes(/** @type {string} */ (flags['reason-class']))) {
+    return usageError(io, flags, 'receive', `--reason-class must be one of ${REASON_CLASSES.join('|')}`);
+  }
+
   const root = resolveRoot(io, flags);
   const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
   const hasSession = typeof flags.session === 'string';

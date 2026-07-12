@@ -106,7 +106,11 @@ export function run(argv, io) {
   }
 
   if (rest.includes('--help')) {
-    io.stdout.write(`usage: baton ${cmd} [options]\n\nSee README for the ${cmd} contract.\n`);
+    // Subcommand help honors the global --json envelope too (iter-3 F8): with
+    // --json it must emit exactly one envelope, never raw usage text.
+    const usage = `usage: baton ${cmd} [options]\n\nSee README for the ${cmd} contract.`;
+    if (wantsJson) emitEnvelope(io, { ok: true, data: { usage } });
+    else io.stdout.write(`${usage}\n`);
     return 0;
   }
 

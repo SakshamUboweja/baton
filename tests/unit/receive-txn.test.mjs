@@ -293,6 +293,32 @@ describe('receive-txn.commit — open -> received (degraded seal)', () => {
     assert.equal(seal.handoff.reason, reason, 'the degraded seal records the intake reason');
     assert.equal(seal.handoff.reasonClass, 'usage-limit', 'reasonClass is classified from the reason text');
   });
+
+  it('(F10) a LOW-confidence classification is NOT sealed — reasonClass stays null (no laundering)', () => {
+    // A cursor "quota exceeded" reason matches usage-limit only at LOW
+    // confidence. Sealing it would make the NEXT prepare trust it as high
+    // confidence and auto-avoid the origin. The degraded seal must leave
+    // reasonClass null so the next receive re-classifies at its true confidence.
+    const io = makeTxnIo({ bundle: openBundle(), journal: '' });
+    const o = opts({ origin: 'cursor', reason: 'quota exceeded' });
+    const { token } = prepare(ROOT, o, io);
+    const res = commit(ROOT, token, o, io);
+
+    const seal = readHistoryFreeze(io, res.archivedTo);
+    assert.equal(seal.handoff.reasonClass, null, 'a low-confidence class is not laundered into the seal');
+
+    // And the fresh open generation likewise carries no trusted class.
+    const { bundle } = loadBundle(ROOT, io);
+    assert.equal(bundle.handoff.reasonClass, null, 'the new open generation inherits no low-confidence class');
+  });
+
+  it('(F10) an EXPLICIT --reason-class still seals (confirmed intake is high-confidence)', () => {
+    const io = makeTxnIo({ bundle: openBundle(), journal: '' });
+    const o = opts({ origin: 'cursor', reason: 'quota exceeded', reasonClass: 'usage-limit' });
+    const { token } = prepare(ROOT, o, io);
+    const res = commit(ROOT, token, o, io);
+    assert.equal(readHistoryFreeze(io, res.archivedTo).handoff.reasonClass, 'usage-limit', 'explicit intake seals');
+  });
 });
 
 // ===========================================================================
