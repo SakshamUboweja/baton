@@ -1,6 +1,7 @@
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
-import { emitEnvelope, parseFlags, usageError } from './shared.mjs';
+import { readProbeCache } from '../roles/availability.mjs';
+import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 /**
  * `baton remap` — resolve the committed role matrix for a destination platform.
@@ -13,7 +14,8 @@ export function cmdRemap(args, io) {
   const to = typeof flags.to === 'string' ? flags.to : null;
   if (!to) return usageError(io, flags, 'remap', '--to <claude-code|codex|cursor> is required');
 
-  const { config, errors } = loadConfig(io.cwd, io);
+  const root = resolveRoot(io, flags);
+  const { config, errors } = loadConfig(root, io);
   if (!config) {
     const msg = errors.map((e) => (e.path ? `${e.path}: ${e.msg}` : e.msg)).join('; ');
     if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'bad-config', msg } });
@@ -27,7 +29,10 @@ export function cmdRemap(args, io) {
     to,
     avoid,
     nativeOnly: flags['native-only'] === true,
-    probes: null,
+    // The fresh doctor probe cache feeds eligibility (gate-2 major 13):
+    // rate-limited platforms are skipped like avoid[] entries; a stale or
+    // absent cache resolves offline with degraded flags.
+    probes: readProbeCache(root, io),
   });
 
   if (flags.json) {

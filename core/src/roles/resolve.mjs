@@ -20,6 +20,7 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
     if (probes && probes[platform]) {
       if (probes[platform].outcome === 'rate-limited') return 'rate-limited';
       if (probes[platform].capability === 'installed') return 'unauthenticated';
+      if (probes[platform].capability === 'not-installed') return 'not-installed';
     }
     return null;
   }

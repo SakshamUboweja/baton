@@ -4,15 +4,105 @@ import * as realFs from 'node:fs';
 import { bundlePaths } from '../bundle/store.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
+import { PROBE_CACHE_MS } from '../roles/availability.mjs';
 import { ensureDir, atomicWriteJson, safeReadJson } from '../util/fsx.mjs';
+import { readAllTolerant } from '../util/jsonl.mjs';
 import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
 const PROBE_TIMEOUT_MS = 3000;
-const PROBE_CACHE_MS = 15 * 60 * 1000;
 const JOURNAL_WARN_BYTES = 5 * 1024 * 1024;
 const GUARD_COMMIT_BOUND = 50;
+
+// Compatibility policy (plan §Compatibility; gate-2 major 13): documented
+// floors are ENFORCED for codex/cursor (below-floor = hooks unavailable →
+// protocol-only Tier C); the support claim is CAPPED at the versions this
+// build was verified against — newer gets an info line, never a failure.
+/** @type {Record<string, string>} */
+const VERSION_BINS = { 'claude-code': 'claude', codex: 'codex', cursor: 'cursor-agent' };
+/** @type {Record<string, {floor: string | null, label: string | null}>} */
+const FLOORS = {
+  'claude-code': { floor: '2.1', label: '2.1' }, // StopFailure hook documented on the 2.1 line (task-0 snapshot)
+  codex: { floor: '0.144', label: '0.144' }, // lifecycle hooks landed in 0.144
+  cursor: { floor: '2026.5', label: '2026.05' },
+};
+/** @type {Record<string, string>} */
+const TESTED = { 'claude-code': '2.1.201', codex: '0.144.1', cursor: '2026.05.01' };
+
+/** @param {any} text @returns {string | null} */
+const parseVersion = (text) => String(text).match(/\d+(?:\.\d+)+/)?.[0] ?? null;
+
+/** Numeric segment-wise version compare: negative when a < b. */
+function cmpVersions(/** @type {string} */ a, /** @type {string} */ b) {
+  const as = a.split('.').map(Number);
+  const bs = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(as.length, bs.length); i++) {
+    const d = (as[i] ?? 0) - (bs[i] ?? 0);
+    if (d !== 0) return d < 0 ? -1 : 1;
+  }
+  return 0;
+}
+
+/** @param {string} platform @param {any} io @returns {Promise<string | null>} */
+async function versionOf(platform, io) {
+  try {
+    const r = await io.execFile(VERSION_BINS[platform], ['--version'], { timeout: PROBE_TIMEOUT_MS });
+    return parseVersion(`${r.stdout ?? ''} ${r.stderr ?? ''}`);
+  } catch {
+    return null;
+  }
+}
+
+/** @param {string} platform @param {string | null} v @returns {{id: string, ok: boolean, detail: string}} */
+function versionCheck(platform, v) {
+  const id = `version-${platform}`;
+  if (v === null) {
+    return { id, ok: true, detail: `${VERSION_BINS[platform]} version unverifiable (not installed or --version unsupported) — floor not enforced` };
+  }
+  const f = FLOORS[platform];
+  if (f.floor && cmpVersions(v, f.floor) < 0) {
+    return { id, ok: false, detail: `${platform} ${v} is below the supported floor ${f.label} — lifecycle hooks unavailable; the adapter degrades to protocol-only (Tier C)` };
+  }
+  if (cmpVersions(v, TESTED[platform]) > 0) {
+    return { id, ok: true, detail: `${platform} ${v} is newer than tested (${TESTED[platform]}) — untested; signature drift is absorbed by the overlay table` };
+  }
+  return { id, ok: true, detail: `${platform} ${v} (tested ${TESTED[platform]})` };
+}
+
+/**
+ * Codex/Cursor hook surface: installed / trusted / observed-executing. Trust
+ * is not verifiable from outside the harness, so the fidelity claim is gated
+ * on the CANARY — journal evidence that a hook of this platform actually ran.
+ * @param {any} io @param {string} root @param {any} p bundlePaths
+ * @param {string} platform @param {string} relPath @param {string} trustNote
+ */
+function hookSurfaceCheck(io, root, p, platform, relPath, trustNote) {
+  const id = `${platform}-hooks`;
+  let text = null;
+  try {
+    text = io.fs.readFileSync(`${root}/${relPath}`, 'utf8');
+  } catch {
+    text = null;
+  }
+  if (text === null || !text.includes('baton')) {
+    return { id, ok: true, detail: `not installed — run 'baton init --${platform}' to write ${relPath}` };
+  }
+  let observed = false;
+  try {
+    for (const e of readAllTolerant(io.fs, p.journal).entries) {
+      if (e?.source === platform || String(e?.writerId ?? '').startsWith(`${platform}-`)) {
+        observed = true;
+        break;
+      }
+    }
+  } catch {
+    observed = false;
+  }
+  return observed
+    ? { id, ok: true, detail: 'installed; execution observed (canary) — the ≤1-turn mechanical-staleness claim holds' }
+    : { id, ok: true, detail: `installed; execution not yet observed — ${trustNote}; the fidelity claim is gated on this canary` };
+}
 
 // Noninteractive status probes per platform (docs/design/platform-notes.md CLIs).
 const PROBES = [
@@ -128,19 +218,21 @@ export async function cmdDoctor(args, io) {
     detail: journalBytes > JOURNAL_WARN_BYTES ? `journal is ${(journalBytes / 1048576).toFixed(1)} MB (> 5 MB) — finalize to rotate it` : `${journalBytes} bytes`,
   });
 
-  checks.push({
-    id: 'filesystem',
-    ok: true,
-    detail: 'v1 supports local filesystems only — lock/rename atomicity is not guaranteed on network or cloud-sync mounts',
-  });
 
-  // Platform probes, cached 15 min in the state dir.
+  // Platform probes + version probes + mount detection: every non-git child
+  // invocation rides the same 15-min cache in the state dir.
   const cachePath = `${p.logDir}/probe-cache.json`;
   const cached = safeReadJson(io.fs, cachePath);
   /** @type {any[]} */
   let platforms;
+  /** @type {Record<string, string | null>} */
+  let versions;
+  /** @type {string | null} */
+  let mountSource;
   if (cached.ok && typeof cached.value?.at === 'string' && Date.parse(io.now()) - Date.parse(cached.value.at) < PROBE_CACHE_MS && Array.isArray(cached.value.records)) {
     platforms = cached.value.records;
+    versions = cached.value.versions ?? {};
+    mountSource = cached.value.mount ?? null;
   } else {
     /** @type {any} */
     let table = null;
@@ -153,9 +245,43 @@ export async function cmdDoctor(args, io) {
     }
     platforms = [];
     for (const probe of PROBES) platforms.push(await runProbe(probe, io, table));
+    versions = {};
+    for (const platform of Object.keys(VERSION_BINS)) versions[platform] = await versionOf(platform, io);
+    mountSource = null;
+    try {
+      const df = await io.execFile('df', ['-P', root], { timeout: 2000 });
+      mountSource = ((df.stdout ?? '').split('\n')[1] ?? '').trim().split(/\s+/)[0] || null;
+    } catch {
+      mountSource = null;
+    }
     ensureDir(io.fs, p.logDir);
-    atomicWriteJson(io.fs, cachePath, { at: io.now(), records: platforms });
+    atomicWriteJson(io.fs, cachePath, { at: io.now(), records: platforms, versions, mount: mountSource });
   }
+
+  // Network-filesystem detection (gate-2 major 13): a mount source that looks
+  // like SMB/NFS fails the check; unverifiable degrades to the static boundary.
+  if (mountSource === null) {
+    checks.push({
+      id: 'filesystem',
+      ok: true,
+      detail: 'mount type unverifiable — v1 supports local filesystems only; lock/rename atomicity is not guaranteed on network or cloud-sync mounts',
+    });
+  } else if (/^\/\/|@|^[A-Za-z0-9_.-]+:\//.test(mountSource)) {
+    checks.push({
+      id: 'filesystem',
+      ok: false,
+      detail: `${mountSource} looks like a network mount — lock/rename atomicity is not guaranteed there; v1 supports local filesystems only`,
+    });
+  } else {
+    checks.push({ id: 'filesystem', ok: true, detail: `local mount (${mountSource}) — note: v1 supports local filesystems only` });
+  }
+
+  // Version floors + tested cap, and the hook trust/canary surfaces.
+  for (const platform of Object.keys(VERSION_BINS)) {
+    checks.push(versionCheck(platform, versions[platform] ?? null));
+  }
+  checks.push(hookSurfaceCheck(io, root, p, 'codex', '.codex/hooks.json', 'trust review may be pending (run /hooks inside Codex to trust the definitions)'));
+  checks.push(hookSurfaceCheck(io, root, p, 'cursor', '.cursor/hooks.json', 'project hooks require a trusted workspace in Cursor'));
 
   const failing = checks.filter((c) => !c.ok);
   if (flags.json) {

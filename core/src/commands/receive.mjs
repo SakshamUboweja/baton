@@ -1,5 +1,6 @@
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { prepare, commit } from '../receive/txn.mjs';
+import { readProbeCache } from '../roles/availability.mjs';
 import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 /**
@@ -24,7 +25,9 @@ export async function cmdReceive(args, io) {
     origin: typeof flags.origin === 'string' ? flags.origin : 'unknown',
     reason: typeof flags.reason === 'string' ? flags.reason : 'unspecified',
     gitSnapshot: git,
-    probes: null,
+    // The fresh probe cache is a bound token input (probesDigest): remap uses
+    // it at prepare, and a cache change before commit is drift → re-prepare.
+    probes: readProbeCache(root, io),
     sessionHint: hasSession ? /** @type {string} */ (flags.session) : `cli:${io.host}`,
     // A defaulted host-derived hint is NOT the harness session id — mark it
     // unstable so the receiving session's first real hook checkpoint adopts
