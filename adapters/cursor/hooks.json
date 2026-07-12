@@ -8,7 +8,7 @@
     ],
     "afterFileEdit": [
       {
-        "command": "baton checkpoint --platform cursor"
+        "command": "baton checkpoint --platform cursor --debounce 120"
       }
     ],
     "beforeShellExecution": [

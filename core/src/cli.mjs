@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { cmdDetect } from './commands/detect.mjs';
@@ -11,6 +11,7 @@ import { cmdDoctor } from './commands/doctor.mjs';
 import { cmdPurgeTranscript } from './commands/purge-transcript.mjs';
 import { cmdSessionStart } from './commands/session-start.mjs';
 import { cmdRecover } from './commands/recover.mjs';
+import { cmdStatus } from './commands/status.mjs';
 
 // The ten user-facing commands are the frozen v1 contract; session-start is an
 // adapter-facing addition prescribed by gate-2 finding 8 (the cheap
@@ -52,36 +53,6 @@ global options:
 function emitEnvelope(io, env) {
   const full = { ok: env.ok, data: env.data ?? null, warnings: env.warnings ?? [], error: env.error ?? null };
   io.stdout.write(JSON.stringify(full) + '\n');
-}
-
-/**
- * Minimal status: reports the active bundle if one exists at <cwd>/.handoff.
- * Bundle inspection deepens when the store module lands.
- * @param {string[]} args @param {any} io
- */
-function cmdStatus(args, io) {
-  const json = args.includes('--json');
-  const bundlePath = join(io.cwd, '.handoff', 'bundle.json');
-  if (!existsSync(bundlePath)) {
-    const error = { code: 'no-bundle', msg: `no handoff bundle at ${bundlePath}; run 'baton init' or let checkpoints create one` };
-    if (json) emitEnvelope(io, { ok: false, error });
-    else io.stderr.write(`baton status: ${error.msg}\n`);
-    return 1;
-  }
-  const raw = readFileSync(bundlePath, 'utf8');
-  let bundle;
-  try {
-    bundle = JSON.parse(raw);
-  } catch {
-    const error = { code: 'corrupt-bundle', msg: `unparseable ${bundlePath}; recovery runs via 'baton checkpoint'` };
-    if (json) emitEnvelope(io, { ok: false, error });
-    else io.stderr.write(`baton status: ${error.msg}\n`);
-    return 1;
-  }
-  const data = { bundleId: bundle.bundleId ?? null, status: bundle.handoff?.status ?? null, updatedAt: bundle.updatedAt ?? null };
-  if (json) emitEnvelope(io, { ok: true, data });
-  else io.stdout.write(`bundle ${data.bundleId ?? '?'} — ${data.status ?? '?'} — updated ${data.updatedAt ?? '?'}\n`);
-  return 0;
 }
 
 /**

@@ -1,11 +1,11 @@
-import { atomicWriteText, safeReadJson, backupThenWrite, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
+import { atomicWriteText, safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
 import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
 import { checkHandoffTree, assertHandoffTreeSafe } from '../util/jail.mjs';
 import { emptyBundle, validateBundle } from './schema.mjs';
 import { applyEvent } from './merge.mjs';
 import { compact } from './compact.mjs';
 import { renderHandoffMd } from './render.mjs';
-import { withLock, guardedWrite } from './lock.mjs';
+import { withLock, guardedWrite, LockHeldError } from './lock.mjs';
 
 const RETAIN_PER_KIND = 10;
 
@@ -31,36 +31,49 @@ const tsForFile = (iso) => iso.replace(/[:.]/g, '-');
 const markerPath = (p) => `${p.dir}/rotation.marker.json`;
 
 /**
- * Reconcile a leftover rotation marker (crash recovery, part of load — not
- * lock-gated). Roll forward when the history freeze landed, else roll back.
- * @param {any} io @param {ReturnType<typeof bundlePaths>} p @param {string[]} warnings
+ * Reconcile a leftover rotation marker (crash recovery, part of load). The
+ * mutations run under the repo lock, acquired WITHOUT waiting (gate-2 minor
+ * 16): a held lock means someone is mid-operation — reconciliation defers to
+ * the next unlocked load instead of writing behind their back.
+ * @param {any} io @param {ReturnType<typeof bundlePaths>} p @param {string[]} warnings @param {string} root
  */
-function reconcileMarker(io, p, warnings) {
+function reconcileMarker(io, p, warnings, root) {
   const mp = markerPath(p);
   if (!io.fs.existsSync(mp)) return;
-  const marker = safeReadJson(io.fs, mp);
-  if (!marker.ok) {
-    io.fs.unlinkSync(mp);
-    warnings.push('rotation marker was unparseable — rolled the rotation back (marker cleared, journal preserved)');
-    return;
-  }
-  const stem = `${tsForFile(marker.value.startedAt)}.${marker.value.kind}`;
-  const freeze = `${p.historyDir}/${stem}.json`;
-  const rotated = `${p.historyDir}/${stem}.ndjson`;
+  try {
+    withLock(root, { ...io, lockRetry: { attempts: 0, delayMs: 0 } }, () => {
+      if (!io.fs.existsSync(mp)) return; // a competitor reconciled while we acquired
+      const marker = safeReadJson(io.fs, mp);
+      if (!marker.ok) {
+        io.fs.unlinkSync(mp);
+        warnings.push('rotation marker was unparseable — rolled the rotation back (marker cleared, journal preserved)');
+        return;
+      }
+      const stem = `${tsForFile(marker.value.startedAt)}.${marker.value.kind}`;
+      const freeze = `${p.historyDir}/${stem}.json`;
+      const rotated = `${p.historyDir}/${stem}.ndjson`;
 
-  if (io.fs.existsSync(freeze)) {
-    // Roll forward: finish whichever step the crash interrupted.
-    if (io.fs.existsSync(p.journal) && !io.fs.existsSync(rotated)) {
-      io.fs.renameSync(p.journal, rotated);
+      if (io.fs.existsSync(freeze)) {
+        // Roll forward: finish whichever step the crash interrupted.
+        if (io.fs.existsSync(p.journal) && !io.fs.existsSync(rotated)) {
+          io.fs.renameSync(p.journal, rotated);
+        }
+        if (!io.fs.existsSync(p.journal)) {
+          atomicWriteText(io.fs, p.journal, '');
+        }
+        io.fs.unlinkSync(mp);
+        warnings.push(`completed an interrupted rotation (roll-forward of ${stem}); marker cleared`);
+      } else {
+        io.fs.unlinkSync(mp);
+        warnings.push(`aborted an incomplete rotation (roll-back; ${stem} freeze never landed); marker cleared, journal preserved`);
+      }
+    });
+  } catch (err) {
+    if (err instanceof LockHeldError) {
+      warnings.push('a rotation marker is present but the repo lock is held — reconciliation deferred to the next unlocked load');
+      return;
     }
-    if (!io.fs.existsSync(p.journal)) {
-      atomicWriteText(io.fs, p.journal, '');
-    }
-    io.fs.unlinkSync(mp);
-    warnings.push(`completed an interrupted rotation (roll-forward of ${stem}); marker cleared`);
-  } else {
-    io.fs.unlinkSync(mp);
-    warnings.push(`aborted an incomplete rotation (roll-back; ${stem} freeze never landed); marker cleared, journal preserved`);
+    throw err;
   }
 }
 
@@ -115,7 +128,13 @@ export function loadBundle(root, io) {
   const safe = checkHandoffTree(root, io);
   if (!safe.ok) return { bundle: null, warnings: [safe.problem], unsafe: true };
 
-  reconcileMarker(io, p, warnings);
+  reconcileMarker(io, p, warnings, root);
+
+  // An interrupted purge is visible on every read path (gate-2 minor 16): the
+  // tree may still hold transcript copies until purge-transcript finishes.
+  if (io.fs.existsSync(`${p.dir}/purge.marker.json`)) {
+    warnings.push('an interrupted purge left its marker — run baton purge-transcript to finish scrubbing every retained copy');
+  }
 
   let bundle = resolveBase(io, p, warnings);
   if (bundle === null) return { bundle: null, warnings };
@@ -147,7 +166,14 @@ export function writeSnapshotIn(root, bundle, io, token) {
     // Size discipline runs in the write path itself (gate-2 fix 10): every
     // persisted snapshot is within budget; identity for in-budget bundles.
     const bounded = compact(bundle);
-    backupThenWrite(io.fs, p.snapshot, JSON.stringify(bounded, null, 2) + '\n');
+    // Validate-before-backup (gate-2 major 15): a corrupt current snapshot
+    // must never overwrite a good .bak — the backup only rotates when the
+    // outgoing snapshot itself would be recoverable.
+    const prev = safeReadJson(io.fs, p.snapshot);
+    if (prev.ok && validateBundle(prev.value).ok) {
+      atomicWriteText(io.fs, p.bak, io.fs.readFileSync(p.snapshot, 'utf8'));
+    }
+    atomicWriteText(io.fs, p.snapshot, JSON.stringify(bounded, null, 2) + '\n');
     atomicWriteText(io.fs, p.handoffMd, renderHandoffMd(bounded));
   });
 }
@@ -222,7 +248,9 @@ export function rotateJournalIn(root, kind, io, token) {
     ensureDir(io.fs, p.historyDir);
 
     if (io.fs.existsSync(p.snapshot)) {
-      io.fs.copyFileSync(p.snapshot, `${p.historyDir}/${stem}.json`);
+      // Atomic freeze (gate-2 minor 16): tmp+rename, so a crash mid-copy can
+      // never leave a partial history snapshot that recovery would trust.
+      atomicWriteText(io.fs, `${p.historyDir}/${stem}.json`, io.fs.readFileSync(p.snapshot, 'utf8'));
     } else {
       atomicWriteText(io.fs, `${p.historyDir}/${stem}.json`, '');
     }

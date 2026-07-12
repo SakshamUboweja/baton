@@ -3,7 +3,7 @@ import { emptyBundle } from '../bundle/schema.mjs';
 import { normalizeHookPayload } from '../bundle/normalize.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
-import { safeReadJson } from '../util/fsx.mjs';
+import { safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
 import { redactSecrets } from '../util/redact.mjs';
 import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
@@ -130,6 +130,20 @@ async function run(flags, platform, io) {
     return finish({ ok: false, error: { code: 'unsafe-tree', msg: warnings[0] ?? 'managed tree failed the jail check' } }, strict ? 1 : 0);
   }
 
+  // Opt-in debounce (gate-2 major 14; Cursor afterFileEdit fires per edit):
+  // at most one real checkpoint per window, tracked by a per-platform stamp.
+  if (flags.debounce !== undefined) {
+    const seconds = Number(flags.debounce);
+    if (!Number.isFinite(seconds) || seconds <= 0) return usageError(io, flags, 'checkpoint', '--debounce <seconds> must be a positive number');
+    const stampPath = `${paths.logDir}/debounce-${platform}.json`;
+    const stamp = safeReadJson(io.fs, stampPath);
+    if (stamp.ok && typeof stamp.value?.at === 'string' && Date.parse(io.now()) - Date.parse(stamp.value.at) < seconds * 1000) {
+      return finish({ ok: true, data: { events: 0, rewritten: false, debounced: true } }, 0);
+    }
+    ensureDir(io.fs, paths.logDir);
+    atomicWriteJson(io.fs, stampPath, { at: io.now() });
+  }
+
   let active = bundle;
   let mustRewrite = false;
 
@@ -175,6 +189,19 @@ async function run(flags, platform, io) {
       io.now(),
     );
     writeSnapshot(root, active, io);
+    // Journal seed record (gate-2 major 15): a journal-only rebuild loses the
+    // snapshot's origin facts unless the seed itself is a replayable event.
+    appendJournal(
+      root,
+      {
+        ts: io.now(),
+        type: 'note',
+        payload: { text: `[seed] auto-seeded a new bundle on ${platform} (model ${active.origin.model})`, seed: { platform, model: active.origin.model } },
+        writerId: [platform, io.pid, 'seed'].join('-'),
+        dedupeKey: dedupeKey({ ts: io.now(), type: 'seed', platform, model: active.origin.model }),
+      },
+      io,
+    );
     io.stderr.write('baton checkpoint: no bundle found — auto-seeded a new one at .handoff/bundle.json\n');
     mustRewrite = true;
   }

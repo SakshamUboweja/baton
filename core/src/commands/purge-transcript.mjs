@@ -112,6 +112,12 @@ export async function cmdPurgeTranscript(args, io) {
     return 1;
   }
 
+  // Auto-resume (gate-2 minor 16): a leftover marker means an earlier purge
+  // was interrupted mid-scrub — this run finishes the job.
+  if (io.fs.existsSync(markerPath)) {
+    io.stderr.write('baton purge-transcript: resuming an interrupted purge (marker found) — re-scrubbing the whole tree\n');
+  }
+
   try {
     withLock(root, io, () => {
       atomicWriteJson(io.fs, markerPath, { startedAt: io.now() });

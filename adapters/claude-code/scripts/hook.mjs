@@ -37,17 +37,60 @@ function execFileWithInput(cmd, args = [], opts = {}) {
   });
 }
 
+// Hook-error diagnostics (gate-2 minor 16 / plan §Transcript policy log
+// contract): metadata-only entries — never the hook payload — with bounded
+// retention (last 50 entries / 7 days). The log rides .handoff/ so the purge
+// walk covers it.
+const HOOK_LOG_MAX = 50;
+const HOOK_LOG_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** @param {any} io @param {string} event @param {any} err */
+function logHookError(io, event, err) {
+  try {
+    const dir = `${io.cwd}/.handoff/log`;
+    io.fs.mkdirSync(dir, { recursive: true });
+    const path = `${dir}/hook-errors.jsonl`;
+    const nowIso = typeof io.now === 'function' ? io.now() : new Date().toISOString();
+    /** @type {any[]} */
+    let entries = [];
+    try {
+      entries = io.fs
+        .readFileSync(path, 'utf8')
+        .split('\n')
+        .filter((/** @type {string} */ l) => l.trim() !== '')
+        .map((/** @type {string} */ l) => {
+          try {
+            return JSON.parse(l);
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean);
+    } catch {
+      entries = [];
+    }
+    entries.push({ ts: nowIso, event, code: err?.code ?? null });
+    const cutoff = Date.parse(nowIso) - HOOK_LOG_MAX_AGE_MS;
+    entries = entries.filter((e) => typeof e.ts === 'string' && Date.parse(e.ts) >= cutoff).slice(-HOOK_LOG_MAX);
+    io.fs.writeFileSync(path, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
+  } catch {
+    // diagnostics must never break fail-open
+  }
+}
+
 /**
  * Run a core baton command as a child process, forwarding the raw hook payload
  * as the child's stdin. Rejections are swallowed (fail-open) — core commands
- * carry their own hook-safety, and Claude ignores hook exit codes anyway.
- * @param {any} io @param {string[]} argv
+ * carry their own hook-safety, and Claude ignores hook exit codes anyway —
+ * but each failure leaves a metadata-only diagnostic in .handoff/log/.
+ * @param {any} io @param {string[]} argv @param {string} event
  */
-async function baton(io, argv) {
+async function baton(io, argv, event) {
   try {
     await io.execFile('node', [batonBin(io), ...argv], { input: io.stdin });
-  } catch {
+  } catch (err) {
     // fail-open: a failing child must not break the session
+    logHookError(io, event, err);
   }
 }
 
@@ -105,14 +148,14 @@ export async function runHook(args, io) {
       const errorType = parsePayload(io)?.error?.type;
       const detectArgs = ['detect', '--platform', 'claude-code'];
       if (typeof errorType === 'string') detectArgs.push('--structured-error-type', errorType);
-      await baton(io, detectArgs);
-      await baton(io, ['checkpoint', '--platform', 'claude-code']);
+      await baton(io, detectArgs, event);
+      await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
       return 0;
     }
 
     // Stop / PreCompact / SessionEnd — and any future event — are routine
     // mechanical checkpoints; core normalize degrades unknown payloads safely.
-    await baton(io, ['checkpoint', '--platform', 'claude-code']);
+    await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
     return 0;
   } catch {
     return 0;
