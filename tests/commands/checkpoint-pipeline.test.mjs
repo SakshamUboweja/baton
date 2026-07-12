@@ -108,6 +108,7 @@ describe('checkpoint — config-gated transcript tail capture (plan §Transcript
   // separator-normalized containment — a raw startsWith would refuse every
   // in-tree transcript. These pin the cmdCheckpoint CALLER (not just the helper).
   const winRealpath = (io, map) => {
+    io.platform = 'win32'; // treat backslashes as separators (iter-4 I9)
     io.fs.realpathSync = (/** @type {any} */ p) => (map[String(p)] ?? String(p));
   };
 
@@ -138,6 +139,21 @@ describe('checkpoint — config-gated transcript tail capture (plan §Transcript
     assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
     const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
     assert.equal(snap.transcript, undefined, 'a cross-volume transcript is refused by the containment check');
+  });
+
+  it('ON but the transcript realpath contains a backslash on POSIX: NOT captured (iter-4 I9)', async () => {
+    const io = makeIo({
+      files: files({ schema: 'baton/config@1', capture: { transcriptTail: true } }),
+      stdin: preCompact,
+      now: T0,
+    });
+    io.platform = 'linux';
+    // A backslash is a legal posix filename char; treating it as a separator
+    // would let '/repo\\evil/t.jsonl' normalize under the repo root.
+    io.fs.realpathSync = (/** @type {any} */ p) => (String(p) === '/repo/.claude/t.jsonl' ? '/repo\\evil/t.jsonl' : String(p));
+    assert.equal(await cmdCheckpoint(['--platform', 'claude-code'], io), 0);
+    const snap = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(snap.transcript, undefined, 'a backslash-bearing transcript realpath is refused off Windows');
   });
 
   it('ON but a routine Stop event (not PreCompact): no capture', async () => {

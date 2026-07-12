@@ -47,6 +47,12 @@ function captureTranscriptTail(root, raw, io) {
     // user's ~/.claude tree (where Claude Code actually writes transcripts),
     // or a configured capture.transcriptDir — never an arbitrary readable file.
     const fileReal = io.fs.realpathSync(path);
+    // On POSIX a backslash is a LEGAL filename character, not a separator, so
+    // normalizing '\\'→'/' in the containment check (isContained) could make an
+    // out-of-tree sibling like '/repo\\evil/f' appear contained (iter-4 I9).
+    // The transcript path is the one fully-untrusted path that reaches
+    // containment, so refuse a backslash-bearing realpath off Windows.
+    if (io.platform !== 'win32' && String(fileReal).includes('\\')) return null;
     /** @type {string[]} */
     const allowed = [root];
     const home = io.env?.HOME;

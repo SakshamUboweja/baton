@@ -55,6 +55,7 @@ const code = await run(process.argv.slice(2), {
     }
   },
   newFencingToken: () => `tok-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+  platform: process.platform,
   stdout: process.stdout,
   stderr: process.stderr,
 });

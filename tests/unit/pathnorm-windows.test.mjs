@@ -32,6 +32,14 @@ describe('normSep / joinNorm / isContained', () => {
     assert.equal(isContained('/repo', '/repo'), true);
     assert.equal(isContained('/repo', '/other/.handoff'), false);
   });
+
+  it('isContained handles a POSIX-root base (iter-4 I8)', () => {
+    // A repo rooted at '/' must contain everything under it — the old '//'
+    // prefix rejected every child.
+    assert.equal(isContained('/', '/transcript.jsonl'), true);
+    assert.equal(isContained('/', '/'), true);
+    assert.equal(isContained('/', 'relative'), false);
+  });
 });
 
 describe('checkHandoffTree containment on Windows realpaths (F6)', () => {

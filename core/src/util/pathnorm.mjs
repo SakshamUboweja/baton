@@ -38,5 +38,9 @@ export function joinNorm(base, child) {
 export function isContained(base, child) {
   const b = normSep(base);
   const c = normSep(child);
-  return c === b || c.startsWith(`${b}/`);
+  // A root base already ends in the separator ('/'), so appending another would
+  // form '//' and reject every child (iter-4 I8: isContained('/', '/x') was
+  // false). Use the base itself as the prefix when it already ends in '/'.
+  const prefix = b.endsWith('/') ? b : `${b}/`;
+  return c === b || c.startsWith(prefix);
 }
