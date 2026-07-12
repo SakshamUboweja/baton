@@ -71,6 +71,27 @@ describe('applyEvent — payload shape hardening', () => {
     assert.match(lastNote(out), /roles\.remap/);
   });
 
+  it('roles.remap with a NULL assignment VALUE degrades to a note (iter-3 F3)', () => {
+    // A well-formed assignments object whose VALUES are null used to be applied
+    // verbatim, then crashed renderHandoffMd. The reducer must validate values.
+    const out = applyEvent(base(), ev('roles.remap', { assignments: { planner: null } }));
+    assert.deepEqual(out.roles.assignments, {}, 'the null-valued remap is refused, not stored');
+    assert.match(lastNote(out), /roles\.remap/);
+  });
+
+  it('roles.remap with a non-object assignment VALUE degrades to a note (iter-3 F3)', () => {
+    const out = applyEvent(base(), ev('roles.remap', { assignments: { planner: 'codex' } }));
+    assert.deepEqual(out.roles.assignments, {});
+    assert.match(lastNote(out), /roles\.remap/);
+  });
+
+  it('roles.remap with all-object assignment values is applied and renders (iter-3 F3)', async () => {
+    const { renderHandoffMd } = await import('../../core/src/bundle/render.mjs');
+    const out = applyEvent(base(), ev('roles.remap', { assignments: { planner: { platform: 'claude-code', model: 'm', mode: 'native' } } }));
+    assert.deepEqual(out.roles.assignments, { planner: { platform: 'claude-code', model: 'm', mode: 'native' } });
+    assert.doesNotThrow(() => renderHandoffMd(out), 'a valid remap renders cleanly');
+  });
+
   it('task.update applies only typed known fields and drops the rest', () => {
     const out = applyEvent(base(), ev('task.update', { goal: 'new goal', constraints: 'be careful', acceptance: ['done'] }));
     assert.equal(out.task.goal, 'new goal');

@@ -7,6 +7,7 @@ import { classify } from '../detect/classifier.mjs';
 import { PROBE_CACHE_MS } from '../roles/availability.mjs';
 import { ensureDir, atomicWriteJson, safeReadJson } from '../util/fsx.mjs';
 import { readAllTolerant } from '../util/jsonl.mjs';
+import { checkHandoffTree } from '../util/jail.mjs';
 import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
@@ -259,8 +260,15 @@ export async function cmdDoctor(args, io) {
     } catch {
       mountSource = null;
     }
-    ensureDir(io.fs, p.logDir);
-    atomicWriteJson(io.fs, cachePath, { at: io.now(), records: platforms, versions, mount: mountSource });
+    // Jail before writing the probe cache (iter-3 F4): the cache rides
+    // .handoff/log, so a symlinked .handoff or log dir must never redirect the
+    // write outside the repository (threat model). Diagnostics are best-effort —
+    // on an unsafe tree we simply skip caching; the atomic write already
+    // prevents a torn cache under concurrent doctors.
+    if (checkHandoffTree(root, io).ok) {
+      ensureDir(io.fs, p.logDir);
+      atomicWriteJson(io.fs, cachePath, { at: io.now(), records: platforms, versions, mount: mountSource });
+    }
   }
 
   // Network-filesystem detection (gate-2 major 13): a mount source that looks

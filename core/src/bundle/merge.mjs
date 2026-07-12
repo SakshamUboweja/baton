@@ -73,13 +73,23 @@ export function applyEvent(bundle, event) {
       else out.files.touched[i] = entry;
       break;
     }
-    case 'roles.remap':
-      if (payload?.assignments !== null && typeof payload?.assignments === 'object' && !Array.isArray(payload.assignments)) {
-        out.roles.assignments = payload.assignments;
+    case 'roles.remap': {
+      // The assignments object AND every value must be non-null objects (iter-3
+      // F3): a well-formed {planner: null} used to be stored verbatim and then
+      // crashed renderHandoffMd. Untrusted journal input degrades to a note.
+      const a = payload?.assignments;
+      const wellFormed =
+        a !== null &&
+        typeof a === 'object' &&
+        !Array.isArray(a) &&
+        Object.values(a).every((/** @type {any} */ v) => v !== null && typeof v === 'object' && !Array.isArray(v));
+      if (wellFormed) {
+        out.roles.assignments = a;
       } else {
-        out.decisions.push({ seq, ts, summary: refusalNote('roles.remap', payload?.assignments) });
+        out.decisions.push({ seq, ts, summary: refusalNote('roles.remap', a) });
       }
       break;
+    }
     case 'task.update': {
       /** @type {Record<string, any>} */
       const patch = {};
