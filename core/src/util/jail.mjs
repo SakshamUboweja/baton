@@ -4,6 +4,8 @@
 // refuses to operate on a managed tree that contains symlinks or resolves
 // outside the repository root.
 
+import { normSep, joinNorm } from './pathnorm.mjs';
+
 const NUL = String.fromCharCode(0);
 
 /**
@@ -52,14 +54,13 @@ export function checkHandoffTree(root, io) {
     if (io.fs.lstatSync(dir).isSymbolicLink()) {
       return { ok: false, problem: `.handoff is a symlink — refusing to operate through a linked managed tree` };
     }
-    // Separator-normalize before comparing (Windows: realpathSync returns
-    // backslash paths, so a raw compare against `${rootReal}/.handoff` would
-    // mismatch on EVERY managed tree and refuse all operations). Comparing on a
-    // canonical forward-slash spelling makes containment platform-neutral.
-    const norm = (/** @type {string} */ s) => String(s).replace(/\\/g, '/');
-    const rootReal = norm(io.fs.realpathSync(root));
-    const dirReal = norm(io.fs.realpathSync(dir));
-    if (dirReal !== `${rootReal}/.handoff`) {
+    // Compare on a canonical forward-slash spelling (Windows: realpathSync
+    // returns backslash paths; a drive-root repo would also yield a doubled
+    // `C://.handoff`). joinNorm collapses both so containment is platform-neutral
+    // and drive-root-safe (iter-3 F6).
+    const expected = joinNorm(io.fs.realpathSync(root), '.handoff');
+    const dirReal = normSep(io.fs.realpathSync(dir));
+    if (dirReal !== expected) {
       return { ok: false, problem: `.handoff resolves outside the repository root (${dirReal}) — refusing` };
     }
     // Walk is race-tolerant (gate-2 iter-2): under concurrent atomic writes

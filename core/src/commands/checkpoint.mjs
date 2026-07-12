@@ -6,6 +6,7 @@ import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
 import { redactSecrets } from '../util/redact.mjs';
+import { isContained } from '../util/pathnorm.mjs';
 import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
 
 // Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
@@ -59,7 +60,10 @@ function captureTranscriptTail(root, raw, io) {
       } catch {
         baseReal = base;
       }
-      return fileReal === baseReal || fileReal.startsWith(`${baseReal}/`);
+      // Compare on normalized forward-slash spellings (iter-3 F9): raw Windows
+      // backslash realpaths never satisfy a forward-slash containment, so
+      // opt-in capture would silently never fire.
+      return isContained(baseReal, fileReal);
     };
     if (!allowed.some(under)) return null;
 

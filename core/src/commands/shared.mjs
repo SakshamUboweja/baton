@@ -1,3 +1,5 @@
+import { normSep, joinNorm } from '../util/pathnorm.mjs';
+
 /**
  * The --json contract: exactly one compact envelope line on stdout, nothing else.
  * @param {any} io
@@ -36,20 +38,29 @@ export function resolveRoot(io, flags) {
   // backslash-separated, but Node fs accepts forward slashes, so the ascent
   // and the marker checks work in one forward-slash space. The last separator
   // is either kind; the loop stops at a drive/UNC or filesystem root.
-  const start = String(io.cwd).replace(/\\/g, '/');
+  const start = normSep(io.cwd);
   let dir = start;
   while (true) {
     try {
-      if (io.fs.existsSync(`${dir}/.handoff`) || io.fs.existsSync(`${dir}/baton.config.json`)) return dir;
-      if (io.fs.existsSync(`${dir}/.git`)) return dir; // repo toplevel; never walk past a .git boundary
+      if (io.fs.existsSync(joinNorm(dir, '.handoff')) || io.fs.existsSync(joinNorm(dir, 'baton.config.json'))) return dir;
+      if (io.fs.existsSync(joinNorm(dir, '.git'))) return dir; // repo toplevel; never walk past a .git boundary
     } catch {
       break;
     }
     const cut = dir.lastIndexOf('/');
     if (cut < 0) break;
-    // A drive-relative root ("C:/") or the filesystem root ("/") is the ceiling.
     const parent = cut === 0 ? '/' : dir.slice(0, cut);
-    if (parent === dir || /^[A-Za-z]:$/.test(parent)) break;
+    // At a drive-relative ceiling ("C:") examine the drive ROOT ("C:/") once —
+    // a repo can live directly at C:/ (iter-3 F6) — then stop.
+    if (/^[A-Za-z]:$/.test(parent)) {
+      const driveRoot = `${parent}/`;
+      if (driveRoot !== dir) {
+        dir = driveRoot;
+        continue;
+      }
+      break;
+    }
+    if (parent === dir) break;
     dir = parent;
   }
   return start;
