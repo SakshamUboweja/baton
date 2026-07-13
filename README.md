@@ -19,7 +19,7 @@ baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rule
 | Claude Code | `/plugin marketplace add SakshamUboweja/baton` → install `baton` |
 | Codex CLI | `npx @sakshamuboweja/baton init --codex` |
 | Cursor | `npx @sakshamuboweja/baton init --cursor` |
-| Anything else | `baton receive --print-prompt` (pure CLI) |
+| Anything else | `baton receive --platform codex --print-prompt` (pure CLI — pass the supported platform whose role defaults best fit the target harness) |
 
 ## Status
 

@@ -15,10 +15,15 @@ The main thread owns a received task — never delegate the continuation itself 
 
 ## While working
 
-- Checkpoint after each completed subtask, before risky operations, and at wind-down: pipe one JSON object — `{"schema":"baton/event@1","events":[{"type":"decision","payload":{"summary":"…"}}]}` (event types: decision, plan.step, note, file.touch) — to `baton checkpoint --platform claude-code`.
+- Checkpoint after each completed subtask, before risky operations, and at wind-down: pipe one JSON object to `node "${CLAUDE_PLUGIN_ROOT}/core/bin/baton.mjs" checkpoint --platform claude-code --json` (a plugin install puts no `baton` on PATH) and confirm the envelope's `data.events` matches what you sent. Payload shapes:
+  - `{"type":"decision","payload":{"summary":"<what and why>"}}`
+  - `{"type":"plan.step","payload":{"id":"<id>","title":"<short step name — every renderer prints title>","status":"done|active|pending","note":"<evidence>"}}`
+  - `{"type":"note","payload":{"text":"<gotcha / next step>"}}` · `{"type":"file.touch","payload":{"path":"<repo-relative — absolute paths are refused by the jail>","op":"edit|write"}}`
+  - `{"type":"task.update","payload":{"goal":"<one-line task statement>"}}` — set this early; it is the headline of HANDOFF.md and the resume prompt (else both read "unknown").
+  Wrap them as `{"schema":"baton/event@1","events":[…]}`.
 - Keep decisions honest: record verified-done vs claimed-done separately.
 
 ## Handing off
 
 - Near a usage limit, propose `/baton:handoff` proactively — a narrative seal beats a degraded receive.
-- The seal reason should say why the switch is happening; the classifier infers the reason class from it.
+- The seal reason should say why the switch is happening. Inference only matches verbatim harness limit banners — for any forced switch pass `--reason-class <usage-limit|throttle|auth|other-error>` explicitly, or receive will not keep roles off the exhausted platform.

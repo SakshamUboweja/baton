@@ -4,7 +4,7 @@ Authoritative plan: `docs/plans/2026-07-11-baton-v1.md` (Gate-1 approved). Where
 
 ## Language and tooling
 
-Plain ESM JavaScript (`.mjs`) with JSDoc types, checked by `tsc --noEmit --checkJs` (dev-only). No build step: hooks invoke source directly. Zero runtime dependencies; `node:util` `parseArgs`; `node:test` with a small golden-file helper (`UPDATE_GOLDEN=1 npm test` regenerates). Node >= 20.
+Plain ESM JavaScript (`.mjs`) with JSDoc types, checked by `tsc --noEmit --checkJs` (dev-only). No build step: hooks invoke source directly. Zero runtime dependencies; strict spec-based flag parsing (`parseFlagsStrict` in commands/shared.mjs — unknown flags, stray positionals, and missing string-flag values are exit-2 usage errors, so a garbled safety flag can never silently lose intent); `node:test` with a small golden-file helper (`UPDATE_GOLDEN=1 npm test` regenerates). Node >= 20.
 
 Testability backbone: every command's `run()` takes an injected `io` object — `{ cwd, env, stdin, stdout, stderr, fs, execFile, now }`. Pure logic (reducers, renderers, resolvers, classifiers) takes plain data and returns plain data. Unit tests run over an in-memory fs fake (`tests/helpers/memfs.mjs`); a thin integration layer uses `fs.mkdtemp` on the real fs.
 
@@ -134,4 +134,4 @@ scanCommitsForAiTrailers({execFile, cwd, limit: 50}) -> [{sha, line, pattern}]
 
 ## CLI contract
 
-Commands: `checkpoint`, `finalize`, `detect`, `remap`, `receive`, `init`, `doctor`, `status`, `purge-transcript`, `recover`. Exit codes: `0` ok · `1` command failure · `2` usage error · `10` usage-limit · `11` throttle · `12` auth · `13` other-error. `--json`: exactly one `{ok, data, warnings, error}` envelope on stdout, diagnostics on stderr. Checkpoint soft-fails to exit 0 in hook contexts (`--strict` opts out). `wrap` is reserved, not implemented in v1.
+Commands: `checkpoint`, `finalize`, `detect`, `remap`, `receive`, `init`, `doctor`, `status`, `purge-transcript`, `recover`, `session-start`. Exit codes: `0` ok · `1` command failure · `2` usage error · `10` usage-limit · `11` throttle · `12` auth · `13` other-error. `--json`: exactly one `{ok, data, warnings, error}` envelope on stdout, diagnostics on stderr. Checkpoint soft-fails to exit 0 in hook contexts (`--strict` opts out). `session-start` is the cheap adapter SessionStart gate: soft paths always exit 0 and its BARE stdout is harness-shaped context (not an envelope); with `--json` it honors the envelope contract (`data: {pending, shaped}`). `wrap` is reserved, not implemented in v1.
