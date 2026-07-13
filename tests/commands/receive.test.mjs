@@ -122,6 +122,39 @@ describe('receive — usage validation', () => {
     assert.equal(code, 2, 'a missing --platform is a usage error (exit 2)');
     assert.match(io.stderrText(), /platform/i, 'the usage error names --platform');
   });
+
+  // Audit finding: bare --commit (a lost token — empty shell var, the next
+  // token being another flag) fell through to the READ-ONLY prepare path with
+  // exit 0, so a model believed the handoff committed when nothing mutated.
+  it('bare --commit (token lost) -> exit 2 usage error, NEVER a silent prepare', async () => {
+    const io = seedIo();
+    const before = io.files();
+    const code = await cmdReceive(['--platform', 'codex', '--commit', '--origin', 'claude-code', '--reason', 'r'], io);
+    assert.equal(code, 2, 'a missing commit token is a usage error');
+    assert.match(io.stderrText(), /token/i, 'the error names the missing token');
+    assert.deepEqual(io.files(), before, 'nothing mutated');
+  });
+
+  it('--prepare and --commit together -> exit 2 (mutually exclusive phases)', async () => {
+    const io = seedIo();
+    const code = await cmdReceive(['--platform', 'codex', '--prepare', '--commit', 'rcpt1.x', '--origin', 'o', '--reason', 'r'], io);
+    assert.equal(code, 2);
+  });
+
+  it('an idempotent alreadyCommitted retry reports success, not a failure', async () => {
+    const io = seedIo();
+    const prep = await cmdReceive(['--platform', 'codex', '--prepare', '--origin', 'claude-code', '--reason', 'switching to codex', '--json'], io);
+    assert.equal(prep, 0);
+    const prepOut = io.stdoutText();
+    const { token } = JSON.parse(prepOut).data;
+    assert.equal(await cmdReceive(['--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'switching to codex'], io), 0);
+
+    const before = io.files();
+    const code = await cmdReceive(['--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', 'switching to codex'], io);
+    assert.equal(code, 0, 'the retry exits 0 — the receive already landed');
+    assert.match(io.stdoutText(), /already committed/i, 'the output says the receive already landed');
+    assert.deepEqual(io.files(), before, 'the retry mutates nothing');
+  });
 });
 
 // ===========================================================================

@@ -32,19 +32,59 @@ function classifyReason(reason, originPlatform, io) {
 }
 
 /**
- * The revision fingerprint the receipt token is a hash of. Every field is a
+ * Effective intake: the sealed bundle already records who handed off and why,
+ * so the 'unknown'/'unspecified' CLI sentinels default from it (audit finding:
+ * the documented resume command rendered "Handed off from unknown" straight
+ * after sealing a real origin/reason). Explicit intake always wins. Pure and
+ * bundle-deterministic, so prepare and commit derive identical tokens.
+ * @param {any} bundle @param {ReceiveOpts} opts @returns {ReceiveOpts}
+ */
+function effectiveIntake(bundle, opts) {
+  const originSentinel = opts.origin === 'unknown' || opts.origin === undefined;
+  const reasonSentinel = opts.reason === 'unspecified' || opts.reason === undefined;
+  const sealedOrigin = typeof bundle?.origin?.platform === 'string' && bundle.origin.platform !== 'unknown' ? bundle.origin.platform : null;
+  const sealedReason = typeof bundle?.handoff?.reason === 'string' && bundle.handoff.reason.length > 0 ? bundle.handoff.reason : null;
+  return {
+    ...opts,
+    origin: originSentinel && sealedOrigin ? sealedOrigin : opts.origin,
+    reason: reasonSentinel && sealedReason ? sealedReason : opts.reason,
+  };
+}
+
+// The bound token inputs, in the fixed order the structured token serializes
+// them. The human names power drift diagnosis: a stale-token rejection names
+// exactly which input(s) moved instead of listing six guesses.
+const TOKEN_FIELDS = /** @type {const} */ ([
+  ['generation', 'bundle generation'],
+  ['journalSeq', 'journal seq'],
+  ['handoffStatus', 'handoff status'],
+  ['receives', 'receive count'],
+  ['origin', 'intake origin'],
+  ['reason', 'intake reason'],
+  ['reasonClass', 'intake reason-class'],
+  ['configDigest', 'config'],
+  ['gitDigest', 'git state'],
+  ['probesDigest', 'probe cache'],
+  ['platform', 'target platform'],
+  ['sessionHint', 'target session'],
+]);
+const TOKEN_PREFIX = 'rcpt1';
+
+/**
+ * The revision fingerprint the receipt token derives from. Every field is a
  * bound input: any drift between prepare and commit re-derives a different
  * token, so a stale receipt can never commit (plan §Concurrency).
  * @param {string} root @param {any} bundle @param {ReceiveOpts} opts @param {any} io
+ * @returns {Record<string, any>}
  */
-function deriveToken(root, bundle, opts, io) {
+function tokenInputs(root, bundle, opts, io) {
   let configDigest = 'absent';
   try {
     configDigest = dedupeKey(io.fs.readFileSync(`${root}/baton.config.json`, 'utf8'));
   } catch {
     // no config — 'absent' is itself a bound value
   }
-  return dedupeKey({
+  return {
     generation: bundle.generation,
     journalSeq: bundle.journalSeq,
     // The seal state is a bound input too (gate-2 fix): a competing receiver
@@ -63,7 +103,29 @@ function deriveToken(root, bundle, opts, io) {
     probesDigest: dedupeKey(opts.probes ?? null),
     platform: opts.platform,
     sessionHint: opts.sessionHint,
-  });
+  };
+}
+
+/**
+ * Structured receipt token: a fixed-order join of per-input digests. Equality
+ * still gates commit exactly as the old opaque hash did; the structure only
+ * buys DIAGNOSIS — a mismatch can name the drifted input(s).
+ * @param {string} root @param {any} bundle @param {ReceiveOpts} opts @param {any} io
+ */
+function deriveToken(root, bundle, opts, io) {
+  const inputs = tokenInputs(root, bundle, opts, io);
+  return `${TOKEN_PREFIX}.` + TOKEN_FIELDS.map(([key]) => dedupeKey(inputs[key] ?? null).slice(0, 10)).join('.');
+}
+
+/**
+ * Name the inputs whose digests differ between two structured tokens.
+ * @param {string} presented @param {string} expected @returns {string[]}
+ */
+function driftedInputs(presented, expected) {
+  const a = presented.split('.');
+  const b = expected.split('.');
+  if (a[0] !== TOKEN_PREFIX || b[0] !== TOKEN_PREFIX || a.length !== b.length) return [];
+  return TOKEN_FIELDS.filter((_, i) => a[i + 1] !== b[i + 1]).map(([, name]) => name);
 }
 
 /**
@@ -103,6 +165,7 @@ function stalenessWarnings(bundle, opts, io) {
 export function prepare(root, opts, io) {
   const { bundle, warnings: loadWarnings } = loadBundle(root, io);
   if (bundle === null) throw new Error(`no handoff bundle under ${root}/.handoff — nothing to receive`);
+  opts = effectiveIntake(bundle, opts);
 
   const warnings = [...loadWarnings, ...stalenessWarnings(bundle, opts, io)];
 
@@ -158,7 +221,7 @@ export function prepare(root, opts, io) {
  * writes the received seal, archives it via a 'receive' rotation, then opens a
  * fresh writable generation owned by the receiving platform/session.
  * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io
- * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+ * @returns {{adopted: boolean, generation: number, archivedTo: string | null, alreadyCommitted?: boolean}}
  */
 export function commit(root, token, opts, io) {
   // ONE operation-scoped lock across revalidation and every mutation (gate-2
@@ -169,15 +232,29 @@ export function commit(root, token, opts, io) {
 
 /**
  * @param {string} root @param {string} token @param {ReceiveOpts} opts @param {any} io @param {string} fence
- * @returns {{adopted: boolean, generation: number, archivedTo: string}}
+ * @returns {{adopted: boolean, generation: number, archivedTo: string | null, alreadyCommitted?: boolean}}
  */
 function commitLocked(root, token, opts, io, fence) {
   const { bundle } = loadBundle(root, io);
   if (bundle === null) throw new Error(`no handoff bundle under ${root}/.handoff — nothing to receive; run receive --prepare first`);
+  opts = effectiveIntake(bundle, opts);
 
-  if (deriveToken(root, bundle, opts, io) !== token) {
+  const expected = deriveToken(root, bundle, opts, io);
+  if (expected !== token) {
+    // Idempotency first (audit finding: duplicate-receive corruption): if THIS
+    // exact receipt already landed — its digest is recorded on a receive_log
+    // entry — the retry is a lost-output re-send, not drift. Report success
+    // with zero mutation instead of sending the model into a re-prepare +
+    // re-commit loop that executes a second full receive.
+    const receipt = dedupeKey(token).slice(0, 16);
+    const landed = Array.isArray(bundle.handoff?.receive_log) && bundle.handoff.receive_log.some((/** @type {any} */ e) => e?.receipt === receipt);
+    if (landed) {
+      return { adopted: false, alreadyCommitted: true, generation: bundle.generation, archivedTo: null };
+    }
+    const drifted = driftedInputs(token, expected);
+    const detail = drifted.length > 0 ? `drifted input(s): ${drifted.join(', ')}` : 'a bound input drifted since prepare';
     throw new Error(
-      'receipt token is stale: a bound input (bundle revision, intake, config, git state, probes, or target platform/session) drifted since prepare — run re-prepare and retry',
+      `receipt token is stale — ${detail}. Re-prepare and retry, passing the SAME intake flags (--origin/--reason/--reason-class) to both prepare and --commit`,
     );
   }
 
@@ -186,6 +263,8 @@ function commitLocked(root, token, opts, io, fence) {
     origin: opts.origin,
     reason: opts.reason,
     at: io.now(),
+    // The receipt digest keys the idempotent-retry detection above.
+    receipt: dedupeKey(token).slice(0, 16),
     ...(degraded ? { degradedSeal: true } : {}),
   };
 

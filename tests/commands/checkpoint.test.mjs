@@ -373,6 +373,94 @@ describe('checkpoint — tolerant stdin shapes (live /baton:handoff failure)', (
   });
 });
 
+describe('checkpoint — schema-miss and bare-event stdin (audit findings 2/13/17)', () => {
+  // A close-miss of the documented wrapper must ERROR, not silently degrade to
+  // a junk "hook unknown" note with ok:true — a model cannot self-correct from
+  // a success envelope while its narrative was discarded.
+  it('an events array with the schema key MISSING is bad-stdin, not a silent junk note', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify({ events: [{ type: 'decision', payload: { summary: 'lost-narrative' } }] }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code', '--strict'], io);
+    assert.equal(code, 1, 'strict mode hard-fails');
+    assert.equal(journalEntries(io).length, 0, 'nothing journaled');
+    assert.match(io.stderrText(), /schema/i, 'the error names the schema field so the model can self-correct');
+  });
+
+  it('an events array with a WRONG schema string is bad-stdin too', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify({ schema: 'baton/events@1', events: [{ type: 'decision', payload: { summary: 'x' } }] }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code', '--strict'], io);
+    assert.equal(code, 1);
+    assert.equal(journalEntries(io).length, 0);
+  });
+
+  it('a single bare event object (no schema, not a hook payload) is accepted as that event', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify({ type: 'decision', payload: { summary: 'bare-event' } }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code'], io);
+    assert.equal(code, 0);
+    const entries = journalEntries(io);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].type, 'decision');
+    assert.equal(entries[0].payload.summary, 'bare-event');
+  });
+
+  it('a hook payload carrying a `type` field is NOT mistaken for a bare event', async () => {
+    // hook_event_name marks it a raw harness payload; the extractor tier owns it.
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(mkBundle()) },
+      stdin: JSON.stringify({ hook_event_name: 'Stop', session_id: 's9', type: 'weird-harness-field' }),
+    });
+    await cmdCheckpoint(['--platform', 'claude-code'], io);
+    const entries = journalEntries(io);
+    assert.equal(entries[0].type, 'note', 'extractor tier handles it (a Stop note), not the bare-event tier');
+    assert.equal(entries[0].payload.trigger, 'Stop');
+  });
+});
+
+describe('checkpoint — hint-less narrative cannot merge into a FOREIGN platform bundle (audit finding 1)', () => {
+  const codexOwned = () =>
+    mkBundle({ origin: { platform: 'codex', model: 'gpt-5.6-sol', sessionHint: 'codex-sess-1', unstable: false } });
+
+  it('schema events without a session hint are REFUSED when the bundle is owned by another platform', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(codexOwned()) },
+      stdin: JSON.stringify({ schema: 'baton/event@1', events: [{ type: 'decision', payload: { summary: 'foreign-narrative' } }] }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code'], io);
+    assert.equal(code, 0, 'hook-safety: soft exit');
+    assert.equal(journalEntries(io).length, 0, 'the foreign narrative must not merge into the codex-owned bundle');
+    assert.match(io.stderrText(), /foreign|take-over/i, 'the refusal names the remedy');
+  });
+
+  it('the SAME platform without a hint still applies (only the platform mismatch is provable)', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(codexOwned()) },
+      stdin: JSON.stringify({ schema: 'baton/event@1', events: [{ type: 'decision', payload: { summary: 'same-platform' } }] }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'codex'], io);
+    assert.equal(code, 0);
+    assert.equal(journalEntries(io).length, 1, 'same-platform hint-less narrative applies');
+  });
+
+  it('--take-over lets a foreign hint-less narrative archive and restart', async () => {
+    const io = makeIo({
+      files: { [paths.snapshot]: snapText(codexOwned()) },
+      stdin: JSON.stringify({ schema: 'baton/event@1', events: [{ type: 'decision', payload: { summary: 'took-over' } }] }),
+    });
+    const code = await cmdCheckpoint(['--platform', 'claude-code', '--take-over'], io);
+    assert.equal(code, 0);
+    const snap = readSnapshot(io);
+    assert.equal(snap.origin.platform, 'claude-code', 'fresh bundle owned by the taking-over platform');
+  });
+});
+
 describe('checkpoint — --trigger stamps the event identity (GUI-app canary fix)', () => {
   it('a raw cursor stop payload (no event field) + --trigger stop journals trigger=stop', async () => {
     // Cursor's stop payload names the event nowhere normalize can find it, so

@@ -624,7 +624,12 @@ describe('e2e failover — concurrency', () => {
     assert.ok(!fresh.decisions.some((d) => d.summary === 'OLD-DECISION'), 'the fresh bundle does not inherit the archived session state');
   });
 
-  it('(F2) double-commit: the second commit of an already-spent token fails cleanly, no second archive or generation', async () => {
+  it('(F2) double-commit: the second commit of an already-spent token is an idempotent no-op, no second archive or generation', async () => {
+    // CONTRACT EVOLUTION (surface-audit fold, re-entered verification): the
+    // same receiver replaying its own receipt now reports alreadyCommitted
+    // (exit 0) instead of a stale rejection whose re-prepare instruction caused
+    // duplicate receives. The safety invariants are unchanged and asserted:
+    // zero tree change, one archive, one generation bump.
     const cwd = writeBundleRepo('baton-e2e-double-', 'claude-code', 'sealed');
 
     const prep = makeRealIo(cwd, { now: NOW });
@@ -636,9 +641,9 @@ describe('e2e failover — concurrency', () => {
 
     const io2 = makeRealIo(cwd, { now: NOW });
     const code2 = await cmdReceive(['--platform', 'codex', '--commit', token, '--origin', 'claude-code', '--reason', CC_LIMIT, '--json'], io2);
-    assert.equal(code2, 1, 'a double-commit of the same token fails cleanly');
-    assert.match(io2.stdoutText(), /re-?prepare|stale|drift/i, 'the failure names re-prepare');
-    assert.deepEqual(snapshotTree(cwd), afterFirst, 'the failed double-commit changes nothing');
+    assert.equal(code2, 0, 'the replayed receipt is an idempotent success');
+    assert.match(io2.stdoutText(), /alreadyCommitted/, 'the envelope reports alreadyCommitted');
+    assert.deepEqual(snapshotTree(cwd), afterFirst, 'the idempotent double-commit changes nothing');
     assert.equal(receiveFreezes(cwd).length, 1, 'no second receive archive is created');
     assert.equal(loadBundle(cwd, makeRealIo(cwd)).bundle.generation, 2, 'the generation did not advance again');
   });

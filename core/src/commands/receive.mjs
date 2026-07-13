@@ -47,10 +47,21 @@ export async function cmdReceive(args, io) {
     sessionUnstable: !hasSession,
   };
 
+  // A lost commit token (empty shell var, --commit followed by another flag)
+  // must be a loud usage error — falling through to the read-only prepare path
+  // with exit 0 convinced models a commit landed when nothing mutated.
+  if (flags.commit !== undefined && typeof flags.commit !== 'string') {
+    return usageError(io, flags, 'receive', '--commit requires the receipt token printed by prepare (the token argument is missing)');
+  }
+  if (flags.commit !== undefined && flags.prepare !== undefined) {
+    return usageError(io, flags, 'receive', '--prepare and --commit are mutually exclusive phases');
+  }
+
   if (typeof flags.commit === 'string') {
     try {
       const res = commit(root, flags.commit, opts, io);
       if (flags.json) emitEnvelope(io, { ok: true, data: res });
+      else if (res.alreadyCommitted === true) io.stdout.write(`already committed — generation ${res.generation} is open on ${platform}; nothing to redo\n`);
       else io.stdout.write(`received — generation ${res.generation} open on ${platform}; archived ${res.archivedTo}\n`);
       return 0;
     } catch (err) {

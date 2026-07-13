@@ -94,7 +94,7 @@ const isEventShaped = (/** @type {any} */ v) => v !== null && typeof v === 'obje
  * canonical single JSON value, a bare array of events, or NDJSON where every
  * line is an event object or a {schema, events} wrapper. All-or-nothing: one
  * non-event element fails the whole parse — never a partial apply.
- * @param {string} text @returns {{ok: true, raw: any} | {ok: false}}
+ * @param {string} text @returns {{ok: true, raw: any} | {ok: false, why?: string}}
  */
 function parseStdin(text) {
   let single;
@@ -108,6 +108,25 @@ function parseStdin(text) {
   if (singleOk) {
     if (Array.isArray(single)) {
       return single.every(isEventShaped) ? { ok: true, raw: { schema: 'baton/event@1', events: single } } : { ok: false };
+    }
+    // A closest-miss of the documented wrapper — an events array whose schema
+    // key is missing or wrong — must ERROR, never silently degrade to a junk
+    // note with ok:true (the model cannot self-correct from a success
+    // envelope while its narrative was discarded).
+    if (single !== null && typeof single === 'object' && Array.isArray(single.events) && single.schema !== 'baton/event@1') {
+      return { ok: false, why: `stdin carries an events array but schema is ${single.schema === undefined ? 'missing' : JSON.stringify(single.schema)} — use {"schema":"baton/event@1","events":[…]}` };
+    }
+    // A single bare event object (string `type`, none of the raw-hook payload
+    // markers) is one of the two most likely readings of "pipe events on
+    // stdin" — accept it as that event instead of degrading it to a junk note.
+    if (
+      isEventShaped(single) &&
+      single.schema === undefined &&
+      !('hook_event_name' in single) &&
+      !('session_id' in single) &&
+      !('event' in single)
+    ) {
+      return { ok: true, raw: { schema: 'baton/event@1', events: [single] } };
     }
     return { ok: true, raw: single };
   }
@@ -176,8 +195,9 @@ async function run(flags, platform, io) {
 
   const parsed = parseStdin(typeof io.stdin === 'string' ? io.stdin : '');
   if (!parsed.ok) {
-    io.stderr.write('baton checkpoint: stdin could not be parsed — send one JSON value ({"schema":"baton/event@1","events":[…]}), a JSON array of events, or NDJSON event lines\n');
-    return finish({ ok: false, error: { code: 'bad-stdin', msg: 'stdin could not be parsed as JSON, an event array, or NDJSON event lines' } }, strict ? 1 : 0);
+    const why = parsed.why ?? 'send one JSON value ({"schema":"baton/event@1","events":[…]}), a JSON array of events, or NDJSON event lines';
+    io.stderr.write(`baton checkpoint: stdin could not be parsed — ${why}\n`);
+    return finish({ ok: false, error: { code: 'bad-stdin', msg: why } }, strict ? 1 : 0);
   }
   const raw = parsed.raw;
 
@@ -248,11 +268,19 @@ async function run(flags, platform, io) {
   );
   const unstableIncoming = events.some((/** @type {any} */ e) => e.unstable === true);
 
-  if (hasStableOwner && stableIncoming) {
-    const foreign = stableIncoming.sessionHint !== originHint || platform !== active.origin.platform;
+  if (hasStableOwner) {
+    // Foreign = a different stable session, OR any platform mismatch — the
+    // platform is provable even when the events carry no session hint (audit
+    // finding: a hint-less /baton:handoff narrative from claude-code silently
+    // merged into — then sealed — a codex-owned bundle, corrupting the origin
+    // the receive-side role avoidance keys on).
+    const incomingLabel = stableIncoming ? stableIncoming.sessionHint : '(no session hint)';
+    const foreign = stableIncoming
+      ? stableIncoming.sessionHint !== originHint || platform !== active.origin.platform
+      : platform !== active.origin.platform;
     if (foreign && flags['take-over'] !== true) {
       io.stderr.write(
-        `baton checkpoint: event from a foreign session/origin (${platform}/${stableIncoming.sessionHint} vs active ${active.origin.platform}/${originHint}) — rejected to keep sessions isolated; rerun with --take-over to archive the active bundle and start fresh\n`,
+        `baton checkpoint: event from a foreign session/origin (${platform}/${incomingLabel} vs active ${active.origin.platform}/${originHint}) — rejected to keep sessions isolated; rerun with --take-over to archive the active bundle and start fresh\n`,
       );
       return finish({ ok: false, error: { code: 'foreign-session', msg: 'event from a foreign session/origin rejected; rerun with --take-over' } }, 0);
     }
@@ -262,9 +290,9 @@ async function run(flags, platform, io) {
         { platform, model: typeof flags.model === 'string' ? flags.model : 'unknown', goal: active.task?.goal ?? 'unknown' },
         io.now(),
       );
-      fresh.origin.sessionHint = stableIncoming.sessionHint;
+      if (stableIncoming) fresh.origin.sessionHint = stableIncoming.sessionHint;
       writeSnapshot(root, fresh, io);
-      io.stderr.write(`baton checkpoint: took over — prior bundle archived to history/, fresh bundle owned by ${platform}/${stableIncoming.sessionHint}\n`);
+      io.stderr.write(`baton checkpoint: took over — prior bundle archived to history/, fresh bundle owned by ${platform}/${incomingLabel}\n`);
       active = fresh;
       mustRewrite = true;
     }

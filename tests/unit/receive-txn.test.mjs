@@ -474,7 +474,15 @@ describe('receive-txn.commit — token-binding rejections (one per bound input)'
 
 // ===========================================================================
 describe('receive-txn.commit — double-commit and competing receivers', () => {
-  it('double-commit: the second commit of a spent token is rejected (revision moved), state untouched', () => {
+  it('double-commit: the second commit of a spent token is an IDEMPOTENT no-op (alreadyCommitted), state untouched', () => {
+    // CONTRACT EVOLUTION (surface-audit fold, re-entered verification): the
+    // spent-token retry used to THROW with a re-prepare instruction, which sent
+    // a model whose first commit output was lost into re-prepare + re-commit —
+    // a DUPLICATE receive (generation bumped twice, bogus degraded archive).
+    // The safety properties are unchanged and still asserted here: zero
+    // mutation, generation advanced exactly once. Only the reporting changed:
+    // the same receiver's retry now returns {alreadyCommitted} instead of
+    // throwing. A COMPETITOR's token still throws (next test).
     const io = makeTxnIo({ bundle: sealedBundle(), journal: '' });
     const { token } = prepare(ROOT, opts(), io);
 
@@ -482,8 +490,9 @@ describe('receive-txn.commit — double-commit and competing receivers', () => {
     assert.equal(first.generation, 2, 'the first commit succeeds');
 
     const before = io.files();
-    assert.throws(() => commit(ROOT, token, opts(), io), /re-?prepare/i, 'the spent token can no longer commit');
-    assert.deepEqual(io.files(), before, 'the rejected second commit mutates nothing');
+    const second = commit(ROOT, token, opts(), io);
+    assert.equal(second.alreadyCommitted, true, 'the spent token reports alreadyCommitted instead of demanding a re-prepare');
+    assert.deepEqual(io.files(), before, 'the idempotent second commit mutates nothing');
     assert.equal(loadBundle(ROOT, io).bundle.generation, 2, 'the generation did not advance a second time');
   });
 

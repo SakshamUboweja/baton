@@ -90,7 +90,12 @@ describe('M7 — two INDEPENDENTLY-prepared receivers race to commit: exactly on
 import { writeFileSync, existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 const [bin, root, idx, barrierDir] = process.argv.slice(2);
-const args = ['--platform', 'codex', '--origin', 'claude-code', '--reason', 'limits', '--root', root];
+// DISTINCT --session per child: real adapters pass their harness session id,
+// and the receivers are only "independent" if their receiving identity
+// differs — two commits presenting the IDENTICAL platform+session+intake are
+// one logical receiver retrying, which is idempotent success by contract
+// (surface-audit fold), not a competition.
+const args = ['--platform', 'codex', '--origin', 'claude-code', '--reason', 'limits', '--session', 'recv-sess-' + idx, '--root', root];
 const prep = spawnSync('node', [bin, 'receive', '--json', ...args], { encoding: 'utf8' });
 if (prep.status !== 0) { writeFileSync(barrierDir + '/prep-fail-' + idx, prep.stderr || ''); process.exit(2); }
 const token = JSON.parse(prep.stdout.trim().split('\\n').pop()).data.token;
