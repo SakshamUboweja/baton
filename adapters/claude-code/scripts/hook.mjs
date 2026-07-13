@@ -33,6 +33,11 @@ function execFileWithInput(cmd, args = [], opts = {}) {
       const e = Object.assign(new Error(`Command failed: ${cmd}`), { code, stdout, stderr });
       reject(e);
     });
+    // Fail-open (audit finding 21): a child that dies without draining a large
+    // stdin payload emits an out-of-band EPIPE 'error' on stdin that bypasses
+    // every try/catch and crashes the hook with a stack trace. Swallow it —
+    // the close handler still reports the child's real exit.
+    child.stdin?.on('error', () => {});
     if (typeof opts.input === 'string' && child.stdin) child.stdin.write(opts.input);
     child.stdin?.end();
   });
@@ -89,14 +94,24 @@ function logHookError(io, event, err) {
  * as the child's stdin. Rejections are swallowed (fail-open) — core commands
  * carry their own hook-safety, and Claude ignores hook exit codes anyway —
  * but each failure leaves a metadata-only diagnostic in .handoff/log/.
+ * opts.acceptCodes: exit codes that are VERDICTS, not failures (audit finding
+ * 20: detect's 10/11/12/13 classification exits were logged as hook errors on
+ * every real limit death, drowning the diagnostics log in noise).
  * @param {any} io @param {string[]} argv @param {string} event
+ * @param {{timeout?: number, acceptCodes?: number[]}} [opts]
+ * @returns {Promise<{stdout: string, stderr: string} | null>}
  */
-async function baton(io, argv, event) {
+async function baton(io, argv, event, opts = {}) {
   try {
-    await io.execFile('node', [batonBin(io), ...argv], { input: io.stdin });
+    return await io.execFile('node', [batonBin(io), ...argv], { input: io.stdin, timeout: opts.timeout });
   } catch (err) {
+    if (Array.isArray(opts.acceptCodes) && opts.acceptCodes.includes(/** @type {any} */ (err)?.code)) {
+      const e = /** @type {any} */ (err);
+      return { stdout: e?.stdout ?? '', stderr: e?.stderr ?? '' };
+    }
     // fail-open: a failing child must not break the session
     logHookError(io, event, err);
+    return null;
   }
 }
 
@@ -110,39 +125,18 @@ function parsePayload(io) {
 }
 
 /**
- * SessionStart: not a checkpoint. If a pending bundle from ANOTHER platform
- * exists (sealed, or open-but-limit-hit — the unsealed limit death), inject a
- * receive suggestion via the Claude context shape. Own-platform bundles are
- * this session's own work; quiet no-op.
+ * SessionStart: not a checkpoint — delegate to the core `session-start`
+ * command (audit finding 19: the old inline version read
+ * `${io.cwd}/.handoff/bundle.json` raw, so launching Claude Code in a repo
+ * SUBDIRECTORY silently never fired the pending-handoff notice while the same
+ * session's Stop checkpoints DID land at the discovered toplevel). Core owns
+ * root discovery, the managed-tree jail, and the origin allowlist; this shim
+ * only forwards the shaped stdout the harness consumes.
  * @param {any} io
  */
-function sessionStart(io) {
-  // The bundle is untrusted input (threat model): refuse a symlinked/escaped
-  // managed tree before reading, and never interpolate a raw bundle field into
-  // the injected context (iter-3 F12) — a hostile committed .handoff/bundle.json
-  // could otherwise steer session context with an arbitrary origin string.
-  if (!checkHandoffTree(io.cwd, io).ok) return 0;
-  let bundle;
-  try {
-    bundle = JSON.parse(io.fs.readFileSync(`${io.cwd}/.handoff/bundle.json`, 'utf8'));
-  } catch {
-    return 0;
-  }
-  const origin = bundle?.origin?.platform;
-  const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
-  const foreign = typeof origin === 'string' && origin !== 'claude-code';
-  if (pending && foreign) {
-    // Allowlist the origin label — never echo the untrusted string verbatim.
-    const label = origin === 'codex' || origin === 'cursor' ? origin : 'another platform';
-    io.stdout.write(
-      JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: 'SessionStart',
-          additionalContext: `A handoff bundle from ${label} is pending in .handoff/ (${bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing'}). Suggest running /baton:receive to resume that task with remapped roles.`,
-        },
-      }) + '\n',
-    );
-  }
+async function sessionStart(io) {
+  const r = await baton(io, ['session-start', '--platform', 'claude-code'], 'SessionStart', { timeout: 8_000 });
+  if (r && typeof r.stdout === 'string' && r.stdout.length > 0) io.stdout.write(r.stdout);
   return 0;
 }
 
@@ -158,11 +152,17 @@ export async function runHook(args, io) {
     if (event === 'SessionStart') return sessionStart(io);
 
     if (event === 'StopFailure') {
+      // CHECKPOINT FIRST (audit finding 22): it is the part that must land
+      // before the harness's 30s envelope kills the hook — the limit-death
+      // checkpoint is the whole point of this event. Explicit per-child
+      // timeouts sum under the envelope (18s + 8s < 30s). detect runs second,
+      // and its classification exit codes are VERDICTS, not errors (finding
+      // 20) — only real failures (1/2/spawn) reach the diagnostics log.
+      await baton(io, ['checkpoint', '--platform', 'claude-code', '--trigger', 'StopFailure'], event, { timeout: 18_000 });
       const errorType = parsePayload(io)?.error?.type;
       const detectArgs = ['detect', '--platform', 'claude-code'];
       if (typeof errorType === 'string') detectArgs.push('--structured-error-type', errorType);
-      await baton(io, detectArgs, event);
-      await baton(io, ['checkpoint', '--platform', 'claude-code'], event);
+      await baton(io, detectArgs, event, { timeout: 8_000, acceptCodes: [0, 10, 11, 12, 13] });
       return 0;
     }
 

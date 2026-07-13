@@ -181,44 +181,95 @@ describe('hook.mjs — StopFailure classifies AND checkpoints (S2)', () => {
 });
 
 // ===========================================================================
-describe('hook.mjs — SessionStart injects a handoff-pending notice, never checkpoints (S3)', () => {
-  it('a SEALED bundle from another platform (codex) emits hookSpecificOutput.additionalContext', async () => {
-    const bundle = claudeBundle({
-      origin: { platform: 'codex', model: 'gpt-5.6-sol', sessionHint: 'sess-x', unstable: false },
-      handoff: { status: 'sealed', reason: 'limit', reasonClass: 'usage-limit', toPlatformHint: 'claude-code', finalizedAt: T0, receive_log: [] },
+describe('hook.mjs — StopFailure: detect exit codes are verdicts, not hook errors (audit finding 20)', () => {
+  const LOG = '/repo/.handoff/log/hook-errors.jsonl';
+  const stopFailurePayload = JSON.stringify({ hook_event_name: 'StopFailure', session_id: 's1', error: { type: 'rate_limit' } });
+
+  it('detect exiting 10 (usage-limit verdict) writes NO diagnostics entry', async () => {
+    const { io } = makeHookIo({
+      stdin: stopFailurePayload,
+      respond: ({ args }) =>
+        args.includes('detect')
+          ? Promise.reject(Object.assign(new Error('Command failed'), { code: 10, stdout: '', stderr: '' }))
+          : Promise.resolve({ stdout: '', stderr: '' }),
     });
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0);
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-
-    const out = io.stdoutText();
-    const parsed = JSON.parse(out);
-    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart', 'emits the SessionStart hookSpecificOutput envelope');
-    const ctx = parsed.hookSpecificOutput.additionalContext;
-    assert.ok(typeof ctx === 'string' && ctx.length > 0, 'additionalContext is a non-empty string');
-    assert.match(ctx, /receive/i, 'the injected context suggests receiving the pending handoff (e.g. /baton:receive)');
+    assert.equal(await runHook(['StopFailure'], io), 0);
+    assert.equal(io.files()[LOG], undefined, 'a classification verdict is not an error — the diagnostics log stays clean');
   });
 
-  it('(V2 positive) an OPEN foreign bundle marked usage-limit (limit death BEFORE finalize) emits additionalContext', async () => {
-    // The primary failure case: the origin platform died to a limit before it
-    // could seal — handoff.status is still 'open' but reasonClass says usage-limit.
-    const bundle = claudeBundle({
-      origin: { platform: 'codex', model: 'gpt-5.6-sol', sessionHint: 'sess-x', unstable: false },
-      handoff: { status: 'open', reason: "You've hit your usage limit", reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: null, receive_log: [] },
+  it('detect exiting 1 (a REAL failure) still logs a diagnostics entry', async () => {
+    const { io } = makeHookIo({
+      stdin: stopFailurePayload,
+      respond: ({ args }) =>
+        args.includes('detect')
+          ? Promise.reject(Object.assign(new Error('Command failed'), { code: 1, stdout: '', stderr: '' }))
+          : Promise.resolve({ stdout: '', stderr: '' }),
     });
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
+    assert.equal(await runHook(['StopFailure'], io), 0);
+    assert.ok(io.files()[LOG], 'a genuine failure is logged');
+  });
+
+  it('the limit-death checkpoint runs FIRST (it must land inside the 30s envelope)', async () => {
+    const { io, calls } = makeHookIo({ stdin: stopFailurePayload });
+    assert.equal(await runHook(['StopFailure'], io), 0);
+    const order = calls.map((c) => (c.args.includes('checkpoint') ? 'checkpoint' : c.args.includes('detect') ? 'detect' : '?'));
+    assert.deepEqual(order, ['checkpoint', 'detect'], 'checkpoint before detect');
+    const timeouts = calls.map((c) => c.opts.timeout);
+    assert.ok(timeouts.every((t) => typeof t === 'number' && t <= 18_000), `both child timeouts fit the 30s hook envelope — got ${timeouts}`);
+  });
+});
+
+// ===========================================================================
+describe('hook.mjs — SessionStart injects a handoff-pending notice, never checkpoints (S3)', () => {
+  // CONTRACT EVOLUTION (audit finding 19, re-entered verification): the hook
+  // no longer reads `${cwd}/.handoff/bundle.json` inline — that skipped root
+  // discovery, so a Claude Code session launched in a repo SUBDIRECTORY never
+  // saw the pending notice while its Stop checkpoints landed at the discovered
+  // toplevel. It now delegates to the core `session-start` command (which owns
+  // discovery, the jail, and the origin allowlist — the notice matrix is
+  // pinned in tests/commands/session-start.test.mjs) and forwards the shaped
+  // stdout verbatim.
+  it('delegates to core session-start and forwards the shaped stdout verbatim', async () => {
+    const SHAPED =
+      JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: 'SessionStart',
+          additionalContext: 'A handoff bundle from codex is pending in .handoff/ (sealed). Suggest running /baton:receive to resume that task with remapped roles.',
+        },
+      }) + '\n';
+    const { io, calls } = makeHookIo({
+      stdin: payload('SessionStart'),
+      respond: ({ args }) => Promise.resolve({ stdout: args.includes('session-start') ? SHAPED : '', stderr: '' }),
+    });
 
     const code = await runHook(['SessionStart'], io);
     assert.equal(code, 0);
     assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
 
-    const parsed = JSON.parse(io.stdoutText());
-    assert.equal(parsed.hookSpecificOutput.hookEventName, 'SessionStart');
-    const ctx = parsed.hookSpecificOutput.additionalContext;
-    assert.ok(typeof ctx === 'string' && ctx.length > 0, 'an unsealed limit-hit foreign bundle IS pending — context is injected');
-    assert.match(ctx, /receive/i, 'the injected context suggests receiving the pending handoff');
+    const ss = findSub(calls, 'session-start');
+    assert.equal(ss.length, 1, 'exactly one core session-start invocation');
+    assertBatonCall(ss[0], io, 'SessionStart delegation');
+    assert.ok(ss[0].args.includes('--platform') && ss[0].args.includes('claude-code'), 'the delegation names the platform');
+
+    assert.equal(io.stdoutText(), SHAPED, 'the child stdout (the hookSpecificOutput envelope) is forwarded verbatim');
+  });
+
+  it('a quiet core session-start (no pending handoff) forwards nothing', async () => {
+    const { io, calls } = makeHookIo({ stdin: payload('SessionStart') });
+    const code = await runHook(['SessionStart'], io);
+    assert.equal(code, 0);
+    assert.equal(findSub(calls, 'session-start').length, 1);
+    assert.equal(io.stdoutText(), '', 'no notice, no output');
+  });
+
+  it('a failing session-start child stays fail-open (exit 0, nothing emitted)', async () => {
+    const { io } = makeHookIo({
+      stdin: payload('SessionStart'),
+      respond: () => Promise.reject(Object.assign(new Error('boom'), { code: 1 })),
+    });
+    const code = await runHook(['SessionStart'], io);
+    assert.equal(code, 0);
+    assert.equal(io.stdoutText(), '');
   });
 
   const assertNoContext = (io, why) => {

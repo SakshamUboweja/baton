@@ -29,8 +29,20 @@ export async function cmdStatus(args, io) {
     status: bundle.handoff?.status ?? null,
     generation: bundle.generation ?? null,
     updatedAt: bundle.updatedAt ?? null,
+    // Ownership surfaced (audit finding 11): the /baton:handoff ownership
+    // check reads status --json — without origin it could not tell whose
+    // bundle it was about to seal.
+    origin: {
+      platform: bundle.origin?.platform ?? null,
+      sessionHint: bundle.origin?.sessionHint ?? null,
+      unstable: bundle.origin?.unstable === true,
+    },
+    goal: bundle.task?.goal ?? null,
   };
   if (flags.json) emitEnvelope(io, { ok: true, data, warnings });
-  else io.stdout.write(`bundle ${data.bundleId ?? '?'} — ${data.status ?? '?'} — generation ${data.generation ?? '?'} — updated ${data.updatedAt ?? '?'}\n`);
+  else
+    io.stdout.write(
+      `bundle ${data.bundleId ?? '?'} — ${data.status ?? '?'} — generation ${data.generation ?? '?'} — owner ${data.origin.platform ?? '?'}/${data.origin.sessionHint ?? '?'} — updated ${data.updatedAt ?? '?'}\n`,
+    );
   return 0;
 }

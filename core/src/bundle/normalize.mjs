@@ -31,7 +31,11 @@ function generatedHint(session) {
  * @returns {{sessionHint: string, unstable: boolean}}
  */
 function deriveHint(raw, session) {
-  const id = raw && typeof raw === 'object' ? raw.session_id : undefined;
+  // Cursor identifies the session as conversation_id (audit finding 26): with
+  // only session_id read, every cursor hook fire fell back to a per-process
+  // unstable hint — a warning on every invocation and ownership adoption that
+  // never engaged.
+  const id = raw && typeof raw === 'object' ? (raw.session_id ?? raw.conversation_id) : undefined;
   if (typeof id === 'string' && id.length > 0) return { sessionHint: id, unstable: false };
   return { sessionHint: generatedHint(session), unstable: true };
 }

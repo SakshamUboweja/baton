@@ -308,6 +308,19 @@ describe('normalize — malformed-input fuzz never throws', () => {
   });
 });
 
+describe('normalizeHookPayload — cursor conversation_id is a stable session hint (audit finding 26)', () => {
+  it('a cursor payload with conversation_id derives a STABLE hint', () => {
+    const [ev] = normalizeHookPayload({ conversation_id: 'conv-77' }, 'cursor', undefined, 'stop');
+    assert.equal(ev.sessionHint, 'conv-77');
+    assert.equal(ev.unstable, false, 'conversation_id is the harness session id — stable, so ownership adoption engages');
+  });
+
+  it('session_id still wins when both are present', () => {
+    const [ev] = normalizeHookPayload({ session_id: 's-1', conversation_id: 'conv-2' }, 'cursor');
+    assert.equal(ev.sessionHint, 's-1');
+  });
+});
+
 describe('normalizeHookPayload — explicit event (--trigger) is authoritative', () => {
   it('stamps trigger from the explicit event when the cursor payload names no event', () => {
     // Cursor's real stop payload carries neither hook_event_name nor `event`, so

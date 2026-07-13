@@ -44,9 +44,11 @@ export async function cmdSessionStart(args, io) {
     const root = resolveRoot(io, flags);
     // Full load (journal replay included): an unsealed limit death may live
     // only as a post-snapshot journal note. Load warnings are deliberately
-    // not surfaced — this is a notice path, not a diagnostics path.
-    const { bundle } = loadBundle(root, io);
-    if (bundle === null) return finish(false, null);
+    // not surfaced — this is a notice path, not a diagnostics path. An UNSAFE
+    // managed tree (symlinked .handoff — threat model / F12) is a quiet no-op:
+    // never emit context derived from a tree that failed the jail.
+    const { bundle, unsafe } = loadBundle(root, io);
+    if (bundle === null || unsafe === true) return finish(false, null);
 
     const origin = bundle?.origin?.platform;
     const pending = bundle?.handoff?.status === 'sealed' || bundle?.handoff?.reasonClass === 'usage-limit';
@@ -54,7 +56,11 @@ export async function cmdSessionStart(args, io) {
     if (!pending || !foreign) return finish(false, null);
 
     const kind = bundle.handoff.status === 'sealed' ? 'sealed' : 'limit-hit before sealing';
-    const msg = `A handoff bundle from ${origin} is pending in .handoff/ (${kind}). ${RESUME_HINT[platform] ?? RESUME_HINT.codex}`;
+    // The bundle is untrusted input (threat model, iter-3 F12): allowlist the
+    // origin label — never interpolate a crafted origin string into injected
+    // session context.
+    const label = typeof origin === 'string' && platformError(origin) === null ? origin : 'another platform';
+    const msg = `A handoff bundle from ${label} is pending in .handoff/ (${kind}). ${RESUME_HINT[platform] ?? RESUME_HINT.codex}`;
 
     if (platform === 'cursor') return finish(true, { additional_context: msg });
     if (platform === 'claude-code') return finish(true, { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg } });
