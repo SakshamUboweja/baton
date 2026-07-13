@@ -8,6 +8,7 @@ import { PROBE_CACHE_MS } from '../roles/availability.mjs';
 import { ensureDir, atomicWriteJson, safeReadJson } from '../util/fsx.mjs';
 import { readAllTolerant } from '../util/jsonl.mjs';
 import { checkHandoffTree } from '../util/jail.mjs';
+import { ensureIgnoreLine } from '../scaffold/gitignore.mjs';
 import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
@@ -279,6 +280,30 @@ export async function cmdDoctor(args, io) {
   });
 
   checks.push(await gitGuardCheck(io, root));
+
+  // .handoff gitignore coverage (audit finding): doctor itself writes the
+  // probe cache into .handoff/log/, so running doctor BEFORE init in a clean
+  // repo leaves .handoff/ committable. Flag the gap whenever the tree exists
+  // without ignore coverage.
+  {
+    let handoffExists = false;
+    try {
+      handoffExists = io.fs.statSync(`${root}/.handoff`).isDirectory();
+    } catch {
+      handoffExists = false;
+    }
+    const covered = !ensureIgnoreLine(readOrNull(io, `${root}/.gitignore`), '.handoff/').changed;
+    checks.push({
+      id: 'handoff-ignored',
+      ok: !handoffExists || covered,
+      detail:
+        !handoffExists || covered
+          ? handoffExists
+            ? '.gitignore covers .handoff/'
+            : 'no .handoff/ tree yet'
+          : '.handoff/ exists but .gitignore does not cover it — run baton init (never commit .handoff/)',
+    });
+  }
 
   const journalText = readOrNull(io, p.journal);
   const journalBytes = journalText === null ? 0 : Buffer.byteLength(journalText);

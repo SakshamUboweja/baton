@@ -29,6 +29,38 @@ const baseExec = () => ({
 const checksOf = (io) => JSON.parse(io.stdoutText()).data.checks;
 const checkById = (io, id) => checksOf(io).find((/** @type {any} */ c) => c.id === id);
 
+describe('doctor — .handoff gitignore coverage (audit finding: pre-init doctor makes it committable)', () => {
+  it('warns when .handoff/ exists but .gitignore does not cover it', async () => {
+    const io = makeIo({
+      now: T0,
+      execResults: baseExec(),
+      files: { '/repo/.handoff/bundle.json': '{}', '/repo/.gitignore': 'node_modules/\n' },
+    });
+    await cmdDoctor(['--json'], io);
+    const c = checkById(io, 'handoff-ignored');
+    assert.ok(c, 'a handoff-ignored check exists');
+    assert.equal(c.ok, false, 'an uncovered .handoff/ is flagged');
+    assert.match(c.detail, /gitignore/i);
+    assert.match(c.detail, /init/i, 'remediation points at baton init');
+  });
+
+  it('is quiet (ok) when .gitignore covers .handoff/', async () => {
+    const io = makeIo({
+      now: T0,
+      execResults: baseExec(),
+      files: { '/repo/.handoff/bundle.json': '{}', '/repo/.gitignore': '.handoff/\n' },
+    });
+    await cmdDoctor(['--json'], io);
+    assert.equal(checkById(io, 'handoff-ignored')?.ok, true);
+  });
+
+  it('is quiet when no .handoff/ exists yet', async () => {
+    const io = makeIo({ now: T0, execResults: baseExec() });
+    await cmdDoctor(['--json'], io);
+    assert.equal(checkById(io, 'handoff-ignored')?.ok, true, 'nothing to protect yet — no noise');
+  });
+});
+
 describe('doctor — version floors and tested-version cap', () => {
   it('codex below the 0.144 floor fails with a protocol-only degradation note', async () => {
     const io = makeIo({

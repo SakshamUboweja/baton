@@ -97,6 +97,16 @@ export async function cmdFinalize(args, io) {
     return 1;
   }
 
+  // Inference only matches verbatim harness banners; a natural paraphrase
+  // seals reasonClass:null — and receive's role remap only auto-avoids the dead
+  // platform on 'usage-limit'. Surface the gap instead of silently defeating
+  // the failover heuristics (audit finding).
+  if (sealed.handoff.reasonClass === null && flags['reason-class'] === undefined) {
+    io.stderr.write(
+      'baton finalize: no reason class inferred from the reason text — if this switch was forced, re-run with --reason-class <usage-limit|throttle|auth|other-error> so receive keeps roles off the exhausted platform\n',
+    );
+  }
+
   if (flags.json) {
     emitEnvelope(io, { ok: true, data: { bundlePath: paths.snapshot, handoffMdPath: paths.handoffMd } });
   } else {

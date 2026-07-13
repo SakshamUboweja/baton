@@ -124,6 +124,19 @@ describe('finalize — seals the bundle', () => {
     assert.equal(snap.handoff.finalizedAt, NOW, 'finalizedAt is stamped with io.now()');
   });
 
+  it('a paraphrased reason that infers NO class warns that the failover heuristics will not engage', async () => {
+    // Audit finding: inference only matches verbatim harness banners, so any
+    // natural paraphrase seals reasonClass:null — and receive's role remap only
+    // auto-avoids the dead platform on 'usage-limit'. Silence here defeated the
+    // tool's core purpose; the seal still succeeds, but the gap is surfaced.
+    const io = seedIo();
+    const code = await cmdFinalize(['--reason', 'ran out of Opus quota for the week', '--to', 'codex'], io);
+    assert.equal(code, 0, 'the seal still succeeds');
+    assert.equal(readSnapshot(io).handoff.reasonClass, null, 'no class inferred from the paraphrase');
+    assert.match(io.stderrText(), /--reason-class/, 'the warning names the flag that closes the gap');
+    assert.match(io.stderrText(), /usage-limit/, 'and lists the vocabulary');
+  });
+
   it('an explicit --reason-class overrides inference', async () => {
     const io = seedIo();
     const code = await cmdFinalize(['--reason', 'switching for a fresh context', '--reason-class', 'throttle', '--to', 'codex'], io);

@@ -34,7 +34,11 @@ function batonInvocation(io) {
  */
 function rewriteCommand(s, inv) {
   if (typeof s !== 'string') return s;
-  if (s.startsWith('cmd /c baton ')) return `cmd /c ${inv} ${s.slice('cmd /c baton '.length)}`;
+  // cmd.exe /c strips the FIRST and LAST quote when the command starts with a
+  // quote and contains more than one pair, so `cmd /c "node" "script" args`
+  // executes `node" "script...`. The documented remedy: wrap the whole command
+  // in an OUTER quote pair (audit finding).
+  if (s.startsWith('cmd /c baton ')) return `cmd /c "${inv} ${s.slice('cmd /c baton '.length)}"`;
   if (s.startsWith('baton ')) return `${inv} ${s.slice('baton '.length)}`;
   return s;
 }

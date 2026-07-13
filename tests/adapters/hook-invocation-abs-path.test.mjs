@@ -160,6 +160,19 @@ for (const [plat, flag] of [['codex', 'codex'], ['cursor', 'cursor']]) {
       assert.ok(allCommands(merged).some((c) => c.includes(`"${BATON_ENTRY}"`)), 'baton’s own entry is present and absolute');
     });
 
+    it('commandWindows survives cmd.exe /c quote-stripping (whole command wrapped in an outer quote pair)', () => {
+      // cmd /c strips the first and last quote when the command starts with a
+      // quote and contains more than one pair — `cmd /c "node" "script" args`
+      // therefore executes `node" "script...`. The documented remedy is an
+      // OUTER wrapping pair: cmd /c ""node" "script" args".
+      const a = hooksAction(planHarnessInit(ROOT, { [flag]: true }, io()), plat);
+      const winCmds = allCommands(JSON.parse(a.preview)).filter((c) => c.startsWith('cmd /c'));
+      for (const c of winCmds) {
+        assert.match(c, /^cmd \/c ""[^"]+" "[^"]+".*"$/, `the whole command is wrapped in an outer quote pair — got: ${c}`);
+      }
+      if (plat === 'codex') assert.ok(winCmds.length > 0, 'codex template carries commandWindows variants');
+    });
+
     it('the checkpoint hook declares its event via --trigger so doctor’s canary can identify it', () => {
       const canary = plat === 'codex' ? 'Stop' : 'stop';
       const manifest = JSON.parse(hooksAction(planHarnessInit(ROOT, { [flag]: true }, io()), plat).preview);
