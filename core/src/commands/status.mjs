@@ -1,5 +1,5 @@
 import { loadBundle } from '../bundle/store.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 /**
  * `baton status` — report the active bundle THROUGH the recovery ladder
@@ -10,7 +10,9 @@ import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
  * @returns {Promise<number>}
  */
 export async function cmdStatus(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, {});
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'status', parsed.error);
+  const flags = parsed.flags;
   const root = resolveRoot(io, flags);
   const { bundle, warnings } = loadBundle(root, io);
   for (const w of warnings) io.stderr.write(`baton status: ${w}\n`);

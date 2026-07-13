@@ -66,6 +66,67 @@ export function resolveRoot(io, flags) {
   return start;
 }
 
+/** The supported platform enum, validated wherever a platform id is intake. */
+export const PLATFORMS = ['claude-code', 'codex', 'cursor'];
+
+/**
+ * Validate a platform id against the enum (surface-audit fold): a typo'd
+ * platform used to silently seed persistent state whose bogus origin then
+ * rejected the REAL platform's checkpoints as foreign.
+ * @param {string | boolean | undefined} value
+ * @returns {string | null} an error message, or null when valid/absent
+ */
+export function platformError(value) {
+  if (value === undefined) return null;
+  if (typeof value === 'string' && PLATFORMS.includes(value)) return null;
+  return `platform must be one of ${PLATFORMS.join('|')} (got ${JSON.stringify(value)})`;
+}
+
+/**
+ * Strict flag parser (surface-audit fold; docs/design/core.md §tooling always
+ * specified strict parsing). spec maps each flag name to 'string' | 'boolean';
+ * `json` and `root` are implied common flags. Errors — unknown flag, stray
+ * positional, missing string-flag value — return {error} so the command exits
+ * 2 instead of silently losing intent: the lenient parser let a stray token
+ * flip SAFETY flags off (checkpoint/doctor --strict, remap --native-only,
+ * receive --print-prompt all read fail-dangerous exit 0).
+ * @param {string[]} args
+ * @param {Record<string, 'string' | 'boolean'>} spec
+ * @returns {{flags: Record<string, string | boolean>, error?: string}}
+ */
+export function parseFlagsStrict(args, spec) {
+  /** @type {Record<string, 'string' | 'boolean'>} */
+  const full = { json: 'boolean', root: 'string', ...spec };
+  /** @type {Record<string, string | boolean>} */
+  const flags = {};
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (!a.startsWith('--')) return { flags, error: `unexpected argument '${a}' — flags are --name [value]` };
+    const key = a.slice(2);
+    const kind = full[key];
+    if (kind === undefined) return { flags, error: `unknown flag --${key}` };
+    if (kind === 'boolean') {
+      // A following token that is not a flag would have been this flag's
+      // silent "value" under the lenient parser; reject it loudly.
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        return { flags, error: `unexpected token '${next}' after --${key} (a bare flag takes no value)` };
+      }
+      flags[key] = true;
+      continue;
+    }
+    const next = args[i + 1];
+    // A string flag consumes the next token unless it is itself a KNOWN flag
+    // (so `--commit --origin x` errors instead of eating '--origin').
+    if (next === undefined || (next.startsWith('--') && full[next.slice(2)] !== undefined)) {
+      return { flags, error: `--${key} requires a value` };
+    }
+    flags[key] = next;
+    i += 1;
+  }
+  return { flags };
+}
+
 /**
  * Minimal flag parser: `--key value` pairs (value = next token not starting
  * with --), bare `--key` booleans, positionals collected in order.

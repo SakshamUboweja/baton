@@ -1,7 +1,7 @@
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { prepare, commit } from '../receive/txn.mjs';
 import { readProbeCache } from '../roles/availability.mjs';
-import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+import { emitEnvelope, resolveRoot, usageError, parseFlagsStrict, platformError } from './shared.mjs';
 
 /**
  * `baton receive` — the two-phase resume flow. `--print-prompt` and
@@ -13,9 +13,13 @@ import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs'
  * @returns {Promise<number>}
  */
 export async function cmdReceive(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { platform: 'string', origin: 'string', reason: 'string', 'reason-class': 'string', session: 'string', commit: 'string', prepare: 'boolean', 'print-prompt': 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'receive', parsed.error);
+  const flags = parsed.flags;
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
   if (!platform) return usageError(io, flags, 'receive', '--platform <claude-code|codex|cursor> is required');
+  const pErr = platformError(platform);
+  if (pErr) return usageError(io, flags, 'receive', pErr);
 
   // Validate --reason-class against the class vocabulary BEFORE it is trusted as
   // explicit intake and bound into the receipt token (iter-3 F11): finalize

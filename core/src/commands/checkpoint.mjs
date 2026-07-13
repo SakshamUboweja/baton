@@ -7,7 +7,7 @@ import { dedupeKey } from '../util/ids.mjs';
 import { safeReadJson, ensureDir, atomicWriteJson } from '../util/fsx.mjs';
 import { redactSecrets } from '../util/redact.mjs';
 import { isContained } from '../util/pathnorm.mjs';
-import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+import { emitEnvelope, resolveRoot, usageError, parseFlagsStrict, platformError } from './shared.mjs';
 
 // Snapshot rewrite throttle: journal append ALWAYS; the snapshot (and
 // HANDOFF.md) re-render only on an important event type, >30 s since the last
@@ -161,10 +161,14 @@ function parseStdin(text) {
  * @returns {Promise<number>}
  */
 export async function cmdCheckpoint(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { platform: 'string', model: 'string', trigger: 'string', debounce: 'string', strict: 'boolean', 'take-over': 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'checkpoint', parsed.error);
+  const flags = parsed.flags;
   const strict = flags.strict === true;
   const platform = typeof flags.platform === 'string' ? flags.platform : null;
   if (!platform) return usageError(io, flags, 'checkpoint', '--platform <claude-code|codex|cursor> is required');
+  const pErr = platformError(platform);
+  if (pErr) return usageError(io, flags, 'checkpoint', pErr);
 
   try {
     return await run(flags, platform, io);

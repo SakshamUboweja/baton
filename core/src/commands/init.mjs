@@ -2,7 +2,7 @@ import { dirname } from 'node:path';
 import { planInit } from '../scaffold/plan.mjs';
 import { planHarnessInit } from '../scaffold/harness.mjs';
 import { atomicWriteText, ensureDir } from '../util/fsx.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 /**
  * `baton init` — two-phase scaffolder. The plan phase (planInit) is read-only;
@@ -13,20 +13,16 @@ import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
  * @returns {Promise<number>}
  */
 export async function cmdInit(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { codex: 'boolean', cursor: 'boolean', 'with-legacy-prompts': 'boolean', force: 'boolean', check: 'boolean', 'dry-run': 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'init', parsed.error);
+  const flags = parsed.flags;
   const root = resolveRoot(io, flags);
 
-  // Fail-safe read for the two READ-ONLY mode flags: presence wins. parseFlags
-  // consumes the next token as a flag's value, so a stray trailing token (a
-  // pasted `# comment`, a typo) used to flip `=== true` false and silently run
-  // a REAL init where the user asked for a preview. Warn and stay read-only.
-  const readOnlyFlag = (/** @type {string} */ name) => {
-    if (flags[name] === undefined) return false;
-    if (flags[name] !== true) io.stderr.write(`baton init: ignoring unexpected value after --${name} (treated as a bare flag)\n`);
-    return true;
-  };
-  const checkMode = readOnlyFlag('check');
-  const dryRun = readOnlyFlag('dry-run');
+  // The strict parser rejects stray tokens outright (a pasted `# comment` used
+  // to be consumed as --dry-run's "value", silently running a REAL init), so
+  // boolean flags here are only ever true | undefined.
+  const checkMode = flags.check === true;
+  const dryRun = flags['dry-run'] === true;
 
   /** @type {ReturnType<typeof planInit>} */
   let actions;

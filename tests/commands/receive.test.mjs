@@ -131,7 +131,7 @@ describe('receive — usage validation', () => {
     const before = io.files();
     const code = await cmdReceive(['--platform', 'codex', '--commit', '--origin', 'claude-code', '--reason', 'r'], io);
     assert.equal(code, 2, 'a missing commit token is a usage error');
-    assert.match(io.stderrText(), /token/i, 'the error names the missing token');
+    assert.match(io.stderrText(), /--commit/, 'the error names the flag missing its value');
     assert.deepEqual(io.files(), before, 'nothing mutated');
   });
 

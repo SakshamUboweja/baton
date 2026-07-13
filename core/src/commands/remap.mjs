@@ -1,7 +1,7 @@
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
 import { readProbeCache } from '../roles/availability.mjs';
-import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+import { emitEnvelope, resolveRoot, usageError, parseFlagsStrict, platformError } from './shared.mjs';
 
 /**
  * `baton remap` — resolve the committed role matrix for a destination platform.
@@ -10,9 +10,13 @@ import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs'
  * @returns {number}
  */
 export function cmdRemap(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { to: 'string', avoid: 'string', 'native-only': 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'remap', parsed.error);
+  const flags = parsed.flags;
   const to = typeof flags.to === 'string' ? flags.to : null;
   if (!to) return usageError(io, flags, 'remap', '--to <claude-code|codex|cursor> is required');
+  const pErr = platformError(to);
+  if (pErr) return usageError(io, flags, 'remap', pErr);
 
   const root = resolveRoot(io, flags);
   const { config, errors } = loadConfig(root, io);

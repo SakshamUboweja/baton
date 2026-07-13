@@ -2,7 +2,7 @@ import { bundlePaths } from '../bundle/store.mjs';
 import { withLock, LockHeldError } from '../bundle/lock.mjs';
 import { atomicWriteText, atomicWriteJson } from '../util/fsx.mjs';
 import { checkHandoffTree } from '../util/jail.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 /**
  * Remove every property named `transcript` anywhere in a JSON value.
@@ -92,7 +92,9 @@ function scrubLinesFile(io, path) {
  * @returns {Promise<number>}
  */
 export async function cmdPurgeTranscript(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, {});
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'purge-transcript', parsed.error);
+  const flags = parsed.flags;
   const root = resolveRoot(io, flags);
   const p = bundlePaths(root);
   const markerPath = `${p.dir}/purge.marker.json`;

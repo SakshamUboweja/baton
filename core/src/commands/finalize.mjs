@@ -5,7 +5,7 @@ import { withLock } from '../bundle/lock.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
-import { emitEnvelope, parseFlags, resolveRoot, usageError } from './shared.mjs';
+import { emitEnvelope, resolveRoot, usageError, parseFlagsStrict, platformError } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -34,9 +34,13 @@ function inferReasonClass(reason, platform, io) {
  * @returns {Promise<number>}
  */
 export async function cmdFinalize(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { reason: 'string', 'reason-class': 'string', to: 'string' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'finalize', parsed.error);
+  const flags = parsed.flags;
   const reason = typeof flags.reason === 'string' ? flags.reason : null;
   if (!reason) return usageError(io, flags, 'finalize', '--reason "<why you are switching>" is required');
+  const toErr = platformError(flags.to);
+  if (toErr) return usageError(io, flags, 'finalize', `--to: ${toErr}`);
   const REASON_CLASSES = ['usage-limit', 'auth', 'throttle', 'other-error'];
   if (flags['reason-class'] !== undefined && !REASON_CLASSES.includes(/** @type {string} */ (flags['reason-class']))) {
     return usageError(io, flags, 'finalize', `--reason-class must be one of ${REASON_CLASSES.join('|')}`);

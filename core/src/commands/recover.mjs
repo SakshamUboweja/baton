@@ -1,5 +1,5 @@
 import { recoverLock } from '../bundle/lock.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 /**
  * `baton recover` — explicit lock recovery (gate-2 fix 11: this sat in the
@@ -11,7 +11,9 @@ import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
  * @returns {Promise<number>}
  */
 export async function cmdRecover(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { force: 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'recover', parsed.error);
+  const flags = parsed.flags;
   const root = resolveRoot(io, flags);
   const r = recoverLock(root, io, { force: flags.force === true });
 

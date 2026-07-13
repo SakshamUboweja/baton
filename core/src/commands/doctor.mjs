@@ -9,7 +9,7 @@ import { ensureDir, atomicWriteJson, safeReadJson } from '../util/fsx.mjs';
 import { readAllTolerant } from '../util/jsonl.mjs';
 import { checkHandoffTree } from '../util/jail.mjs';
 import { ensureIgnoreLine } from '../scaffold/gitignore.mjs';
-import { emitEnvelope, parseFlags, resolveRoot } from './shared.mjs';
+import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
@@ -258,7 +258,9 @@ async function gitGuardCheck(io, root) {
  * @returns {Promise<number>}
  */
 export async function cmdDoctor(args, io) {
-  const { flags } = parseFlags(args);
+  const parsed = parseFlagsStrict(args, { strict: 'boolean' });
+  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'doctor', parsed.error);
+  const flags = parsed.flags;
   const root = resolveRoot(io, flags);
   const p = bundlePaths(root);
   /** @type {{id: string, ok: boolean, detail?: string}[]} */
