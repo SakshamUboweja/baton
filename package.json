@@ -1,6 +1,6 @@
 {
   "name": "@sakshamuboweja/baton",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Usage-limit failover for AI coding sessions across Claude Code, Codex CLI, and Cursor: checkpoint, hand off, resume with remapped model roles.",
   "type": "module",
   "bin": {

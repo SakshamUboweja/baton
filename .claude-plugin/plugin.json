@@ -1,6 +1,6 @@
 {
   "name": "baton",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Cross-harness usage-limit failover: checkpoints, handoff seals, and receive-with-role-remap across Claude Code, Codex CLI, and Cursor.",
   "author": {
     "name": "SakshamUboweja",
