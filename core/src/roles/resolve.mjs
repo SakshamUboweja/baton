@@ -2,10 +2,10 @@
  * Pure, explainable role resolution over the committed matrix. Every decision
  * is auditable: chosen entries carry their chainIndex; passed-over entries land
  * in skipped[] with a why. avoid[] population is the caller's job.
- * @param {{config: any, to: string, avoid?: string[], nativeOnly?: boolean, probes?: Record<string, {capability: string, outcome: string}> | null}} input
+ * @param {{config: any, to: string, avoid?: string[], avoidEntries?: Array<{platform: string, model: string}>, nativeOnly?: boolean, probes?: Record<string, {capability: string, outcome: string}> | null}} input
  * @returns {{assignments: Record<string, any>, notes: string[]}}
  */
-export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probes = null }) {
+export function resolveRoles({ config, to, avoid = [], avoidEntries = [], nativeOnly = false, probes = null }) {
   /** @type {string[]} */
   const notes = [];
 
@@ -50,6 +50,17 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
     return capability === 'installed' || outcome !== 'ok';
   };
 
+  // Entry-level avoidance (plan §Model-level failover): a specific
+  // {platform, model} tuple is dead (e.g. account-tier rejected) while its
+  // platform stays usable. Matching is on model IDENTITY — an @effort suffix
+  // on either side is ignored — and requires BOTH dimensions, so the same
+  // model name on another platform is never caught.
+  /** @param {any} m */
+  const baseModel = (m) => (typeof m === 'string' ? m.split('@')[0] : m);
+  /** @param {string} platform @param {string} model */
+  const entryAvoided = (platform, model) =>
+    avoidEntries.some((a) => a?.platform === platform && baseModel(a?.model) === baseModel(model));
+
   /** @type {Record<string, any>} */
   const assignments = {};
   for (const [role, chain] of Object.entries(config.roles)) {
@@ -67,6 +78,11 @@ export function resolveRoles({ config, to, avoid = [], nativeOnly = false, probe
       const why = skipReason(entry.platform);
       if (why) {
         skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why });
+        continue;
+      }
+      // After skipReason so a dual match keeps the platform-level label.
+      if (entryAvoided(entry.platform, entry.model)) {
+        skipped.push({ chainIndex: i, platform: entry.platform, model: entry.model, why: 'avoided-entry' });
         continue;
       }
       assignment = {

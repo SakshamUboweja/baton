@@ -1,4 +1,4 @@
-const PRECEDENCE = ['usage-limit', 'auth', 'throttle', 'other-error'];
+const PRECEDENCE = ['usage-limit', 'auth', 'model-unavailable', 'throttle', 'other-error'];
 
 /** @type {Record<string, string>} */
 const STOP_FAILURE_MAP = {

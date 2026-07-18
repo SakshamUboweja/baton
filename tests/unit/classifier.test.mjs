@@ -399,6 +399,60 @@ describe('classifier.classify — negative / near-miss corpus against the SHIPPE
 });
 
 // ---------------------------------------------------------------------------
+// RED — model-unavailable class (subtask l1-resolver-entries, part B). Source:
+// plan §"Model-level failover" — a classifier class distinct from usage-limit,
+// seeded with the verified account-tier rejection string. Precedence pins: it
+// must NOT classify as usage-limit or auth, and it sits ABOVE other-error
+// (relation to throttle left unpinned). Exit-code contract (14) is pinned at the
+// command level in tests/commands/envelopes.test.mjs.
+const CODEX_MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account';
+
+describe('classifier.classify — model-unavailable class (l1-resolver-entries)', () => {
+  const shipped = loadSignatures({ builtinPath: REAL_SIGNATURES_PATH }, realIo);
+
+  it('RED: the verified codex rejection string classifies model-unavailable against the SHIPPED table', () => {
+    const r = classify({ text: `Error: ${CODEX_MODEL_UNAVAIL}.`, exitCode: 1, platform: 'codex', table: shipped });
+    assert.equal(r.class, 'model-unavailable', 'the account-tier rejection is its own class');
+    assert.notEqual(r.class, 'usage-limit', 'it is NOT usage-limit (finding 7)');
+    assert.notEqual(r.class, 'auth', 'and NOT auth');
+  });
+
+  it('RED: an ANSI-wrapped rejection string still classifies model-unavailable (shipped, existing ANSI strip)', () => {
+    const text = `${ANSI_RED}${CODEX_MODEL_UNAVAIL}${ANSI_RESET}`;
+    const r = classify({ text, exitCode: 1, platform: 'codex', table: shipped });
+    assert.equal(r.class, 'model-unavailable');
+  });
+
+  // Inline precedence table. ADVERSARIAL ORDER (verifier iter-1 finding 1): the
+  // signatures are listed so a naive FIRST-MATCH implementation would return the
+  // WRONG class — model-unavailable is placed BEFORE usage-limit/auth, and
+  // other-error BEFORE model-unavailable. Only real rank logic yields the
+  // expected classes below.
+  const codexAuth = sig('codex/auth', 'codex', 'auth', { kind: 'substring', value: 'authentication_failed' }, 'high');
+  const codexOther = sig('codex/other', 'codex', 'other-error', { kind: 'substring', value: 'ERR_GENERIC' }, 'medium');
+  const codexModelUnavail = sig('codex/model-unavailable', 'codex', 'model-unavailable', { kind: 'substring', value: CODEX_MODEL_UNAVAIL }, 'high');
+  const PREC = mkTable([codexOther, codexModelUnavail, codexUsage, codexAuth]);
+
+  it('RED: precedence — usage-limit beats model-unavailable when both match', () => {
+    const text = `You've hit your usage limit. Also: ${CODEX_MODEL_UNAVAIL}`;
+    const r = classify({ text, exitCode: 1, platform: 'codex', table: PREC });
+    assert.equal(r.class, 'usage-limit', 'a real usage limit outranks a model-unavailable rejection');
+  });
+
+  it('RED: precedence — auth beats model-unavailable when both match', () => {
+    const text = `authentication_failed — and ${CODEX_MODEL_UNAVAIL}`;
+    const r = classify({ text, exitCode: 1, platform: 'codex', table: PREC });
+    assert.equal(r.class, 'auth', 'auth outranks model-unavailable');
+  });
+
+  it('GREEN guard: model-unavailable beats other-error when both match (sits above other-error)', () => {
+    const text = `ERR_GENERIC — ${CODEX_MODEL_UNAVAIL}`;
+    const r = classify({ text, exitCode: 1, platform: 'codex', table: PREC });
+    assert.equal(r.class, 'model-unavailable', 'model-unavailable outranks a generic other-error');
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('classifier.classify — json-field matcher', () => {
   it('matches a JSON line embedded in multi-line output', () => {
     const text = 'starting request\n{"error":"Too Many Requests"}\nrequest failed';

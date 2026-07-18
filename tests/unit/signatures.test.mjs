@@ -224,6 +224,31 @@ describe('signatures.loadSignatures — shipped built-in table (real file pin)',
 });
 
 // ---------------------------------------------------------------------------
+// RED — model-unavailable shipped signature (subtask l1-resolver-entries).
+// plan §"Model-level failover": the shipped table gains a codex
+// 'model-unavailable' class seeded with the VERIFIED account-tier rejection
+// string (substring matcher).
+describe('signatures.loadSignatures — model-unavailable shipped signature (l1-resolver-entries)', () => {
+  const VERIFIED = 'not supported when using Codex with a ChatGPT account';
+
+  it('codex carries a model-unavailable substring signature seeded with the EXACT verified string', () => {
+    const table = loadSignatures({ builtinPath: REAL_SIGNATURES_PATH }, realIo);
+    const sigMu = sigsFor(table, 'codex').find((s) => s.class === 'model-unavailable');
+    assert.ok(sigMu, 'codex must carry a model-unavailable signature');
+    assert.equal(sigMu.matcher.kind, 'substring', 'seeded as a substring matcher');
+    // Pin the value EXACTLY (verifier iter-1 finding 2), not just "matches".
+    assert.equal(sigMu.matcher.value, VERIFIED, 'the substring must be exactly the verified account-tier rejection string');
+    assert.ok(matcherMatches(sigMu.matcher, `Error: ${VERIFIED}.`), 'and it must fire on the real rejection line');
+  });
+
+  it('near-miss negative: generic "not supported" prose must NOT classify model-unavailable (guards against an overbroad substring)', () => {
+    const table = loadSignatures({ builtinPath: REAL_SIGNATURES_PATH }, realIo);
+    const r = classify({ text: 'That flag is not supported in this build.', exitCode: 1, platform: 'codex', table });
+    assert.notEqual(r.class, 'model-unavailable', 'only the full verified string is a model-unavailable signal');
+  });
+});
+
+// ---------------------------------------------------------------------------
 describe('signatures.loadSignatures — validation (memfs)', () => {
   it('accepts a well-formed table and returns its signatures', () => {
     const io = ioWith({ '/data/sig.json': JSON.stringify(validTable()) });

@@ -7,12 +7,13 @@ import { emitEnvelope, usageError, parseFlagsStrict } from './shared.mjs';
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
 /** @type {Record<string, number>} */
-const EXIT_BY_CLASS = { ok: 0, 'usage-limit': 10, throttle: 11, auth: 12, 'other-error': 13 };
+const EXIT_BY_CLASS = { ok: 0, 'usage-limit': 10, throttle: 11, auth: 12, 'other-error': 13, 'model-unavailable': 14 };
 
 /**
  * `baton detect` — classify harness output / structured error types.
  * Exit codes ARE the verdict (frozen contract): 0 ok · 10 usage-limit ·
- * 11 throttle · 12 auth · 13 other-error · 2 usage error.
+ * 11 throttle · 12 auth · 13 other-error · 14 model-unavailable ·
+ * 2 usage error.
  * @param {string[]} args @param {any} io
  * @returns {number}
  */

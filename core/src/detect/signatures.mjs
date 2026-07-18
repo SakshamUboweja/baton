@@ -1,7 +1,7 @@
 import { probeRegexSafe } from './probe.mjs';
 
 const PLATFORMS = ['claude-code', 'codex', 'cursor'];
-const CLASSES = ['usage-limit', 'auth', 'throttle', 'other-error'];
+const CLASSES = ['usage-limit', 'auth', 'model-unavailable', 'throttle', 'other-error'];
 const MATCHER_KINDS = ['substring', 'regex', 'json-field'];
 const REGEX_MAX_LEN = 200;
 

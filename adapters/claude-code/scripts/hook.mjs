@@ -168,7 +168,7 @@ export async function runHook(args, io) {
       const errorType = parsePayload(io)?.error?.type;
       const detectArgs = ['detect', '--platform', 'claude-code'];
       if (typeof errorType === 'string') detectArgs.push('--structured-error-type', errorType);
-      await baton(io, detectArgs, event, { timeout: 8_000, acceptCodes: [0, 10, 11, 12, 13] });
+      await baton(io, detectArgs, event, { timeout: 8_000, acceptCodes: [0, 10, 11, 12, 13, 14] });
       return 0;
     }
 

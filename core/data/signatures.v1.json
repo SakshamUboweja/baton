@@ -1,6 +1,6 @@
 {
   "schema": "baton/signatures@1",
-  "updated": "2026-07-12",
+  "updated": "2026-07-19",
   "signatures": [
     {
       "id": "claude-code/session-limit",
@@ -47,6 +47,13 @@
       "confidence": "high",
       "matcher": { "kind": "substring", "value": "You've hit your usage limit" },
       "resetHint": "try again at ([^\\n.]+)"
+    },
+    {
+      "id": "codex/model-unavailable-account-tier",
+      "platform": "codex",
+      "class": "model-unavailable",
+      "confidence": "high",
+      "matcher": { "kind": "substring", "value": "not supported when using Codex with a ChatGPT account" }
     },
     {
       "id": "cursor/too-many-requests",
