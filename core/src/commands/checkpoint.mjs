@@ -162,7 +162,7 @@ function parseStdin(text) {
  */
 export async function cmdCheckpoint(args, io) {
   if (isSupervisedChild(io)) return 0;
-  const parsed = parseFlagsStrict(args, { platform: 'string', model: 'string', trigger: 'string', debounce: 'string', strict: 'boolean', 'take-over': 'boolean' });
+  const parsed = parseFlagsStrict(args, { platform: 'string', model: 'string', trigger: 'string', debounce: 'string', session: 'string', strict: 'boolean', 'take-over': 'boolean' });
   if (parsed.error !== undefined) return usageError(io, parsed.flags, 'checkpoint', parsed.error);
   const flags = parsed.flags;
   const strict = flags.strict === true;
@@ -170,6 +170,9 @@ export async function cmdCheckpoint(args, io) {
   if (!platform) return usageError(io, flags, 'checkpoint', '--platform <claude-code|codex|cursor> is required');
   const pErr = platformError(platform);
   if (pErr) return usageError(io, flags, 'checkpoint', pErr);
+  // A supervisor passing --session must never silently fall back to
+  // payload-derived identity: an empty value is a hard usage error.
+  if (flags.session === '') return usageError(io, flags, 'checkpoint', '--session must be a non-empty session hint (it cannot be empty)');
 
   try {
     return await run(flags, platform, io);
@@ -213,6 +216,17 @@ async function run(flags, platform, io) {
   const explicitEvent = typeof flags.trigger === 'string' ? flags.trigger : undefined;
   const events = normalizeHookPayload(raw, platform, session, explicitEvent);
   if (events.length === 0) return finish({ ok: true, data: { events: 0, rewritten: false } }, 0);
+
+  // --session: the caller (the loop supervisor) checkpoints under its OWN
+  // stable identity — every event's hint is overridden, so ownership,
+  // adoption, foreign checks, and journal writerIds all key on the flag,
+  // never on whatever session id the piped payload happens to carry.
+  if (typeof flags.session === 'string') {
+    for (const ev of events) {
+      ev.sessionHint = flags.session;
+      ev.unstable = false;
+    }
+  }
 
   // Opt-in transcript tail (gate-2 fix 10): rides the journal as its own
   // IMPORTANT event so the snapshot rewrite below persists it, and purge can
