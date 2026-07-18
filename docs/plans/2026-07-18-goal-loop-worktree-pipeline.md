@@ -35,8 +35,15 @@ pipeline (Layer 3).
 
 - `goal`, `constraints[]` (falsifiable acceptance criteria — the loop's exit
   condition), `smoke` ({cmd, expect} — the staged-gate slice definition),
-- `phases` (default: plan → gate-1 → smoke → subtasks (test-author →
-  test-verifier → implement → subtask-review) → gate-2 → done),
+- `phases` — an ordered list of `{id, role}` entries: `id` is a free label
+  for progress display; `role` MUST be a matrix role ID (validation fails on
+  any unknown role before a child spawns). Default:
+  plan(`planner`) → gate-1(`plan-reviewer`) → smoke — itself a TDD mini-cycle
+  per the repo contract: smoke-tests(`test-author`) →
+  smoke-verify(`test-verifier`) → smoke-build(`implementer`) → the human
+  smoke gate — → per-subtask cycle (`test-author` → `test-verifier` →
+  `implementer` → `subtask-reviewer`) → gate-2(`final-reviewer-a`,
+  `final-reviewer-b`) → done,
 - `budgets` ({iterationCap: 5, perRoleTimeoutMin, maxChildrenPerPhase}),
 - roles resolve through the existing `baton.config.json` matrix — never
   hardcoded models.
@@ -72,16 +79,22 @@ One authoritative root: the MAIN repo root where `loop.json` lives. The
 supervisor is the SOLE writer of `.handoff/loop/` and of the main root's
 handoff bundle; every supervisor-driven baton invocation passes explicit
 `--root <mainRoot>` and a supervisor-owned stable session hint
-(`--session loop-<runId>`), so the bundle has exactly one stable owner and the
-foreign-session guard never fires against loop children. Children run in their
-own cwd (main root for Layer-2 loops; their worktree for pipeline mode). A
-linked worktree's harness hooks discover the WORKTREE root (root discovery
-stops at its `.git` file), so any child-hook checkpoints land in a
-worktree-local `.handoff/` — isolated per child, gitignored, never merged into
-loop state, pruned with the worktree. Contract test: two children with
-distinct stable session hints checkpointing concurrently from two worktrees
-while the supervisor writes loop state — zero cross-contamination, zero
-foreign-session rejections on the main bundle.
+(`--session loop-<runId>` — a NEW flag added to `checkpoint`; `receive`
+already has it), so the bundle has exactly one stable owner.
+
+**Child-hook policy (Gate-1 iteration 2, finding 1)** — children never touch
+any bundle, by construction: the supervisor sets `BATON_SUPERVISED_CHILD=1`
+in every child's environment, and both the hook entrypoints and
+`baton checkpoint` quietly no-op (exit 0) when it is set. This covers
+Layer-2 children running in the MAIN root (where root discovery would
+otherwise find the supervisor-owned bundle and the foreign-session guard
+would reject their stable hints) and pipeline children in worktrees alike;
+narrative checkpointing for supervised work is the supervisor's job, driven
+by parsed child results. Contract tests: (a) Layer-2 — two concurrent
+main-root children with distinct stable session hints and live hooks →
+zero bundle mutations, zero foreign-session rejections, supervisor
+`--session` checkpoints land; (b) pipeline — same from two worktrees while
+the supervisor writes loop state.
 - Each role invocation is a headless child under the supervisor:
   - claude-code roles: `claude -p "<role prompt>" --permission-mode
     acceptEdits --allowedTools ...` (allowlist per role: reviewers read-only).
@@ -118,9 +131,33 @@ foreign-session rejections on the main bundle.
 - Fixture-driven tests: prompt echo, multiple verdict tails, truncated
   transcript, timeout kill/reap, zombie grandchild, non-limit nonzero exit.
 
-- **Smoke gate (staleness-proof — Gate-1 iteration 1, finding 8)**: after
-  gate-1, the implementer role builds the smoke slice; the supervisor runs
-  `smoke.cmd`, records output, and STOPS, writing
+### Supervisor lifetime and recovery (Gate-1 iteration 2, finding 5)
+
+"Survives the operator's session ending" is a defined mechanism, not a hope:
+
+- `baton loop run` is FOREGROUND by default. `--detach` re-launches the
+  supervisor in its own session (`setsid`), output to
+  `.handoff/loop/supervisor.log`, and returns.
+- A run lock `.handoff/loop/supervisor.lock` carries {pid, process
+  start-time, host, runId} — the same provably-dead machinery as the
+  Layer-1 bundle lock. A second `loop run` against a LIVE supervisor is
+  refused; against a provably-dead one it recovers.
+- The state machine is journal-replayable: recovery replays
+  `journal.ndjson`, marks any in-flight child of the dead supervisor as
+  interrupted (its process group is gone or killed on adoption), and either
+  continues from the last completed step or parks with an escalation note —
+  never re-runs a completed gate iteration.
+- Acceptance adds a supervisor-death test: kill the supervisor (and its
+  launching session) mid-subtask → a fresh `loop run` recovers via the
+  journal and continues or parks; no orphaned children survive (process
+  groups reaped on adoption).
+
+- **Smoke gate (staleness-proof — Gate-1 iteration 1, finding 8; TDD order —
+  iteration 2, finding 2)**: after gate-1, the smoke slice is built as a TDD
+  mini-cycle (test-author writes the failing smoke assertion → test-verifier
+  approves it → implementer writes only enough to pass it — the repo TDD
+  contract applies to the slice, not just to subtasks); the supervisor then
+  runs `smoke.cmd`, records output, and STOPS, writing
   `.handoff/loop/SMOKE-REVIEW.md` plus `smoke-approval.json` containing an
   approval token = digest over {loop-state digest, smoke.cmd, output digest,
   HEAD, content-sensitive git digest (existing snapshot machinery), child
@@ -132,18 +169,24 @@ foreign-session rejections on the main bundle.
   an exact transaction, not a loose chain. On child death: (1) reap the
   process group and freeze the transcript; (2) classify via `baton detect`;
   non-limit → the retry/park path above. On a limit classification:
-  (3) journal the loop position; (4) seal via `finalize --reason-class
-  usage-limit --root <mainRoot>` (an already-dead/unsealed bundle takes the
-  degraded-open path receive already supports); (5) refresh probes;
-  (6) `receive --prepare` then `--commit` back-to-back with IDENTICAL intake
-  flags, the supervisor session hint, and the same explicit root, with NO
-  intervening writes — loop-state/journal writes happen only after commit
-  lands; (7) resolver output (with the dead entry avoided) picks the
-  relaunch platform+model; (8) relaunch the child with the resume prompt.
-  A stale-token rejection triggers ONE automatic re-prepare/commit retry;
-  a second failure parks. Tests: drift injected between prepare and commit
-  by each of {loop-state write, git change, probe refresh}; open-bundle
-  (unsealed) limit death; the full seal→receive→relaunch happy path.
+  (3) checkpoint the loop position INTO THE BUNDLE (supervisor
+  `checkpoint --session loop-<runId>`) so the seal carries it and the receipt
+  token binds it; (4) seal via `finalize --reason-class usage-limit --root
+  <mainRoot>` (an already-dead/unsealed bundle takes the degraded-open path
+  receive already supports); (5) refresh probes; (6) `receive --prepare` then
+  `--commit` back-to-back with IDENTICAL intake flags, the supervisor session
+  hint, and the same explicit root, with NO intervening writes; (7) resolver
+  output (with the dead entry avoided) picks the relaunch platform+model;
+  (8) relaunch the child with the resume prompt. A stale-token rejection
+  triggers ONE automatic re-prepare/commit retry; a second failure parks.
+  Between prepare and commit the failover holds the loop transaction lock and
+  writes NOTHING — `.handoff/loop/` writes are not token-bound inputs, so
+  this is enforced by construction and ASSERTED in tests (fs spy: zero
+  `.handoff/loop/` writes inside the window), not assumed. Drift-rejection
+  tests inject the inputs the token actually binds: git change and probe
+  refresh between prepare and commit → stale-token → one retry path. Plus:
+  open-bundle (unsealed) limit death; the full seal→receive→relaunch happy
+  path.
 - **Model-level failover (Gate-1 iteration 1, finding 4)**: the resolver
   gains entry-level avoidance — `avoidEntries: [{platform, model}]` alongside
   the existing platform-level `avoid[]` — and the classifier gains a
@@ -214,16 +257,22 @@ foreign-session rejections on the main bundle.
 lifecycle: spawn/process-group/timeout/log-cap, region-bounded verdict parse,
 detect-on-exit) · `failover.mjs` (the limit-death transaction) ·
 `worktrees.mjs` (guarded git transactions, branch discipline, attribution
-range scan) · `commands/loop.mjs`, `commands/pipeline.mjs`. Plus one Layer-1
-extension: `roles/resolve.mjs` gains `avoidEntries[]` (entry-level avoidance,
-backward-compatible — omitted means current behavior) and the signature table
-gains the `model-unavailable` class.
+range scan) · `commands/loop.mjs`, `commands/pipeline.mjs`. Plus three Layer-1
+extensions: `roles/resolve.mjs` gains `avoidEntries[]` (entry-level
+avoidance, backward-compatible — omitted means current behavior); the
+signature table gains the `model-unavailable` class; `checkpoint` gains a
+`--session <hint>` flag (supervisor identity) and the
+`BATON_SUPERVISED_CHILD` no-op guard (shared with the hook entrypoints).
 
 ### Acceptance constraints (the loop's exit condition)
 
 1. On a fixture repo, `baton loop run` drives a toy goal end-to-end headlessly:
-   plan → gate-1 → smoke slice → parked for approval → (approved) → 2 subtasks
+   plan → gate-1 → smoke slice AS A TDD MINI-CYCLE (failing smoke assertion
+   authored and verifier-approved BEFORE the slice implementation — order
+   asserted from the journal) → parked for approval → (approved) → 2 subtasks
    TDD → gate-2 → done, with review artifacts under `reviews/` in the fixture.
+   Layer-2 children run in the main root with live hooks and never mutate the
+   supervisor-owned bundle (`BATON_SUPERVISED_CHILD` no-op asserted).
 2. Simulated limit death (child exits with a verbatim limit banner) mid-subtask
    → the loop seals, remaps the role off the dead platform, resumes on the
    other harness, and completes the subtask. Chained A→B→A tested. Separately:
@@ -234,7 +283,9 @@ gains the `model-unavailable` class.
    both worker branch ranges (child commits included) — sole author, zero AI
    attribution; reviewer children run read-only.
 4. The 5-cap parks + escalates on every gate (unit-forced exhaustion test);
-   no gate ever runs a 6th iteration.
+   no gate ever runs a 6th iteration. Killing the supervisor (and its
+   launching session) mid-subtask → a fresh `loop run` recovers via the
+   journal and continues or parks, with no orphaned children.
 5. Deleting `.handoff/` and `.worktrees/` leaves the fixture repo exactly as
    a plain git repo (no residue outside gitignored trees).
 6. All existing 878 tests stay green; the new suite covers spec validation,
@@ -284,4 +335,16 @@ LLM-judged smoke verdicts (the smoke gate is a human gate by decision 3).
 | 7 | Spawn/verdict contract too weak | Fixed — Child supervision contract: process groups, SIGTERM→SIGKILL, capped logs, region-bounded verdict parse with prompt-echo defense, unparseable→BLOCKED, fixture tests |
 | 8 | Smoke gate can approve stale state | Fixed — digest-bound approval token in `smoke-approval.json`; `--approve-smoke <token>` revalidated before resume; drift parks for a fresh smoke run |
 
-- Iteration 2: pending.
+- **Iteration 2** (2026-07-18, codex/gpt-5.5 @ xhigh, `degraded:
+  model-fallback`): **BLOCKED** — 2 blocking, 3 major; iteration-1 findings
+  3/5/6/8 explicitly accepted as dispositioned. Disposition:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Layer-2 main-root children still collide with the owned bundle; `--session` doesn't exist on checkpoint | Fixed — `BATON_SUPERVISED_CHILD` no-op guard on hooks + checkpoint (children never touch any bundle); `checkpoint --session` added for the supervisor; main-root concurrent-child contract test added |
+| 2 | Smoke phase violates the TDD contract | Fixed — smoke slice is a TDD mini-cycle (failing assertion → verifier approval → minimal implementation); phase order + acceptance constraint 1 assert it from the journal |
+| 3 | Phase IDs vs role IDs ambiguous | Fixed — phases are `{id, role}`; `role` must be a matrix role ID, validated before any spawn; default spec uses exact role IDs |
+| 4 | Loop-state drift test unfalsifiable (not a token input) | Fixed — no-write window enforced by the loop transaction lock and ASSERTED via fs spy; drift tests inject only token-bound inputs (git, probes); loop position checkpointed into the bundle pre-seal so the token binds it |
+| 5 | "Survives operator session ending" untestable | Fixed — Supervisor lifetime and recovery section: foreground default + `--detach`, provably-dead run lock, journal-replay recovery, supervisor-death acceptance test |
+
+- Iteration 3: pending.
