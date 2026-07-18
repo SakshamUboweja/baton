@@ -147,6 +147,12 @@ async function sessionStart(io) {
  */
 export async function runHook(args, io) {
   try {
+    // Supervised loop children never touch or read any bundle: fast-path out
+    // before spawning anything (mirrors core isSupervisedChild — this script
+    // runs standalone, so the check is inlined).
+    const supervised = io?.env?.BATON_SUPERVISED_CHILD;
+    if (typeof supervised === 'string' && supervised.length > 0) return 0;
+
     const event = args[0] ?? 'unknown';
 
     if (event === 'SessionStart') return sessionStart(io);

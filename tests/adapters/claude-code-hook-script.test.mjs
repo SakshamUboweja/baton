@@ -292,6 +292,104 @@ describe('hook.mjs — SessionStart injects a handoff-pending notice, never chec
 });
 
 // ===========================================================================
+describe('hook.mjs — BATON_SUPERVISED_CHILD fast-path no-op (l1-supervised-guard)', () => {
+  // Source of truth: docs/plans/2026-07-18-goal-loop-worktree-pipeline.md
+  // §"Child-hook policy (Gate-1 iteration 2, finding 1; iteration 3, finding 1)"
+  // + §"Acceptance constraints" constraint 1. When the supervisor sets
+  // BATON_SUPERVISED_CHILD in a child's env, the hook entrypoint must fast-path
+  // no-op for EVERY event it handles WITHOUT spawning any baton child process:
+  // exit 0, empty stdout/stderr, and — critically — io.execFile is NEVER called
+  // (a spawned child would itself read/write the supervisor-owned bundle, which
+  // is exactly what the guard exists to prevent). Beyond no-spawn, the fast path
+  // must itself touch NOTHING under .handoff/ — no inline bundle read, no
+  // diagnostics write (test-verifier iteration-01 finding 3): the same io.fs
+  // read/write/history spy the command tests use is applied here. Unset/empty =
+  // normal.
+  const EVENTS = ['SessionStart', 'Stop', 'StopFailure', 'PreCompact', 'SessionEnd'];
+  const HANDOFF_PREFIX = '/repo/.handoff';
+
+  /** Record the first .handoff/ read (content + metadata) and every fs mutation. */
+  function spyFs(io) {
+    const state = { read: /** @type {string | null} */ (null), writes: /** @type {string[]} */ ([]) };
+    const noteRead = (p) => {
+      if (state.read === null && String(p).startsWith(HANDOFF_PREFIX)) state.read = String(p);
+    };
+    for (const m of ['readFileSync', 'existsSync', 'readdirSync', 'statSync', 'lstatSync', 'realpathSync']) {
+      const real = io.fs[m].bind(io.fs);
+      io.fs[m] = (p, a) => {
+        noteRead(p);
+        return real(p, a);
+      };
+    }
+    for (const m of ['writeFileSync', 'appendFileSync', 'mkdirSync', 'unlinkSync', 'rmSync']) {
+      const real = io.fs[m].bind(io.fs);
+      io.fs[m] = (p, a) => {
+        state.writes.push(String(p));
+        return real(p, a);
+      };
+    }
+    for (const m of ['renameSync', 'copyFileSync']) {
+      const real = io.fs[m].bind(io.fs);
+      io.fs[m] = (from, to) => {
+        state.writes.push(String(to));
+        return real(from, to);
+      };
+    }
+    return state;
+  }
+
+  it('every handled event fast-path no-ops without spawning ANY baton child or touching .handoff/', async () => {
+    for (const event of EVENTS) {
+      const { io, calls } = makeHookIo({ stdin: payload(event), files: { [paths.snapshot]: snapText(claudeBundle()) } });
+      io.env.BATON_SUPERVISED_CHILD = '1';
+      const spy = spyFs(io);
+
+      const code = await runHook([event], io);
+      assert.equal(code, 0, `${event}: supervised child exits 0`);
+      assert.equal(calls.length, 0, `${event}: NO baton child is spawned (io.execFile never called) under the guard`);
+      assert.equal(io.stdoutText(), '', `${event}: no stdout under the guard`);
+      assert.equal(io.stderrText(), '', `${event}: no stderr under the guard`);
+      assert.equal(spy.read, null, `${event}: the fast path reads NOTHING under .handoff/ (no inline bundle read)`);
+      assert.deepEqual(spy.writes, [], `${event}: the fast path writes NOTHING (no diagnostics/log write)`);
+      assert.equal(io.fs.__history.length, 0, `${event}: the memfs is byte-identical after the fast path`);
+    }
+  });
+
+  it('the guard beats StopFailure\'s double-spawn (neither checkpoint nor detect runs) and touches no .handoff/', async () => {
+    const { io, calls } = makeHookIo({ stdin: payload('StopFailure', { error: { type: 'rate_limit' } }) });
+    io.env.BATON_SUPERVISED_CHILD = '1';
+    const spy = spyFs(io);
+    const code = await runHook(['StopFailure'], io);
+    assert.equal(code, 0);
+    assert.equal(findSub(calls, 'checkpoint').length, 0, 'no checkpoint child under the guard');
+    assert.equal(findSub(calls, 'detect').length, 0, 'no detect child under the guard');
+    assert.equal(calls.length, 0, 'no child spawned at all');
+    assert.equal(spy.read, null, 'no .handoff/ read on the StopFailure fast path');
+    assert.equal(io.fs.__history.length, 0, 'no write on the StopFailure fast path');
+  });
+
+  it('any non-empty value activates the fast-path (not just "1") — same silence + zero .handoff touch', async () => {
+    const { io, calls } = makeHookIo({ stdin: payload('Stop'), files: { [paths.snapshot]: snapText(claudeBundle()) } });
+    io.env.BATON_SUPERVISED_CHILD = 'yes';
+    const spy = spyFs(io);
+    assert.equal(await runHook(['Stop'], io), 0);
+    assert.equal(calls.length, 0, 'a non-"1" truthy value is equally a no-op (no child spawned)');
+    assert.equal(io.stdoutText(), '', 'no stdout under a non-"1" guard value');
+    assert.equal(io.stderrText(), '', 'no stderr under a non-"1" guard value');
+    assert.equal(spy.read, null, 'the fast path reads NOTHING under .handoff/ (no inline bundle read)');
+    assert.deepEqual(spy.writes, [], 'the fast path writes NOTHING');
+    assert.equal(io.fs.__history.length, 0, 'the memfs is byte-identical after the fast path');
+  });
+
+  it('NEGATIVE: empty-string BATON_SUPERVISED_CHILD does NOT trigger the fast-path (a normal Stop still spawns a checkpoint)', async () => {
+    const { io, calls } = makeHookIo({ stdin: payload('Stop'), files: { [paths.snapshot]: snapText(claudeBundle()) } });
+    io.env.BATON_SUPERVISED_CHILD = '';
+    assert.equal(await runHook(['Stop'], io), 0);
+    assert.equal(findSub(calls, 'checkpoint').length, 1, 'empty-string env is NORMAL behavior: the checkpoint child still spawns');
+  });
+});
+
+// ===========================================================================
 describe('hook.mjs — fail-open (S4)', () => {
   it('unparseable stdin returns 0 and never throws', async () => {
     const { io } = makeHookIo({ stdin: 'not json at all {', files: { [paths.snapshot]: snapText(claudeBundle()) } });

@@ -66,6 +66,20 @@ export function resolveRoot(io, flags) {
   return start;
 }
 
+/**
+ * True when this process is a loop-supervised child (BATON_SUPERVISED_CHILD
+ * set to any non-empty value). Supervised children must never read or write
+ * any bundle and never receive resume context — hook-invoked commands check
+ * this BEFORE flag parsing and silently no-op (exit 0, empty output) so the
+ * supervisor never has to filter child output or nonzero exits.
+ * @param {any} io
+ * @returns {boolean}
+ */
+export function isSupervisedChild(io) {
+  const v = io?.env?.BATON_SUPERVISED_CHILD;
+  return typeof v === 'string' && v.length > 0;
+}
+
 /** The supported platform enum, validated wherever a platform id is intake. */
 export const PLATFORMS = ['claude-code', 'codex', 'cursor'];
 

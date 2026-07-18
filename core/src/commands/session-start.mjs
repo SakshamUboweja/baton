@@ -1,5 +1,5 @@
 import { loadBundle } from '../bundle/store.mjs';
-import { resolveRoot, parseFlagsStrict, usageError, emitEnvelope, platformError } from './shared.mjs';
+import { resolveRoot, parseFlagsStrict, usageError, emitEnvelope, platformError, isSupervisedChild } from './shared.mjs';
 
 // Per-platform receive pointers and context shapes (plan §adapters; gate-2
 // fix 8). Claude Code injects hookSpecificOutput.additionalContext, Cursor
@@ -26,6 +26,7 @@ const RESUME_HINT = {
  * @returns {Promise<number>}
  */
 export async function cmdSessionStart(args, io) {
+  if (isSupervisedChild(io)) return 0;
   const parsed = parseFlagsStrict(args, { platform: 'string' });
   if (parsed.error !== undefined) return usageError(io, parsed.flags, 'session-start', parsed.error);
   const flags = parsed.flags;
