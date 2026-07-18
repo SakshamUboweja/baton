@@ -1,6 +1,7 @@
 # Goal-loop + dual-worktree pipeline (Layers 2+3, v1 plan)
 
-Status: DRAFT — Gate-1 pending.
+Status: APPROVED — Gate 1 passed at iteration 4 of 5 (2026-07-18,
+codex/gpt-5.5 @ xhigh, `degraded: model-fallback`).
 
 ## Context
 
@@ -363,4 +364,8 @@ LLM-judged smoke verdicts (the smoke gate is a human gate by decision 3).
 | 1 | Supervised-child guard misses `session-start` (bundle read + resume-context injection into children) | Fixed — `BATON_SUPERVISED_CHILD` no-ops EVERY hook-invoked command incl. `session-start`; acceptance constraint 1 asserts zero writes AND zero resume context on all three platforms |
 | 2 | Stale concrete model name in locked decision 2 | Fixed — reworded to planner/merger roles with chains in config |
 
-- Iteration 4: pending.
+- **Iteration 4 — FINAL** (2026-07-18, codex/gpt-5.5 @ xhigh, `degraded:
+  model-fallback`): **APPROVED**, zero findings. Both iteration-3
+  dispositions verified against adapter/core code; regression scan found no
+  new implementation-start blocker; iterations 1–3 stand dispositioned.
+  Gate 1 closed at iteration 4 of 5 under the cap.
