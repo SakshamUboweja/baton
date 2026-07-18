@@ -16,8 +16,9 @@ pipeline (Layer 3).
 1. **Packaging**: inside the baton repo — new commands `baton loop` and
    `baton pipeline`, sharing the role matrix, resolver, doctor, and
    checkpoint/handoff machinery.
-2. **Layer 3 swap cadence**: per subtask — writer and reviewer swap seats every
-   subtask; Fable plans and performs the final adversarial merge.
+2. **Layer 3 swap cadence**: per subtask — writer and reviewer swap seats
+   every subtask; the planner role plans and the merger role performs the
+   final adversarial merge (concrete chains live in `baton.config.json`).
 3. **Layer 2 smoke gate**: one staged gate after planning — the loop must
    produce a minimal end-to-end slice (build + run + one real assertion) and
    get explicit approval before the full run; the 5-iteration cap governs
@@ -82,10 +83,13 @@ handoff bundle; every supervisor-driven baton invocation passes explicit
 (`--session loop-<runId>` — a NEW flag added to `checkpoint`; `receive`
 already has it), so the bundle has exactly one stable owner.
 
-**Child-hook policy (Gate-1 iteration 2, finding 1)** — children never touch
-any bundle, by construction: the supervisor sets `BATON_SUPERVISED_CHILD=1`
-in every child's environment, and both the hook entrypoints and
-`baton checkpoint` quietly no-op (exit 0) when it is set. This covers
+**Child-hook policy (Gate-1 iteration 2, finding 1; iteration 3,
+finding 1)** — children never touch OR read any bundle, by construction: the
+supervisor sets `BATON_SUPERVISED_CHILD=1` in every child's environment, and
+EVERY baton hook command — the hook entrypoints, `baton checkpoint`, and
+`baton session-start` (which would otherwise read the bundle and inject
+pending-handoff resume context into the child) — quietly no-ops (exit 0,
+empty output) when it is set. This covers
 Layer-2 children running in the MAIN root (where root discovery would
 otherwise find the supervisor-owned bundle and the foreign-session guard
 would reject their stable hints) and pipeline children in worktrees alike;
@@ -261,8 +265,9 @@ range scan) · `commands/loop.mjs`, `commands/pipeline.mjs`. Plus three Layer-1
 extensions: `roles/resolve.mjs` gains `avoidEntries[]` (entry-level
 avoidance, backward-compatible — omitted means current behavior); the
 signature table gains the `model-unavailable` class; `checkpoint` gains a
-`--session <hint>` flag (supervisor identity) and the
-`BATON_SUPERVISED_CHILD` no-op guard (shared with the hook entrypoints).
+`--session <hint>` flag (supervisor identity), and the
+`BATON_SUPERVISED_CHILD` no-op guard lands in the hook entrypoints,
+`checkpoint`, AND `session-start` (every hook-invoked command).
 
 ### Acceptance constraints (the loop's exit condition)
 
@@ -271,8 +276,10 @@ signature table gains the `model-unavailable` class; `checkpoint` gains a
    authored and verifier-approved BEFORE the slice implementation — order
    asserted from the journal) → parked for approval → (approved) → 2 subtasks
    TDD → gate-2 → done, with review artifacts under `reviews/` in the fixture.
-   Layer-2 children run in the main root with live hooks and never mutate the
-   supervisor-owned bundle (`BATON_SUPERVISED_CHILD` no-op asserted).
+   Layer-2 children run in the main root with live hooks and neither mutate
+   NOR read the supervisor-owned bundle: under `BATON_SUPERVISED_CHILD=1`,
+   hook commands on all three platforms produce zero bundle writes AND zero
+   session-start resume context (both asserted).
 2. Simulated limit death (child exits with a verbatim limit banner) mid-subtask
    → the loop seals, remaps the role off the dead platform, resumes on the
    other harness, and completes the subtask. Chained A→B→A tested. Separately:
@@ -347,4 +354,13 @@ LLM-judged smoke verdicts (the smoke gate is a human gate by decision 3).
 | 4 | Loop-state drift test unfalsifiable (not a token input) | Fixed — no-write window enforced by the loop transaction lock and ASSERTED via fs spy; drift tests inject only token-bound inputs (git, probes); loop position checkpointed into the bundle pre-seal so the token binds it |
 | 5 | "Survives operator session ending" untestable | Fixed — Supervisor lifetime and recovery section: foreground default + `--detach`, provably-dead run lock, journal-replay recovery, supervisor-death acceptance test |
 
-- Iteration 3: pending.
+- **Iteration 3** (2026-07-18, codex/gpt-5.5 @ xhigh, `degraded:
+  model-fallback`): **BLOCKED** — 1 blocking, 1 minor; iteration-2 findings
+  2–5 explicitly accepted as dispositioned. Disposition:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | Supervised-child guard misses `session-start` (bundle read + resume-context injection into children) | Fixed — `BATON_SUPERVISED_CHILD` no-ops EVERY hook-invoked command incl. `session-start`; acceptance constraint 1 asserts zero writes AND zero resume context on all three platforms |
+| 2 | Stale concrete model name in locked decision 2 | Fixed — reworded to planner/merger roles with chains in config |
+
+- Iteration 4: pending.
