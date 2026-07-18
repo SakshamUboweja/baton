@@ -7,7 +7,11 @@
     "test-verifier": ["codex/gpt-5.5@xhigh", "claude-code/claude-opus-4-8"],
     "implementer": ["claude-code/claude-fable-5", "codex/gpt-5.6-sol@xhigh", "cursor/composer"],
     "final-reviewer-a": ["codex/gpt-5.6-sol@xhigh", "codex/gpt-5.5@xhigh"],
-    "final-reviewer-b": ["claude-code/claude-fable-5@xhigh", "claude-code/claude-opus-4-8"]
+    "final-reviewer-b": ["claude-code/claude-fable-5@xhigh", "claude-code/claude-opus-4-8"],
+    "subtask-reviewer": ["codex/gpt-5.6-sol@xhigh", "codex/gpt-5.5@xhigh", "claude-code/claude-opus-4-8"],
+    "merger": ["claude-code/claude-fable-5@xhigh"],
+    "worker-a": ["codex/gpt-5.6-sol@xhigh", "codex/gpt-5.5@xhigh"],
+    "worker-b": ["claude-code/claude-fable-5", "claude-code/claude-opus-4-8"]
   },
   "constraints": {
     "test-author-vs-verifier": "different-vendor-preferred, fresh-context-required",
