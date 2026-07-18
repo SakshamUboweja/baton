@@ -272,68 +272,22 @@ describe('hook.mjs — SessionStart injects a handoff-pending notice, never chec
     assert.equal(io.stdoutText(), '');
   });
 
-  const assertNoContext = (io, why) => {
-    const out = io.stdoutText().trim();
-    if (out.length > 0) {
-      const parsed = JSON.parse(out);
-      const ctx = parsed?.hookSpecificOutput?.additionalContext;
-      assert.ok(!ctx, why);
+  // The per-bundle-state notice matrix (foreign/own, sealed/open, limit/no-
+  // limit, missing/corrupt) is pinned at its home — tests/commands/
+  // session-start.test.mjs — since the hook only delegates (test-verifier
+  // finding 3: seeded-bundle negatives here were tautological once the fake
+  // child returned empty stdout). The hook-layer invariant that remains:
+  it('SessionStart NEVER checkpoints, whatever the bundle state', async () => {
+    for (const files of [
+      {},
+      { [paths.snapshot]: snapText(claudeBundle()) },
+      { [paths.snapshot]: snapText(claudeBundle({ handoff: { status: 'sealed', reason: 'r', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] } })) },
+    ]) {
+      const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files });
+      assert.equal(await runHook(['SessionStart'], io), 0);
+      assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
+      assert.equal(findSub(calls, 'session-start').length, 1, 'and always delegates exactly once');
     }
-  };
-
-  it('(V2 negative) an OPEN, non-limit FOREIGN bundle emits no additionalContext (limit-hit is required when unsealed)', async () => {
-    const bundle = claudeBundle({
-      origin: { platform: 'codex', model: 'gpt-5.6-sol', sessionHint: 'sess-x', unstable: false },
-      // open + reasonClass null: mid-task on another platform, nothing pending.
-    });
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0);
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-    assertNoContext(io, 'a foreign OPEN non-limit bundle is not pending — no additionalContext');
-  });
-
-  it('an OPEN, non-limit bundle from THIS platform (claude-code) emits no additionalContext', async () => {
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(claudeBundle()) } });
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0);
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-    assertNoContext(io, 'an own-platform, open, non-limit bundle is not a pending handoff — no additionalContext');
-  });
-
-  it('(iter-2) a SEALED bundle from THIS platform (claude-code) emits no additionalContext — pending requires FOREIGN', async () => {
-    const bundle = claudeBundle({
-      handoff: { status: 'sealed', reason: 'wrapping up', reasonClass: null, toPlatformHint: 'codex', finalizedAt: T0, receive_log: [] },
-    });
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0);
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-    assertNoContext(io, 'an own-platform sealed bundle is this session\'s own work, not a pending handoff — no additionalContext');
-  });
-
-  it('(iter-2) an OPEN usage-limit bundle from THIS platform emits no additionalContext — pending requires FOREIGN', async () => {
-    const bundle = claudeBundle({
-      handoff: { status: 'open', reason: "You've hit your usage limit", reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: null, receive_log: [] },
-    });
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart'), files: { [paths.snapshot]: snapText(bundle) } });
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0);
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-    assertNoContext(io, 'an own-platform limit-hit bundle belongs to this platform\'s own resumed session — no additionalContext');
-  });
-
-  it('(V2 negative) no bundle at all emits no additionalContext and exits 0', async () => {
-    const { io, calls } = makeHookIo({ stdin: payload('SessionStart') }); // empty tree: no .handoff/
-
-    const code = await runHook(['SessionStart'], io);
-    assert.equal(code, 0, 'a missing bundle is a quiet no-op (fail-open)');
-    assert.equal(findSub(calls, 'checkpoint').length, 0, 'SessionStart never checkpoints');
-    assertNoContext(io, 'no bundle means nothing pending — no additionalContext');
   });
 });
 

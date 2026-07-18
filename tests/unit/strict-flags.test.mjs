@@ -77,6 +77,32 @@ describe('fail-dangerous flag loss is dead (command level)', () => {
   });
 });
 
+describe('every migrated command rejects garbled invocations (test-verifier finding 2)', () => {
+  // Table-driven: each command switched to parseFlagsStrict must exit 2 on a
+  // stray positional and on an unknown flag — a single command silently
+  // regressing to lenient parsing reds here.
+  const CASES = [
+    ['detect', () => import('../../core/src/commands/detect.mjs').then((m) => m.cmdDetect), ['--platform', 'codex', '--text', 'x']],
+    ['finalize', () => import('../../core/src/commands/finalize.mjs').then((m) => m.cmdFinalize), ['--reason', 'r']],
+    ['status', () => import('../../core/src/commands/status.mjs').then((m) => m.cmdStatus), []],
+    ['purge-transcript', () => import('../../core/src/commands/purge-transcript.mjs').then((m) => m.cmdPurgeTranscript), []],
+    ['recover', () => import('../../core/src/commands/recover.mjs').then((m) => m.cmdRecover), []],
+    ['session-start', () => import('../../core/src/commands/session-start.mjs').then((m) => m.cmdSessionStart), ['--platform', 'codex']],
+    ['receive', () => import('../../core/src/commands/receive.mjs').then((m) => m.cmdReceive), ['--platform', 'codex']],
+    ['init', () => import('../../core/src/commands/init.mjs').then((m) => m.cmdInit), []],
+  ];
+
+  for (const [name, load, validArgs] of CASES) {
+    it(`${name}: stray positional and unknown flag both exit 2`, async () => {
+      const cmd = await load();
+      const io1 = makeIo({ stdin: '{}' });
+      assert.equal(await cmd([...validArgs, 'stray-token'], io1), 2, `${name}: a stray positional is a usage error`);
+      const io2 = makeIo({ stdin: '{}' });
+      assert.equal(await cmd([...validArgs, '--no-such-flag'], io2), 2, `${name}: an unknown flag is a usage error`);
+    });
+  }
+});
+
 describe('--platform / --to enum validation', () => {
   it('PLATFORMS is the supported enum', () => {
     assert.deepEqual(PLATFORMS, ['claude-code', 'codex', 'cursor']);

@@ -108,17 +108,26 @@ describe('F12 — session-start never echoes the untrusted origin verbatim (core
     assert.match(io.stdoutText(), /from codex is pending/);
   });
 
-  it('emits nothing from a symlinked .handoff (unsafe tree — F12)', async () => {
+  it('never READS the bundle through a symlinked .handoff, and emits nothing (unsafe tree — F12)', async () => {
     const io = ssIo(sealedForeign('codex'));
-    // Simulate .handoff being a symlink: the managed-tree jail must refuse, so
-    // session-start emits no context derived from the unsafe tree.
+    // Simulate .handoff being a symlink: the managed-tree jail must refuse
+    // BEFORE any bundle read (test-verifier finding 1: empty stdout alone
+    // would pass an implementation that reads the linked file and merely
+    // suppresses output — the no-read property is the security contract).
     const realLstat = io.fs.lstatSync.bind(io.fs);
     io.fs.lstatSync = (p) => {
       if (String(p) === '/repo/.handoff') return { ...realLstat('/repo/.handoff'), isSymbolicLink: () => true, isDirectory: () => true, isFile: () => false };
       return realLstat(p);
     };
+    let readThroughTree = false;
+    const realRead = io.fs.readFileSync.bind(io.fs);
+    io.fs.readFileSync = (p, enc) => {
+      if (String(p).startsWith('/repo/.handoff/')) readThroughTree = true;
+      return realRead(p, enc);
+    };
     const code = await cmdSessionStart(['--platform', 'claude-code'], io);
     assert.equal(code, 0, 'fail-open');
     assert.equal(io.stdoutText(), '', 'no context is injected from an unsafe tree');
+    assert.equal(readThroughTree, false, 'nothing under the symlinked tree is ever read (jail refuses before the read)');
   });
 });
