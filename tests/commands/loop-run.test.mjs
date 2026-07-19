@@ -405,6 +405,72 @@ describe('loop run — failover integration', () => {
 });
 
 // ===========================================================================
+// D1 (dogfood milestone C) — classification reads the transcript TAIL, not the
+// whole child log: a signature the child itself WROTE mid-log (documenting
+// failover in a diff) must not route a healthy exit-0 child into failover. Seam:
+// classify a bounded tail (~4 KB); pin the behavior (signature placed far from
+// the end), not the constant.
+describe('loop run — D1: classification uses the transcript tail, not the body', () => {
+  const bodySignatureLog = (signature) =>
+    `writing docs…\n${signature}\n` +
+    '+ a clean documented line\n'.repeat(600) + // ~15 KB of body, well past any ~4 KB tail
+    `\ntokens used: 88\nDone.\nVERDICT: APPROVED\nFINDINGS: none\n`;
+
+  it('RED (D1): a child whose LOG BODY carries a usage-limit signature but whose exit-0 TAIL is clean advances the phase (NO failover)', async () => {
+    // A single non-gate phase: an OK child just advances to done.
+    const spec = loopSpec({ phases: [{ id: 'plan', role: 'planner' }] }); // planner = claude-code
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'APPROVED', exitCode: 0, logContent: bodySignatureLog(CC_LIMIT) },
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the phase completes — the body signature was NOT a death; stderr: ${io.stderrText()}`);
+    assert.equal(io.__runner.calls.length, 1, 'exactly one child — no failover relaunch on the child’s own work product');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
+  });
+
+  it('GUARD (D1): a death banner in the TAIL still classifies and routes to failover (parks a single-entry codex chain)', async () => {
+    const cfg = JSON.parse(JSON.stringify(CONFIG));
+    cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh'];
+    const spec = loopSpec({ phases: [{ id: 'work', role: 'solo-codex' }] });
+    const io = makeLoopRepo({
+      spec,
+      files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2), '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n' },
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `did the work…\nall clean\n${MODEL_UNAVAIL}\n` }, // banner in the tail
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 4, 'a tail banner is classified — the single-entry codex chain exhausts and parks');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.PARKED, 'the run parked (failover was consulted)');
+  });
+});
+
+// ===========================================================================
+// D5 (dogfood milestone C) — the sessionHint passed to failover/checkpoint is
+// the runId itself, no double 'loop-' prefix (live artifact 'loop-loop-<hex>').
+describe('loop run — D5: failover sessionHint is the runId (no double loop- prefix)', () => {
+  it('RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId>', async () => {
+    const spec = loopSpec({ phases: [{ id: 'subtask-implement', role: 'implementer' }] });
+    const io = makeLoopRepo({ spec, files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' }, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `child transcript…\n${CC_LIMIT}\n` }, // usage-limit → seal/receive
+      { verdict: 'APPROVED' }, // relaunched child (codex)
+    ]);
+    io.__runner = io.superviseChild;
+    await cmdLoop(['run'], io);
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    assert.match(runId, /^loop-/, 'sanity: the runId is already loop-prefixed');
+    const bundle = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(bundle.origin.sessionHint, runId, 'the failover/checkpoint session hint is the runId itself');
+    assert.doesNotMatch(String(bundle.origin.sessionHint), /^loop-loop-/, 'no double loop- prefix (the live loop-loop-<hex> bug)');
+  });
+});
+
+// ===========================================================================
 describe('loop run — recovery from a mid-run crash', () => {
   it('resumes from the journal position: only the REMAINING phase spawns a child', async () => {
     const spec = loopSpec(); // plan -> gate-1

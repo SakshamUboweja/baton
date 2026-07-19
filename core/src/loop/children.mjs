@@ -33,7 +33,7 @@ const GIT_IDENTITY = Object.freeze({
  * spawn (the codex-exec stdin-hang field failure).
  * @param {{platform: string, role: string, model: string, effort?: string | null, mode?: string}} assignment
  * @param {string} prompt
- * @param {{root: string}} opts
+ * @param {{root: string, gitDir?: string}} opts
  * @returns {{command: string, args: string[], env: Record<string, string>, stdio: any[], cwd: string}}
  */
 export function buildChildArgv(assignment, prompt, opts) {
@@ -59,6 +59,13 @@ export function buildChildArgv(assignment, prompt, opts) {
   // codex (and the default shape for exec-style CLIs).
   const args = ['exec', '-C', opts.root, '-s', readOnly ? 'read-only' : 'workspace-write', '--model', assignment.model];
   if (assignment.effort) args.push('-c', `model_reasoning_effort=${assignment.effort}`);
+  if (!readOnly && typeof opts.gitDir === 'string' && opts.gitDir.length > 0) {
+    // A linked worktree's index/lock live under the MAIN repo's .git —
+    // outside the seat-cwd sandbox. Without this grant a codex writer can
+    // edit but never commit (dogfood finding D2). Read-only children never
+    // get it.
+    args.push('-c', `sandbox_workspace_write.writable_roots=[${JSON.stringify(opts.gitDir)}]`);
+  }
   args.push(prompt);
   return { command: 'codex', args, env, stdio, cwd: opts.root };
 }

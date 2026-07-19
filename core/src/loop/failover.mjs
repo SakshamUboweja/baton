@@ -73,14 +73,26 @@ export async function runFailover(input) {
   // (3) Checkpoint the loop position INTO the bundle under the supervisor
   // session BEFORE any seal, so the frozen seal carries it.
   if (input.loopState !== undefined) {
-    const checkpointIo = {
+    const checkpointStdin = JSON.stringify({
+      schema: 'baton/event@1',
+      events: [{ type: 'decision', payload: { summary: `loop position at limit death: ${JSON.stringify(input.loopState)}` } }],
+    });
+    const checkpointArgs = ['--platform', originPlatform, '--session', sessionHint, '--root', root];
+    // Hook-safety makes a foreign-session rejection EXIT 0, so it is detected
+    // from the message, not the code. When the active bundle belongs to
+    // another session (e.g. the operator's own hooks — dogfood finding D3),
+    // the supervised run must take it over before sealing: it cannot seal
+    // state it does not own. A same-session bundle never triggers the retry.
+    let firstStderr = '';
+    await cmdCheckpoint(checkpointArgs, {
       ...io,
-      stdin: JSON.stringify({
-        schema: 'baton/event@1',
-        events: [{ type: 'decision', payload: { summary: `loop position at limit death: ${JSON.stringify(input.loopState)}` } }],
-      }),
-    };
-    await cmdCheckpoint(['--platform', originPlatform, '--session', sessionHint, '--root', root], checkpointIo);
+      stdin: checkpointStdin,
+      stderr: { write: (/** @type {string} */ s) => { firstStderr += s; return true; } },
+    });
+    if (firstStderr) io.stderr.write(firstStderr);
+    if (/foreign session/i.test(firstStderr)) {
+      await cmdCheckpoint([...checkpointArgs, '--take-over'], { ...io, stdin: checkpointStdin });
+    }
   }
 
   // (4) Seal — unless the caller knows a clean seal is impossible

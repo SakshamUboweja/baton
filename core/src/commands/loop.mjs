@@ -16,7 +16,7 @@ import { runFailover } from '../loop/failover.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
-import { classify } from '../detect/classifier.mjs';
+import { classify, transcriptTail } from '../detect/classifier.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { atomicWriteJson, atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
@@ -300,7 +300,8 @@ async function runLoop(flags, io) {
 
   const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
   const runner = io.superviseChild ?? superviseChild;
-  const sessionHint = `loop-${runId}`;
+  // The runId is already 'loop-<hex>' — no extra prefix (D5).
+  const sessionHint = runId;
   /** @type {string[]} */
   let avoid = [];
   /** @type {Array<{platform: string, model: string}>} */
@@ -442,7 +443,7 @@ async function runLoop(flags, io) {
         // Classification reads the child's LOG (the frozen transcript), so a
         // limit banner routes to failover even when a verdict parsed.
         const transcript = io.fs.existsSync(logPath) ? io.fs.readFileSync(logPath, 'utf8') : '';
-        const cls = classify({ text: transcript, exitCode: result.exitCode ?? 0, platform: assignment.platform, table }).class;
+        const cls = classify({ text: transcriptTail(transcript), exitCode: result.exitCode ?? 0, platform: assignment.platform, table }).class;
 
         if (cls === 'usage-limit' || cls === 'model-unavailable' || cls === 'other-error' || cls === 'throttle' || cls === 'auth') {
           failoverAttempt += 1;

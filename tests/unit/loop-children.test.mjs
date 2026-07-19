@@ -143,6 +143,45 @@ describe('buildChildArgv — codex roles', () => {
 });
 
 // ===========================================================================
+// D2 (dogfood milestone C) — a codex WRITE-capable child in a LINKED worktree
+// cannot commit unless the MAIN repo's .git dir is an extra sandbox writable
+// root: a linked worktree's index/lock lives under <mainRoot>/.git/worktrees/
+// <seat>, OUTSIDE the seat-cwd sandbox (live child 002: "sandbox only has read
+// access to .git/worktrees/wt-a/index.lock"). The caller passes the main .git
+// path via opts.gitDir; buildChildArgv adds it to sandbox_workspace_write.
+// writable_roots for write-capable codex children only.
+describe('buildChildArgv — codex write children get the main .git as an extra writable root (D2)', () => {
+  // Collect every value that follows a `-c` flag (codex config args).
+  const configArgs = (/** @type {string[]} */ args) =>
+    args.map((a, i) => (a === '-c' ? args[i + 1] : null)).filter((v) => typeof v === 'string');
+  const writableRootsArg = (/** @type {string[]} */ args) =>
+    configArgs(args).find((v) => /sandbox_workspace_write\.writable_roots/.test(String(v)));
+
+  it('RED (D2): a WRITE-capable codex child adds the passed main .git dir to sandbox_workspace_write.writable_roots', () => {
+    const { buildChildArgv } = M();
+    // The seat cwd is a linked worktree; the main repo .git is elsewhere.
+    const r = buildChildArgv(
+      asg('codex', 'implementer', 'gpt-5.6-sol', 'xhigh'),
+      'P',
+      { root: '/repo/.worktrees/wt-a', gitDir: '/repo/.git' },
+    );
+    assert.equal(valAfter(r.args, '-s'), 'workspace-write', 'precondition: the implementer is write-capable');
+    const wr = writableRootsArg(r.args);
+    assert.ok(wr, 'a -c sandbox_workspace_write.writable_roots config arg is present for a write child with a gitDir');
+    assert.match(String(wr), /\/repo\/\.git/, 'the writable_roots names the MAIN repo .git dir (where the linked worktree index/lock live)');
+  });
+
+  it('GUARD (D2): a READ-ONLY codex child gets NO extra writable root, even when a gitDir is passed', () => {
+    const { buildChildArgv } = M();
+    for (const role of REVIEWER_ROLES) {
+      const r = buildChildArgv(asg('codex', role, 'gpt-5.6-sol', 'xhigh'), 'P', { root: '/repo/.worktrees/wt-b', gitDir: '/repo/.git' });
+      assert.equal(valAfter(r.args, '-s'), 'read-only', `${role} stays read-only`);
+      assert.equal(writableRootsArg(r.args), undefined, `${role} never receives a sandbox_workspace_write.writable_roots grant`);
+    }
+  });
+});
+
+// ===========================================================================
 describe('buildChildArgv — every child: guard env, sole-author identity, closed stdin', () => {
   for (const spec of [
     ['claude-code', 'implementer', 'claude-fable-5', null],

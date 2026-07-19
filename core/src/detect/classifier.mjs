@@ -40,6 +40,20 @@ function matches(matcher, text) {
 }
 
 /**
+ * The classification window for supervised-child transcripts: only the TAIL
+ * is evidence. Death banners land at the end of a log, while a child's own
+ * work product can legitimately contain signature text in the body — the
+ * first live pipeline run misrouted a healthy child whose README diff
+ * documented usage-limit failover (dogfood finding D1).
+ * @param {string} text @param {number} [maxChars]
+ * @returns {string}
+ */
+export function transcriptTail(text, maxChars = 4096) {
+  const s = String(text ?? '');
+  return s.length > maxChars ? s.slice(-maxChars) : s;
+}
+
+/**
  * Classify harness output. Structured evidence first (text and exit code are
  * ignored when a recognized structured signal is present); text signatures as
  * the fallback tier; exit code only breaks the no-match tie — a generic nonzero

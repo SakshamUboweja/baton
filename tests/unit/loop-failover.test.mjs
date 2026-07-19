@@ -386,6 +386,60 @@ describe('runFailover — usage-limit: the exact transaction', () => {
 });
 
 // ===========================================================================
+// D3 (dogfood milestone C) — the usage-limit checkpoint must TAKE OVER an
+// operator-owned (foreign-session) bundle: live, the clone's active bundle
+// belonged to the operator session, the plain `checkpoint --session <hint>` was
+// rejected as foreign, and the seal then proceeded against a bundle the run did
+// not own (the loop position never landed). The transaction must retry the
+// checkpoint WITH take-over and seal the bundle it now owns.
+describe('runFailover — usage-limit: foreign-session bundle is taken over before the seal (D3)', () => {
+  // A bundle owned by the OPERATOR session (a different stable session hint than
+  // the run's), so the run's `checkpoint --session loop-run1` is foreign.
+  const operatorOwned = { origin: { platform: 'codex', model: 'm', sessionHint: 'operator-session-xyz', unstable: false } };
+
+  it('RED (D3): a foreign (operator-owned) bundle is checkpointed plain, rejected, then RETRIED with take-over; the seal carries the loop position', async () => {
+    const { runFailover } = M();
+    const io = makeRepoIo({ status: 'open', overrides: operatorOwned });
+    assert.equal(loadBundle('/repo', io).bundle.origin.sessionHint, 'operator-session-xyz', 'precondition: the bundle is operator-owned');
+
+    const d = await runFailover(usageLimitInput(io)); // sessionHint 'loop-run1' — foreign to the operator bundle
+    assert.equal(d.action, 'relaunch', 'the transaction completes end to end against the taken-over bundle');
+
+    const err = io.stderrText();
+    // Evidence of the ordered sequence: the plain attempt was rejected as
+    // foreign, THEN a take-over retry ran (both messages come from checkpoint).
+    assert.match(err, /foreign session\/origin|rejected to keep sessions isolated/i, 'the plain checkpoint attempt was rejected as foreign');
+    // Match ONLY the take-over SUCCESS message ("took over — prior bundle
+    // archived"), never the rejection's "rerun with --take-over" hint.
+    assert.match(err, /took over|prior bundle archived/i, 'the checkpoint was retried WITH take-over');
+
+    // TEETH: the loop position only lands in the seal if the checkpoint actually
+    // succeeded (via take-over). A rejected-and-abandoned checkpoint leaves the
+    // sealed freeze WITHOUT the sentinel.
+    const fin = historyFreezes(io).find((f) => /\.finalize\.json$/.test(f.name));
+    assert.ok(fin, 'the transaction froze a .finalize.json (the seal)');
+    assert.match(JSON.stringify(fin.data), new RegExp(POSITION_SENTINEL), 'the sealed freeze carries the checkpointed loop position (checkpoint landed via take-over before the seal)');
+
+    // The run now owns the bundle it sealed/received against.
+    assert.equal(loadBundle('/repo', io).bundle.origin.sessionHint, 'loop-run1', 'the fresh generation is owned by the run session, not the operator');
+  });
+
+  it('GUARD (D3): a SAME-session bundle is NOT taken over (no foreign rejection, no unnecessary archive)', async () => {
+    const { runFailover } = M();
+    // Default fixture: origin.sessionHint 'loop-run1' == the run's sessionHint.
+    const io = makeRepoIo({ status: 'open' });
+    const d = await runFailover(usageLimitInput(io));
+    assert.equal(d.action, 'relaunch', 'the same-session transaction still completes');
+    const err = io.stderrText();
+    assert.doesNotMatch(err, /foreign session\/origin|rejected to keep sessions isolated/i, 'a same-session checkpoint is never rejected as foreign');
+    assert.doesNotMatch(err, /took over|prior bundle archived/i, 'a same-session bundle triggers NO take-over (no unnecessary archive)');
+    // The position still lands (checkpoint succeeded on the first, plain attempt).
+    const fin = historyFreezes(io).find((f) => /\.finalize\.json$/.test(f.name));
+    assert.match(JSON.stringify(fin.data), new RegExp(POSITION_SENTINEL), 'the same-session checkpoint landed the loop position before the seal');
+  });
+});
+
+// ===========================================================================
 describe('runFailover — usage-limit: git drift between prepare and commit (e), via io.execFile', () => {
   // Drift tests seed an ALREADY-SEALED bundle and pass no new loopState, so the
   // only git consumers are receive's prepare + commit — each HEAD read maps 1:1

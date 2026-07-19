@@ -23,7 +23,7 @@ import { resolveRoles } from '../roles/resolve.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
 import { runFailover } from '../loop/failover.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
-import { classify } from '../detect/classifier.mjs';
+import { classify, transcriptTail } from '../detect/classifier.mjs';
 import { atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
 import { appendEntry } from '../util/jsonl.mjs';
 import { dedupeKey } from '../util/ids.mjs';
@@ -132,9 +132,9 @@ async function runPipeline(flags, io) {
  */
 async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs }) {
   const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
-  /** @param {string} role @returns {any | null} */
-  const resolveOne = (role) => {
-    const a = resolveRoles({ config, to: 'claude-code', avoid: [], avoidEntries: [], probes: null }).assignments[role];
+  /** @param {string} role @param {Array<{platform: string, model: string}>} [avoidEntries] @returns {any | null} */
+  const resolveOne = (role, avoidEntries = []) => {
+    const a = resolveRoles({ config, to: 'claude-code', avoid: [], avoidEntries, probes: null }).assignments[role];
     return a && a.mode !== 'unavailable' ? a : null;
   };
 
@@ -239,7 +239,10 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     const childId = `${String(childSeq).padStart(3, '0')}-${label}`;
     const logPath = `${p.dir}/children/${childId}.log`;
     ensureDir(io.fs, `${p.dir}/children`);
-    const childSpec = buildChildArgv(assignment, prompt, { root: seatPath });
+    // gitDir: a linked worktree's index lives under the MAIN repo's .git —
+    // write-capable children need it inside their sandbox to commit (D2);
+    // buildChildArgv drops it for read-only roles.
+    const childSpec = buildChildArgv(assignment, prompt, { root: seatPath, gitDir: `${root}/.git` });
     const result = await runner(childSpec, {
       timeoutMs,
       graceMs: 10_000,
@@ -342,8 +345,12 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         return EXIT_ESCALATED;
       }
 
-      // Writer (write-capable, its own seat).
-      const writerAsg = forcedWriter ?? { ...writerAssignment, role: `worker-${seat}` };
+      // Writer (write-capable, its own seat). Every resolution — including a
+      // plain BLOCKED retry — honors the subtask's avoided entries, so a
+      // model rejected earlier in this subtask is never re-picked (D4).
+      const resolvedWriter = forcedWriter ?? resolveOne(`worker-${seat}`, subtaskAvoidEntries);
+      if (!resolvedWriter) return park(`no eligible writer remains for subtask '${st.id}' (every chain entry is avoided)`);
+      const writerAsg = { ...resolvedWriter, role: `worker-${seat}` };
       forcedWriter = null;
       const writerPrompt = [
         `You are the writer (worker-${seat}) for subtask '${st.id}': ${st.title}.`,
@@ -360,7 +367,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       // a BLOCKED self-check retries the writer, and only a passing writer
       // hands off to review.
       const writerLog = writerResult.logPath && io.fs.existsSync(writerResult.logPath) ? io.fs.readFileSync(writerResult.logPath, 'utf8') : '';
-      const writerCls = classify({ text: writerLog, exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
+      const writerCls = classify({ text: transcriptTail(writerLog), exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
       if (writerCls !== 'ok') {
         failoverAttempt += 1;
         // Failover is BOUNDED: at most one relaunch per configured chain entry
@@ -378,7 +385,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
           assignment: writerAsg,
           transcript: writerLog,
           exitCode: writerResult.exitCode ?? 1,
-          sessionHint: `loop-${state.runId}`,
+          sessionHint: state.runId,
           probes: null,
           avoid: [],
           avoidEntries: subtaskAvoidEntries,

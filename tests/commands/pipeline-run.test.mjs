@@ -881,6 +881,157 @@ describe('pipeline — H2: bounded failover (avoid carries; exhaustion parks)', 
 });
 
 // ===========================================================================
+// D2 (dogfood milestone C) — `pipeline run` must actually PASS the main repo
+// .git root to write-capable writer children: a linked worktree's index/lock
+// live under <mainRoot>/.git/worktrees/<seat>, outside the seat-cwd sandbox
+// (live child 002 could not commit: "sandbox only has read access to
+// .git/worktrees/wt-a/index.lock"). The unit pin proves buildChildArgv honors
+// opts.gitDir; THIS pin proves the command wires it through (pipeline.mjs:237
+// still passes only {root: seatPath}).
+describe('pipeline — D2: the writer spawn passes the main .git as a sandbox writable root', () => {
+  // Every value that follows a `-c` flag in a codex argv (config args).
+  const configArgs = (args) => args.map((a, i) => (a === '-c' ? args[i + 1] : null)).filter((v) => typeof v === 'string');
+
+  it('RED (D2): the write-capable writer child runs in its SEAT cwd yet gets the MAIN /repo/.git in sandbox_workspace_write.writable_roots', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+
+    const writer = writersOf(io.__runner)[0];
+    assert.ok(writer, 'a write-capable writer child ran');
+    const args = argsOf(writer);
+    // The cwd stays the seat worktree (codex passes it via -C) — the sandbox is
+    // still rooted at the seat, the .git dir is only an ADDITIONAL writable root.
+    assert.equal(valAfter(args, '-C'), WT_A, 'the writer runs in its seat worktree, not the main root');
+    const wr = configArgs(args).find((v) => /sandbox_workspace_write\.writable_roots/.test(String(v)));
+    assert.ok(wr, 'the writer argv carries a -c sandbox_workspace_write.writable_roots grant');
+    assert.match(String(wr), /\/repo\/\.git/, 'the extra writable root is the MAIN repo .git dir (where the linked-worktree index/lock live)');
+  });
+});
+
+// ===========================================================================
+// D1 (dogfood milestone C) — classification reads the transcript TAIL, not the
+// whole log: a child's OWN work product (a README diff hunk that DOCUMENTS
+// usage-limit failover) contains a verbatim signature mid-log. A healthy exit-0
+// APPROVED writer must not be routed into failover because of a signature in the
+// body it wrote. Death banners sit at the END of a log; a body hunk must not
+// classify. Seam: the call site classifies a bounded tail (~4 KB) — pin the
+// behavior, not the constant (the signature is placed FAR from the end).
+describe('pipeline — D1: classification uses the transcript tail, not the body', () => {
+  // A signature buried in the body, then >>4 KB of clean output, then a clean
+  // APPROVED verdict tail — the real shape of a child that wrote about limits.
+  const bodySignatureLog = (signature) =>
+    `writing README.md…\n${signature}\n` +
+    `diff --git a/README.md b/README.md\n` +
+    '+ a clean line of the documented diff hunk\n'.repeat(600) + // ~24 KB of body
+    `\ntokens used: 512\nDone — committed on the branch.\nVERDICT: APPROVED\nFINDINGS: none\n`;
+
+  it('RED (D1): a writer whose LOG BODY carries a usage-limit signature but whose TAIL is a clean exit-0 APPROVED is treated OK (proceeds to review, NO failover)', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      // worker-a is codex/wa-model → a codex usage-limit signature in the body.
+      { verdict: 'APPROVED', exitCode: 0, logContent: bodySignatureLog(CODEX_LIMIT) },
+      // reviewer + merger fall through to the default APPROVED.
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the subtask completes — the body signature was NOT treated as a death; stderr: ${io.stderrText()}`);
+    assert.equal(writersOf(io.__runner).length, 1, 'the writer ran exactly once — no failover relaunch on its own work product');
+    assert.ok(reviewersOf(io.__runner).length >= 1, 'the run proceeded to review (the writer was classified OK)');
+  });
+
+  it('GUARD (D1): a death banner at the END of the log still classifies and routes to failover', async () => {
+    // The real death shape: clean body, banner in the TAIL. Model-unavailable
+    // (codex) re-resolves the next chain entry with no bundle needed.
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa1@xhigh', 'codex/wa2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `did some work…\nall clean\n${MODEL_UNAVAIL}\n` }, // banner at the tail
+      { verdict: 'APPROVED' }, // relaunched writer (wa2)
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    const relaunch = io.__runner.calls.find((c) => c.command === 'codex' && argsOf(c).includes('wa2'));
+    assert.ok(relaunch, 'a tail banner is still classified — the writer relaunched on the next chain entry (wa2)');
+  });
+});
+
+// ===========================================================================
+// D4 (dogfood milestone C) — a plain BLOCKED writer retry must not re-resolve
+// from the ORIGINAL chain, ignoring entries already avoided by failover.
+// subtaskAvoidEntries must feed EVERY writer resolution for the subtask, not
+// only runFailover. Live: after sol→gpt-5.5 relaunch, a BLOCKED retry reset the
+// writer to resolveOne('worker-a') = sol again (the avoided, dead entry).
+describe('pipeline — D4: avoided entries carry into a plain BLOCKED writer retry', () => {
+  const writerModels = (runner) => writersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+
+  it('RED (D4): after a model-unavailable relaunch onto wa2, a later BLOCKED retry re-runs wa2 (NOT the avoided wa1) — exactly one wa1 attempt', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa1@xhigh', 'codex/wa2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    // wa1 ALWAYS dies model-unavailable; wa2 self-check-BLOCKs once, then APPROVES.
+    // reviewer (sr-model) and merger (mg-model) approve.
+    const wa2Queue = [{ verdict: 'BLOCKED', exitCode: 0 }, { verdict: 'APPROVED', exitCode: 0 }];
+    const calls = [];
+    const runner = (spec, opts) => {
+      const args = (spec?.args ?? []).map(String);
+      const model = args[args.indexOf('--model') + 1];
+      calls.push({ spec, command: spec?.command, args, model });
+      let r;
+      if (model === 'wa1') {
+        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+        io.fs.writeFileSync(opts.logPath, `working…\n${MODEL_UNAVAIL}\n`);
+        r = { verdict: 'BLOCKED', exitCode: 1 };
+      } else if (model === 'wa2') {
+        r = wa2Queue.shift() ?? { verdict: 'APPROVED', exitCode: 0 };
+      } else {
+        r = { verdict: 'APPROVED', exitCode: 0 };
+      }
+      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict, findings: '', logPath: opts.logPath });
+    };
+    runner.calls = calls;
+    io.superviseChild = runner;
+    io.__runner = runner;
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the subtask completes on wa2 after the BLOCKED retry; stderr: ${io.stderrText()}`);
+    const models = writerModels(runner);
+    assert.equal(models.filter((m) => m === 'wa1').length, 1, `wa1 (avoided/dead) is attempted exactly once — the BLOCKED retry must re-pick wa2, not the original chain head; got ${JSON.stringify(models)}`);
+    assert.ok(models.filter((m) => m === 'wa2').length >= 2, 'wa2 ran the BLOCKED attempt AND the passing retry');
+  });
+});
+
+// ===========================================================================
+// D5 (dogfood milestone C) — the sessionHint passed to failover/checkpoint is
+// the runId itself, with NO double 'loop-' prefix. Live artifact:
+// 'loop-loop-6a96bf7b9ce6' (runId is already 'loop-<hex>').
+describe('pipeline — D5: failover sessionHint is the runId (no double loop- prefix)', () => {
+  it('RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId>', async () => {
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }),
+      files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' },
+      config: { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-w', 'codex/cx-w@xhigh'] } },
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `implementing…\n${CC_LIMIT}\n` }, // writer usage-limit → seal/receive
+      { verdict: 'APPROVED' }, // relaunched writer (cx-w)
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    assert.match(runId, /^loop-/, 'sanity: the runId is already loop-prefixed');
+    const bundle = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+    assert.equal(bundle.origin.sessionHint, runId, 'the failover/checkpoint session hint is the runId itself');
+    assert.doesNotMatch(String(bundle.origin.sessionHint), /^loop-loop-/, 'no double loop- prefix (the live loop-loop-<hex> bug)');
+  });
+});
+
+// ===========================================================================
 // H5 (B4) — state flavor + spec binding across loop/pipeline.
 describe('pipeline — H5: state flavor + spec-digest binding', () => {
   it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
