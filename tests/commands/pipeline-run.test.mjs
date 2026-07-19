@@ -1032,6 +1032,190 @@ describe('pipeline — D5: failover sessionHint is the runId (no double loop- pr
 });
 
 // ===========================================================================
+// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
+// SAME classify→failover treatment as writers. Live: the subtask-reviewer
+// inherits the other seat's worker chain whose head was a dead model; each
+// unparseable death counted as a BLOCKED review and burned the whole gate cap.
+// A failure-class death must re-resolve the role (model-unavailable → entry
+// avoid), NOT consume a gate iteration, and park on chain exhaustion.
+describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+  const MU_LOG = `working…\n${MODEL_UNAVAIL}\n`;
+  const approve = () => ({ verdict: 'APPROVED', exitCode: 0 });
+  const deathMU = () => ({ verdict: 'BLOCKED', exitCode: 1, logContent: MU_LOG });
+  // A child runner keyed on the spawn's --model. handlers[model] is a function
+  // called per spawn (closures model queues); the default is APPROVED. Throws
+  // past `bound` so an unbounded re-resolution loop terminates the test RED.
+  function byModelRunner(io, handlers, { bound = 40 } = {}) {
+    const calls = [];
+    const fn = (spec, opts) => {
+      const args = (spec?.args ?? []).map(String);
+      const model = args[args.indexOf('--model') + 1];
+      calls.push({ spec, command: spec?.command, args, model });
+      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} spawns`);
+      const h = handlers[model] ?? approve;
+      const r = h();
+      if (typeof r.logContent === 'string' && opts.logPath) {
+        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+        io.fs.writeFileSync(opts.logPath, r.logContent);
+      }
+      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
+    };
+    fn.calls = calls;
+    return fn;
+  }
+  const reviewerModels = (runner) => reviewersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+  const mergersOf = (runner) => runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
+  const mergerModels = (runner) => mergersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  const mergeReceipts = (io) => {
+    const raw = io.files()[MERGES];
+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  };
+  // Transitions are journaled — a re-resolved death must leave NO gate-iteration
+  // event, not merely a snapshot counter that happens to read 0.
+  const gateIterationEvents = (io, gate) => {
+    const raw = io.files()[loopPaths('/repo').journal];
+    const events = typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+    return events.filter((e) => e.type === 'gate-iteration' && e.gate === gate);
+  };
+
+  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
+    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: approve, 'mg-model': approve });
+    io.superviseChild = runner;
+    io.__runner = runner;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the review succeeds via re-resolution; stderr: ${io.stderrText()}`);
+    assert.deepEqual(reviewerModels(runner), ['r1', 'r2'], `the dead reviewer entry re-resolved to the next; got ${JSON.stringify(reviewerModels(runner))}`);
+    const state = (await loadLoopState('/repo', io)).state;
+    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable reviewer death did NOT burn a gate iteration');
+    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the reviewer death');
+    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+  });
+
+  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
+    io.superviseChild = runner;
+    io.__runner = runner;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
+    assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
+    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+    const state = (await loadLoopState('/repo', io)).state;
+    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable merger death did NOT burn a gate iteration');
+    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the merger death');
+    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+  });
+
+  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+    // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
+    const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
+    io.superviseChild = runner;
+    io.__runner = runner;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
+  });
+
+  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
+    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
+    io.superviseChild = runner;
+    io.__runner = runner;
+    let code = 'ran';
+    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+    assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
+    assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
+  });
+});
+
+// ===========================================================================
+// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+// Live: the synthesized state spec drops budgets, so the reducer caps at its
+// default (5) while drivePipeline enforces the spec cap — the run exited 3 with
+// state.json still status 'running', escalation null.
+describe('pipeline — D7: escalation persists to state.json', () => {
+  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const gate = 'subtask-t1-review';
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
+    // before any child spawns.
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 3, 'a capped gate escalates (exit 3)');
+    // The RAW snapshot must itself be escalated — loadLoopState replays the
+    // journal over the snapshot, which could MASK a state.json left 'running'.
+    const rawState = JSON.parse(io.files()[loopPaths('/repo').state]);
+    assert.equal(rawState.status, 'escalated', 'the RAW state.json snapshot is escalated (not merely masked by journal replay)');
+    assert.ok(rawState.escalation && rawState.escalation.gate === gate, `the raw snapshot escalation names the gate; got ${JSON.stringify(rawState.escalation)}`);
+    // And the loaded view agrees.
+    const { state } = await loadLoopState('/repo', io);
+    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
+    assert.ok(state.escalation && state.escalation.gate === gate, `the loaded escalation names the gate; got ${JSON.stringify(state.escalation)}`);
+  });
+});
+
+// ===========================================================================
+// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+// records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
+// the operator is not handed a blank escalation. The findings-present path stays
+// byte-compatible.
+describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
+
+  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'APPROVED', exitCode: 0 }, // writer passes
+      { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 3, 'the gate escalates at the cap');
+    const esc = io.files()[ESC];
+    assert.ok(esc, 'ESCALATION.md was written');
+    assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
+  });
+
+  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+    const finding = 'CONCRETE_FINDING_TEXT_D8';
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'APPROVED', exitCode: 0 }, // writer
+      { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 3, 'the gate escalates at the cap');
+    const esc = io.files()[ESC];
+    // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
+    // format change OR an appended log tail on THIS path fails the guard.
+    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
+    assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
+  });
+});
+
+// ===========================================================================
 // H5 (B4) — state flavor + spec binding across loop/pipeline.
 describe('pipeline — H5: state flavor + spec-digest binding', () => {
   it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {

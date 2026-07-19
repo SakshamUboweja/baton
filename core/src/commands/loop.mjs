@@ -378,7 +378,9 @@ async function runLoop(flags, io) {
         // The cap gates the SPAWN: at the cap the reducer escalates and a
         // 6th child never starts.
         if ((state.iterations?.[phase.id] ?? 0) >= cap) {
-          await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict: 'BLOCKED' });
+          // ESCALATE persists at ANY spec cap — GATE_ITERATION only flips the
+          // status at the reducer's hard 5-cap (dogfood finding D7).
+          await transition({ type: LOOP_EVENT.ESCALATE, gate: phase.id });
           atomicWriteText(
             io.fs,
             `${p.dir}/ESCALATION.md`,

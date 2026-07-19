@@ -1,0 +1,2487 @@
+Reading additional input from stdin...
+2026-07-19T23:01:31.246808Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7c9d-006e-7731-89ff-f78cf8596c6b
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, d-series iteration 4 of 5, re-auditing the D6–D8 dogfood pins after your iteration-3 BLOCKED verdict (3 findings; your report: reviews/2026-07-19-dogfood-milestone-c/test-verifier/iteration-03/raw-output.txt). Uncommitted, tests-only, tests/commands/pipeline-run.test.mjs; baseline feb0e9e.
+
+Claimed closures:
+1. (high, D6b teeth) a gateIterationEvents helper parses journal.ndjson; BOTH D6a and D6b now assert NO gate-iteration event is journaled for the gate on a re-resolved death, and D6b gained the iterations['subtask-t1-review'] ?? 0 === 0 snapshot assertion.
+2. (medium, D7 raw) D7 now parses the raw io.files()[loopPaths('/repo').state] JSON directly — raw status === 'escalated' and raw escalation.gate named — with the loadLoopState() assertions kept; the red now trips on the raw-snapshot assertion.
+3. (medium, D8 byte-compat) the findings-present guard is a byte-exact assert.equal against the current ESCALATION.md format ("# Pipeline escalation\n\nGate '…' exhausted its 1-iteration cap.\nLast findings:\n\n<finding>\n"), still green today.
+
+Claimed totals: suite 1209, 1204 pass / 5 red (D6a, D6b, D6d, D7, D8), guards D6c + D8-present green, typecheck green. NOTE: your sandbox cannot mkdtemp — integration files are environment noise; judge by reading.
+
+Scope: verify the 3 closures are genuine (read the tests), confirm red-phase integrity (behavioral failures, no ReferenceError/TypeError) and no regressions, confirm nothing previously approved was weakened. Raise only NEW defects or defective closures — distinguish blocking from refinements the implementation can absorb.
+
+You may run: node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+I’ll verify this as a test-review pass: first reading the changed tests and the prior iteration-3 report, then I’ll run the allowed commands where the read-only sandbox permits it and separate sandbox noise from actual test defects.
+exec
+/bin/zsh -lc 'git status --short && git diff -- tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+ M tests/commands/pipeline-run.test.mjs
+?? reviews/2026-07-19-dogfood-milestone-c/test-verifier/iteration-03/
+?? reviews/2026-07-19-dogfood-milestone-c/test-verifier/iteration-04/
+diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+index 618f3e2..e70d681 100644
+--- a/tests/commands/pipeline-run.test.mjs
++++ b/tests/commands/pipeline-run.test.mjs
+@@ -1031,6 +1031,190 @@ describe('pipeline — D5: failover sessionHint is the runId (no double loop- pr
+   });
+ });
+ 
++// ===========================================================================
++// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
++// SAME classify→failover treatment as writers. Live: the subtask-reviewer
++// inherits the other seat's worker chain whose head was a dead model; each
++// unparseable death counted as a BLOCKED review and burned the whole gate cap.
++// A failure-class death must re-resolve the role (model-unavailable → entry
++// avoid), NOT consume a gate iteration, and park on chain exhaustion.
++describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
++  const MU_LOG = `working…\n${MODEL_UNAVAIL}\n`;
++  const approve = () => ({ verdict: 'APPROVED', exitCode: 0 });
++  const deathMU = () => ({ verdict: 'BLOCKED', exitCode: 1, logContent: MU_LOG });
++  // A child runner keyed on the spawn's --model. handlers[model] is a function
++  // called per spawn (closures model queues); the default is APPROVED. Throws
++  // past `bound` so an unbounded re-resolution loop terminates the test RED.
++  function byModelRunner(io, handlers, { bound = 40 } = {}) {
++    const calls = [];
++    const fn = (spec, opts) => {
++      const args = (spec?.args ?? []).map(String);
++      const model = args[args.indexOf('--model') + 1];
++      calls.push({ spec, command: spec?.command, args, model });
++      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} spawns`);
++      const h = handlers[model] ?? approve;
++      const r = h();
++      if (typeof r.logContent === 'string' && opts.logPath) {
++        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
++        io.fs.writeFileSync(opts.logPath, r.logContent);
++      }
++      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
++    };
++    fn.calls = calls;
++    return fn;
++  }
++  const reviewerModels = (runner) => reviewersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
++  const mergersOf = (runner) => runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
++  const mergerModels = (runner) => mergersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
++  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
++  const mergeReceipts = (io) => {
++    const raw = io.files()[MERGES];
++    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++  };
++  // Transitions are journaled — a re-resolved death must leave NO gate-iteration
++  // event, not merely a snapshot counter that happens to read 0.
++  const gateIterationEvents = (io, gate) => {
++    const raw = io.files()[loopPaths('/repo').journal];
++    const events = typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++    return events.filter((e) => e.type === 'gate-iteration' && e.gate === gate);
++  };
++
++  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
++    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: approve, 'mg-model': approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the review succeeds via re-resolution; stderr: ${io.stderrText()}`);
++    assert.deepEqual(reviewerModels(runner), ['r1', 'r2'], `the dead reviewer entry re-resolved to the next; got ${JSON.stringify(reviewerModels(runner))}`);
++    const state = (await loadLoopState('/repo', io)).state;
++    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable reviewer death did NOT burn a gate iteration');
++    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the reviewer death');
++    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
++  });
++
++  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
++    assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
++    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
++    const state = (await loadLoopState('/repo', io)).state;
++    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable merger death did NOT burn a gate iteration');
++    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the merger death');
++    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
++  });
++
++  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
++    // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
++    const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
++    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
++  });
++
++  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    let code = 'ran';
++    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
++    assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
++    assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
++  });
++});
++
++// ===========================================================================
++// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
++// Live: the synthesized state spec drops budgets, so the reducer caps at its
++// default (5) while drivePipeline enforces the spec cap — the run exited 3 with
++// state.json still status 'running', escalation null.
++describe('pipeline — D7: escalation persists to state.json', () => {
++  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
++    const subtasks = [{ id: 't1', title: 'only' }];
++    const gate = 'subtask-t1-review';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
++    // before any child spawns.
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'a capped gate escalates (exit 3)');
++    // The RAW snapshot must itself be escalated — loadLoopState replays the
++    // journal over the snapshot, which could MASK a state.json left 'running'.
++    const rawState = JSON.parse(io.files()[loopPaths('/repo').state]);
++    assert.equal(rawState.status, 'escalated', 'the RAW state.json snapshot is escalated (not merely masked by journal replay)');
++    assert.ok(rawState.escalation && rawState.escalation.gate === gate, `the raw snapshot escalation names the gate; got ${JSON.stringify(rawState.escalation)}`);
++    // And the loaded view agrees.
++    const { state } = await loadLoopState('/repo', io);
++    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
++    assert.ok(state.escalation && state.escalation.gate === gate, `the loaded escalation names the gate; got ${JSON.stringify(state.escalation)}`);
++  });
++});
++
++// ===========================================================================
++// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
++// records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
++// the operator is not handed a blank escalation. The findings-present path stays
++// byte-compatible.
++describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
++  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
++
++  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
++    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, [
++      { verdict: 'APPROVED', exitCode: 0 }, // writer passes
++      { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
++    ]);
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'the gate escalates at the cap');
++    const esc = io.files()[ESC];
++    assert.ok(esc, 'ESCALATION.md was written');
++    assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
++  });
++
++  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
++    const finding = 'CONCRETE_FINDING_TEXT_D8';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, [
++      { verdict: 'APPROVED', exitCode: 0 }, // writer
++      { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
++    ]);
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'the gate escalates at the cap');
++    const esc = io.files()[ESC];
++    // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
++    // format change OR an appended log tail on THIS path fails the guard.
++    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
++    assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
++  });
++});
++
+ // ===========================================================================
+ // H5 (B4) — state flavor + spec binding across loop/pipeline.
+ describe('pipeline — H5: state flavor + spec-digest binding', () => {
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-19-dogfood-milestone-c/test-verifier/iteration-03/raw-output.txt | sed -n '1,260p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import * as nodeFs from 'node:fs';
+     4	import { fileURLToPath } from 'node:url';
+     5	import { join, dirname } from 'node:path';
+     6	import { makeIo } from '../helpers/fakeio.mjs';
+     7	import { run } from '../../core/src/cli.mjs';
+     8	import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT } from '../../core/src/loop/state.mjs';
+     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+    10	
+    11	// ---------------------------------------------------------------------------
+    12	// RED — `baton pipeline run` (subtask pipeline, Layer 3). NEW command that
+    13	// COMPOSES worktrees/children/state/failover into the dual-worktree per-subtask
+    14	// cadence with a per-subtask seat swap; the merger role performs the final
+    15	// adversarial merge (via the REAL mergeSubtask machinery — the merger CHILD
+    16	// never merges). Source: plan §"baton pipeline (Layer 3 — a loop preset)".
+    17	//
+    18	// TARGET: core/src/commands/pipeline.mjs (+ cli.mjs routing for 'pipeline').
+    19	// Driven through the real router run(['pipeline', …], io). Today 'pipeline' is
+    20	// not a known command, so run() exits 2 ("unknown command 'pipeline'"); reds
+    21	// assert TARGET behavior — distinguished from that generic exit 2.
+    22	//
+    23	// SEAMS (same as loop run): io.superviseChild (fake scripted runner recording
+    24	// {command,args,env,opts}), io.execFile (STRICT fake git — unstubbed rejects),
+    25	// io.processAlive. --detach is out of unit scope (deferred to e2e).
+    26	//
+    27	// PINNED EXIT CODES (shared with loop run): done 0 · escalated 3 · parked 4 ·
+    28	// usage error 2.
+    29	// ---------------------------------------------------------------------------
+    30	
+    31	const here = dirname(fileURLToPath(import.meta.url));
+    32	const repoRoot = join(here, '..', '..');
+    33	const SIG_ABS = join(repoRoot, 'core', 'data', 'signatures.v1.json');
+    34	const SIG_CONTENT = nodeFs.readFileSync(SIG_ABS, 'utf8');
+    35	
+    36	const T0 = '2026-07-19T00:00:00.000Z';
+    37	const NAME = 'SakshamUboweja';
+    38	const EMAIL = 'ssakshamu@gmail.com';
+    39	const MAIN_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    40	const WT_A = '/repo/.worktrees/wt-a';
+    41	const WT_B = '/repo/.worktrees/wt-b';
+    42	const MERGE_LOCK = '/repo/.handoff/loop/merge.lock';
+    43	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+    44	const CODEX_LIMIT = "You've hit your usage limit"; // codex usage-limit signature
+    45	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account'; // codex model-unavailable signature
+    46	
+    47	// Both seats codex so --model is present in every child argv (claude-code omits
+    48	// it), letting the tests assert per-seat models directly.
+    49	const PIPELINE_CONFIG = {
+    50	  schema: 'baton/config@1',
+    51	  roles: {
+    52	    planner: ['codex/planner-m@xhigh'],
+    53	    merger: ['codex/mg-model@xhigh'],
+    54	    'worker-a': ['codex/wa-model@xhigh'],
+    55	    'worker-b': ['codex/wb-model@xhigh'],
+    56	    'subtask-reviewer': ['codex/sr-model@xhigh'],
+    57	    'test-author': ['codex/ta@xhigh'],
+    58	    'test-verifier': ['codex/tv@xhigh'],
+    59	    implementer: ['codex/impl@xhigh'],
+    60	    'plan-reviewer': ['codex/pr@xhigh'],
+    61	    'final-reviewer-a': ['codex/fra@xhigh'],
+    62	    'final-reviewer-b': ['codex/frb@xhigh'],
+    63	  },
+    64	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+    65	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+    66	};
+    67	
+    68	const pipelineSpec = (over = {}) => ({
+    69	  schema: 'baton/loop@1',
+    70	  goal: 'Ship the pipeline',
+    71	  constraints: [],
+    72	  budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 },
+    73	  subtasks: [
+    74	    { id: 't1', title: 'First subtask' },
+    75	    { id: 't2', title: 'Second subtask' },
+    76	  ],
+    77	  ...over,
+    78	});
+    79	
+    80	const REC = (sha, an, ae, cn, ce, body) => [sha, an, ae, cn, ce, body].join('\x00');
+    81	const logStdout = (...recs) => recs.map((r) => r + '\x1e').join('');
+    82	const CLEAN_LOG = logStdout(REC('c1', NAME, EMAIL, NAME, EMAIL, 'subtask work'));
+    83	
+    84	// A seeded handoff bundle so a pipeline writer limit-death has a real bundle to
+    85	// seal/receive through runFailover.
+    86	function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+    87	  return {
+    88	    schema: 'baton/bundle@1',
+    89	    bundleId: 'b_pipe00000000000',
+    90	    generation: 1,
+    91	    createdAt: T0,
+    92	    updatedAt: T0,
+    93	    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+    94	    task: { goal: 'Ship the pipeline', constraints: [], acceptance: [] },
+    95	    plan: { steps: [] },
+    96	    decisions: [],
+    97	    files: { touched: [] },
+    98	    roles: { assignments: {} },
+    99	    git: null,
+   100	    handoff:
+   101	      status === 'sealed'
+   102	        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+   103	        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+   104	    journalSeq: 0,
+   105	    compaction: { droppedDecisions: 0, note: null },
+   106	    dedupeRing: [],
+   107	  };
+   108	}
+   109	
+   110	/**
+   111	 * A STRICT, stateful fake git: unstubbed commands reject; worktree add/list and
+   112	 * checkout -b are modeled so setup + preflight/postflight + merge cohere.
+   113	 * `over` overrides specific responses (e.g. a merge conflict).
+   114	 */
+   115	function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyCwds = [], mergedBranches = [] } = {}) {
+   116	  const added = /** @type {Map<string,string>} */ (new Map()); // path -> branch
+   117	  const branchAt = /** @type {Map<string,string>} */ (new Map()); // cwd -> current branch
+   118	  const branches = new Set(existingBranches); // stale/pre-existing namespaced branches
+   119	  const dirty = new Set(dirtyCwds); // seat cwds whose index is dirty
+   120	  const deleted = new Set(); // seats listed by git but raw-deleted on disk
+   121	  const merged = new Set(mergedBranches); // branches already merged into main (ancestor; empty main..branch)
+   122	  const calls = /** @type {any[]} */ ([]);
+   123	  const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
+   124	  let mainSha = MAIN_SHA; // mutable so a child can "move main" mid-subtask
+   125	
+   126	  const list = () => {
+   127	    const entries = [{ path: '/repo', branch: 'main' }];
+   128	    for (const [path, branch] of added) entries.push({ path, branch: branchAt.get(path) ?? branch });
+   129	    return entries.map((e) => `worktree ${e.path}\nHEAD ${MAIN_SHA}\nbranch refs/heads/${e.branch}\n`).join('\n');
+   130	  };
+   131	
+   132	  const fn = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
+   133	    const argstr = args.join(' ');
+   134	    calls.push({ cmd, args, argstr, cwd: opts?.cwd, lockPresent: lockProbeRef.fn ? lockProbeRef.fn() : undefined });
+   135	    if (cmd !== 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+   136	
+   137	    // Explicit overrides win.
+   138	    const okey = Object.keys(over).sort((a, b) => b.length - a.length).find((k) => argstr.includes(k));
+   139	    if (okey) {
+   140	      const r = over[okey];
+   141	      if (r?.reject) return Promise.reject(Object.assign(new Error(r.stderr || 'git failed'), { code: r.code ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }));
+   142	      return Promise.resolve({ stdout: r?.stdout ?? '', stderr: r?.stderr ?? '' });
+   143	    }
+   144	
+   145	    // A raw-deleted seat: git still LISTS it, but any command IN that cwd fails
+   146	    // (the directory is gone). Only self-heal (prune + re-add) recovers it.
+   147	    if (opts?.cwd && deleted.has(opts.cwd) && !argstr.startsWith('worktree ')) {
+   148	      return Promise.reject(Object.assign(new Error(`fatal: cannot chdir to '${opts.cwd}': No such file or directory`), { code: 128, stderr: 'No such file or directory\n' }));
+   149	    }
+   150	    if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
+   151	    if (argstr.startsWith('worktree add')) {
+   152	      const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
+   153	      const bi = args.indexOf('-b');
+   154	      const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
+   155	      if (path) { added.set(path, branch); branchAt.set(path, branch); deleted.delete(path); }
+   156	      return Promise.resolve({ stdout: '', stderr: '' });
+   157	    }
+   158	    if (argstr.startsWith('worktree prune')) { deleted.clear(); return Promise.resolve({ stdout: '', stderr: '' }); }
+   159	    if (argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
+   160	    if (argstr.startsWith('checkout -b')) {
+   161	      const target = args[args.indexOf('-b') + 1];
+   162	      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
+   163	      branches.add(target);
+   164	      if (opts?.cwd) branchAt.set(opts.cwd, target);
+   165	      return Promise.resolve({ stdout: '', stderr: '' });
+   166	    }
+   167	    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
+   168	    if (argstr === 'rev-parse --abbrev-ref HEAD') return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'main'}\n`, stderr: '' });
+   169	    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${mainSha}\n`, stderr: '' });
+   170	    // merge-base --is-ancestor <branch> main : exit 0 iff <branch> is already in main.
+   171	    if (argstr.startsWith('merge-base --is-ancestor')) {
+   172	      const b = args[args.indexOf('--is-ancestor') + 1];
+   173	      return merged.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
+   174	    }
+   175	    if (argstr.startsWith('log ')) {
+   176	      // A merged branch has NO commits ahead of main (empty main..<branch>).
+   177	      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
+   178	      const branch = String(range).split('..')[1];
+   179	      if (branch && merged.has(branch)) return Promise.resolve({ stdout: '', stderr: '' });
+   180	      return Promise.resolve({ stdout: log, stderr: '' });
+   181	    }
+   182	    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' });
+   183	    if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
+   184	    return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
+   185	  };
+   186	  fn.calls = calls;
+   187	  fn.git = () => calls.filter((c) => c.cmd === 'git');
+   188	  fn.issued = (/** @type {RegExp} */ re) => calls.some((c) => c.cmd === 'git' && re.test(c.argstr));
+   189	  fn.matching = (/** @type {RegExp} */ re) => calls.filter((c) => c.cmd === 'git' && re.test(c.argstr));
+   190	  fn.withCwd = (/** @type {RegExp} */ re, /** @type {string} */ cwd) => calls.filter((c) => c.cmd === 'git' && re.test(c.argstr) && c.cwd === cwd);
+   191	  fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
+   192	  fn.moveMain = (/** @type {string} */ sha) => { mainSha = sha; }; // a child "moves main" mid-subtask
+   193	  fn.setBranch = (/** @type {string} */ cwd, /** @type {string} */ branch) => { branchAt.set(cwd, branch); };
+   194	  // Explicit seed: git LISTS this worktree; `raw` marks its dir as deleted on
+   195	  // disk (any in-cwd command fails until prune + re-add self-heals it).
+   196	  fn.seedWorktree = (/** @type {string} */ path, /** @type {string} */ branch, /** @type {{raw?: boolean}} */ o = {}) => {
+   197	    added.set(path, branch);
+   198	    branchAt.set(path, branch);
+   199	    if (o.raw) deleted.add(path);
+   200	  };
+   201	  return fn;
+   202	}
+   203	
+   204	function fakeRunner(io, script) {
+   205	  const queue = [...script];
+   206	  const calls = /** @type {any[]} */ ([]);
+   207	  const fn = (/** @type {any} */ spec, /** @type {any} */ opts = {}) => {
+   208	    calls.push({ spec, opts, command: spec?.command, args: spec?.args ?? [], env: spec?.env });
+   209	    const r = queue.shift() ?? { verdict: 'APPROVED' };
+   210	    if (typeof r.logContent === 'string' && opts.logPath) {
+   211	      const dir = opts.logPath.slice(0, opts.logPath.lastIndexOf('/'));
+   212	      io.fs.mkdirSync(dir, { recursive: true });
+   213	      io.fs.writeFileSync(opts.logPath, r.logContent);
+   214	    }
+   215	    // A child may perturb the world (e.g. move main) between spawn and postflight.
+   216	    if (typeof r.effect === 'function') r.effect();
+   217	    return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
+   218	  };
+   219	  fn.calls = calls;
+   220	  return fn;
+   221	}
+   222	
+   223	function makePipeRepo({ spec = pipelineSpec(), config = PIPELINE_CONFIG, files = {}, git, runner, env = {} } = {}) {
+   224	  const io = makeIo({
+   225	    now: T0,
+   226	    host: 'pipe-host',
+   227	    pid: 4242,
+   228	    startTime: 111000,
+   229	    env,
+   230	    files: {
+   231	      [SIG_ABS]: SIG_CONTENT,
+   232	      '/repo/.git/HEAD': 'ref: refs/heads/main\n',
+   233	      '/repo/baton.config.json': JSON.stringify(config, null, 2),
+   234	      ...(spec ? { '/repo/loop.json': JSON.stringify(spec, null, 2) + '\n' } : {}),
+   235	      ...files,
+   236	    },
+   237	  });
+   238	  const g = git ?? pipelineGit();
+   239	  g.setLockProbe(() => io.fs.existsSync(MERGE_LOCK));
+   240	  io.execFile = g;
+   241	  const fake = runner ?? fakeRunner(io, []);
+   242	  io.superviseChild = fake;
+   243	  io.__git = g;
+   244	  io.__runner = fake;
+   245	  return io;
+   246	}
+   247	
+   248	// A full clean subtask = writer APPROVED, reviewer APPROVED, merger APPROVED.
+   249	const cleanSubtask = () => [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }];
+   250	const argsOf = (call) => (call?.args ?? []).map(String);
+   251	const valAfter = (arr, flag) => { const i = arr.indexOf(flag); return i >= 0 ? arr[i + 1] : undefined; };
+   252	const childWithModel = (runner, model) => runner.calls.filter((c) => argsOf(c).includes(model));
+   253	// Writers = the write-capable children (in call order). Reviewers = read-only
+   254	// children whose prompt carries the 'subtask-reviewer' role identity (so the
+   255	// merger, also read-only, is excluded).
+   256	const writersOf = (runner) => runner.calls.filter((c) => valAfter(argsOf(c), '-s') === 'workspace-write');
+   257	const reviewersOf = (runner) => runner.calls.filter((c) => valAfter(argsOf(c), '-s') === 'read-only' && argsOf(c).join(' ').includes('subtask-reviewer'));
+   258	
+   259	// ===========================================================================
+   260	describe('pipeline — CLI routing & flags', () => {
+
+ succeeded in 0ms:
+     1	Reading additional input from stdin...
+     2	2026-07-19T22:55:04.203195Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+     3	OpenAI Codex v0.144.1
+     4	--------
+     5	workdir: /Users/saksham/baton
+     6	model: gpt-5.5
+     7	provider: openai
+     8	approval: never
+     9	sandbox: read-only
+    10	reasoning effort: xhigh
+    11	reasoning summaries: none
+    12	session id: 019f7c97-1851-7a21-aa8c-2f607b5e0043
+    13	--------
+    14	user
+    15	<task>
+    16	
+    17	> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+    18	You are the test-verifier for the baton repo, d-series iteration 3 of 5, auditing the SECOND round of Milestone-C dogfood pins (findings D6–D8, "Attempt 2" section of reviews/2026-07-19-dogfood-milestone-c/findings.md — read it) BEFORE implementation. The D1–D5 fold you approved at iteration 2 is committed (728020d); baseline feb0e9e green at 1202. Uncommitted, tests-only: tests/commands/pipeline-run.test.mjs ("pipeline — D6"/D7/D8 blocks). Claimed totals: suite 1209, 1204 pass / 5 red, 2 guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — integration files are environment noise; judge by reading.
+    19	
+    20	The pins:
+    21	- D6a (RED): a model-unavailable subtask-reviewer (other seat's worker chain [r1, r2]) re-resolves — reviewer --model sequence exactly [r1, r2], the death burns NO gate iteration (iterations[gate]===0), run DONE. Today the death counts as a BLOCKED review and burns the cap (exit 3).
+    22	- D6b (RED): same for the merger ([m1, m2]) — sequence [m1, m2], a merge receipt lands, DONE.
+    23	- D6c (GUARD, green): a genuine BLOCKED reviewer verdict still consumes exactly one gate iteration (retry-with-findings unchanged).
+    24	- D6d (RED): a fully model-unavailable reviewer chain PARKS (exit 4, bounded) instead of cap-burn escalation (today exit 3).
+    25	- D7 (RED): a run hitting the enforced cap (iterationCap 2) exits 3 AND persists state.status 'escalated' with escalation.gate named (live artifact: exit 3 with status 'running', escalation null — the synthesized state spec drops budgets so the reducer caps at its default 5).
+    26	- D8 (RED): an escalation with EMPTY findings includes the dead child's distinctive log tail in ESCALATION.md; GUARD (green): present findings still appear under "Last findings:" byte-compatibly.
+    27	
+    28	Audit adversarially:
+    29	1. Would a WRONG implementation pass? (a) D6a/b — is the model sequence asserted over ALL spawns of that role (an impl that retries r1 forever or skips to r2 without ever trying r1 must fail), and does the no-gate-burn assertion have teeth (could an impl decrement the counter after burning it)? (b) D6d — is the park bounded by a throwing/finite runner rather than a generous loop count? (c) D7 — is 'escalated' asserted from the PERSISTED state.json artifact, not stdout? Does the pin avoid over-constraining WHERE the cap lives (spec budgets vs reducer default), pinning only the observable equivalence? (d) D8 — is the planted log-tail string distinctive (not something ESCALATION.md would contain anyway)?
+    30	2. Red-phase integrity: 5 reds fail on behavioral assertions (no ReferenceError/TypeError); guards meaningful; no regressions vs the 1202 baseline (including the D1–D5 pins you already approved).
+    31	3. Coverage vs D6–D8: any sub-item unpinned (e.g. does a reviewer failure-class death correctly carry avoidEntries FORWARD so the writer resolution also avoids the dead entry, or is that intentionally out of scope)?
+    32	
+    33	You may run: node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs, npm run typecheck.
+    34	</task>
+    35	<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+    36	<structured_output_contract>
+    37	End with exactly:
+    38	VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+    39	FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+    40	(FINDINGS may be empty only with APPROVED.)
+    41	</structured_output_contract>
+    42	codex
+    43	Phase: test-verification. I’ll read the Attempt 2 review context and the tests-only diff first, then run the allowed validation where the read-only sandbox permits it.
+    44	  → Read Attempt 2 findings and current test diff
+    45	  • Audit D6-D8 assertions against wrong-implementation risks
+    46	  • Run targeted validation/typecheck if possible
+    47	  • Deliver gate verdict with file:line-grounded findings
+    48	exec
+    49	/bin/zsh -lc 'git diff -- tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+    50	exec
+    51	/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+    52	 succeeded in 0ms:
+    53	diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+    54	index 618f3e2..b5e3742 100644
+    55	--- a/tests/commands/pipeline-run.test.mjs
+    56	+++ b/tests/commands/pipeline-run.test.mjs
+    57	@@ -1031,6 +1031,171 @@ describe('pipeline — D5: failover sessionHint is the runId (no double loop- pr
+    58	   });
+    59	 });
+    60	 
+    61	+// ===========================================================================
+    62	+// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
+    63	+// SAME classify→failover treatment as writers. Live: the subtask-reviewer
+    64	+// inherits the other seat's worker chain whose head was a dead model; each
+    65	+// unparseable death counted as a BLOCKED review and burned the whole gate cap.
+    66	+// A failure-class death must re-resolve the role (model-unavailable → entry
+    67	+// avoid), NOT consume a gate iteration, and park on chain exhaustion.
+    68	+describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+    69	+  const MU_LOG = `working…\n${MODEL_UNAVAIL}\n`;
+    70	+  const approve = () => ({ verdict: 'APPROVED', exitCode: 0 });
+    71	+  const deathMU = () => ({ verdict: 'BLOCKED', exitCode: 1, logContent: MU_LOG });
+    72	+  // A child runner keyed on the spawn's --model. handlers[model] is a function
+    73	+  // called per spawn (closures model queues); the default is APPROVED. Throws
+    74	+  // past `bound` so an unbounded re-resolution loop terminates the test RED.
+    75	+  function byModelRunner(io, handlers, { bound = 40 } = {}) {
+    76	+    const calls = [];
+    77	+    const fn = (spec, opts) => {
+    78	+      const args = (spec?.args ?? []).map(String);
+    79	+      const model = args[args.indexOf('--model') + 1];
+    80	+      calls.push({ spec, command: spec?.command, args, model });
+    81	+      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} spawns`);
+    82	+      const h = handlers[model] ?? approve;
+    83	+      const r = h();
+    84	+      if (typeof r.logContent === 'string' && opts.logPath) {
+    85	+        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+    86	+        io.fs.writeFileSync(opts.logPath, r.logContent);
+    87	+      }
+    88	+      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
+    89	+    };
+    90	+    fn.calls = calls;
+    91	+    return fn;
+    92	+  }
+    93	+  const reviewerModels = (runner) => reviewersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+    94	+  const mergersOf = (runner) => runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
+    95	+  const mergerModels = (runner) => mergersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+    96	+  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+    97	+  const mergeReceipts = (io) => {
+    98	+    const raw = io.files()[MERGES];
+    99	+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+   100	+  };
+   101	+
+   102	+  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
+   103	+    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
+   104	+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+   105	+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+   106	+    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: approve, 'mg-model': approve });
+   107	+    io.superviseChild = runner;
+   108	+    io.__runner = runner;
+   109	+    const code = await run(['pipeline', 'run'], io);
+   110	+    assert.equal(code, 0, `the review succeeds via re-resolution; stderr: ${io.stderrText()}`);
+   111	+    assert.deepEqual(reviewerModels(runner), ['r1', 'r2'], `the dead reviewer entry re-resolved to the next; got ${JSON.stringify(reviewerModels(runner))}`);
+   112	+    const state = (await loadLoopState('/repo', io)).state;
+   113	+    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable reviewer death did NOT burn a gate iteration');
+   114	+    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+   115	+  });
+   116	+
+   117	+  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+   118	+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
+   119	+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+   120	+    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
+   121	+    io.superviseChild = runner;
+   122	+    io.__runner = runner;
+   123	+    const code = await run(['pipeline', 'run'], io);
+   124	+    assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
+   125	+    assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
+   126	+    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+   127	+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run completed');
+   128	+  });
+   129	+
+   130	+  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+   131	+    // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
+   132	+    const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
+   133	+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+   134	+    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
+   135	+    io.superviseChild = runner;
+   136	+    io.__runner = runner;
+   137	+    const code = await run(['pipeline', 'run'], io);
+   138	+    assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
+   139	+    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
+   140	+  });
+   141	+
+   142	+  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+   143	+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+   144	+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
+   145	+    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
+   146	+    io.superviseChild = runner;
+   147	+    io.__runner = runner;
+   148	+    let code = 'ran';
+   149	+    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+   150	+    assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
+   151	+    assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
+   152	+  });
+   153	+});
+   154	+
+   155	+// ===========================================================================
+   156	+// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+   157	+// Live: the synthesized state spec drops budgets, so the reducer caps at its
+   158	+// default (5) while drivePipeline enforces the spec cap — the run exited 3 with
+   159	+// state.json still status 'running', escalation null.
+   160	+describe('pipeline — D7: escalation persists to state.json', () => {
+   161	+  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+   162	+    const subtasks = [{ id: 't1', title: 'only' }];
+   163	+    const gate = 'subtask-t1-review';
+   164	+    const io = makePipeRepo({
+   165	+      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+   166	+      runner: undefined,
+   167	+    });
+   168	+    io.superviseChild = fakeRunner(io, cleanSubtask());
+   169	+    io.__runner = io.superviseChild;
+   170	+    // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
+   171	+    // before any child spawns.
+   172	+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+   173	+    const code = await run(['pipeline', 'run'], io);
+   174	+    assert.equal(code, 3, 'a capped gate escalates (exit 3)');
+   175	+    const { state } = await loadLoopState('/repo', io);
+   176	+    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the escalated status is PERSISTED — a resume must not see a running run');
+   177	+    assert.ok(state.escalation && state.escalation.gate === gate, `the persisted escalation names the gate; got ${JSON.stringify(state.escalation)}`);
+   178	+  });
+   179	+});
+   180	+
+   181	+// ===========================================================================
+   182	+// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+   183	+// records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
+   184	+// the operator is not handed a blank escalation. The findings-present path stays
+   185	+// byte-compatible.
+   186	+describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+   187	+  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
+   188	+
+   189	+  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+   190	+    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+   191	+    const io = makePipeRepo({
+   192	+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+   193	+      runner: undefined,
+   194	+    });
+   195	+    io.superviseChild = fakeRunner(io, [
+   196	+      { verdict: 'APPROVED', exitCode: 0 }, // writer passes
+   197	+      { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
+   198	+    ]);
+   199	+    io.__runner = io.superviseChild;
+   200	+    const code = await run(['pipeline', 'run'], io);
+   201	+    assert.equal(code, 3, 'the gate escalates at the cap');
+   202	+    const esc = io.files()[ESC];
+   203	+    assert.ok(esc, 'ESCALATION.md was written');
+   204	+    assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
+   205	+  });
+   206	+
+   207	+  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+   208	+    const finding = 'CONCRETE_FINDING_TEXT_D8';
+   209	+    const io = makePipeRepo({
+   210	+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+   211	+      runner: undefined,
+   212	+    });
+   213	+    io.superviseChild = fakeRunner(io, [
+   214	+      { verdict: 'APPROVED', exitCode: 0 }, // writer
+   215	+      { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
+   216	+    ]);
+   217	+    io.__runner = io.superviseChild;
+   218	+    const code = await run(['pipeline', 'run'], io);
+   219	+    assert.equal(code, 3, 'the gate escalates at the cap');
+   220	+    const esc = io.files()[ESC];
+   221	+    assert.match(esc, /Last findings:/, 'the escalation keeps its findings section');
+   222	+    assert.match(esc, new RegExp(finding), 'concrete findings still land in ESCALATION.md');
+   223	+  });
+   224	+});
+   225	+
+   226	 // ===========================================================================
+   227	 // H5 (B4) — state flavor + spec binding across loop/pipeline.
+   228	 describe('pipeline — H5: state flavor + spec-digest binding', () => {
+   229	
+   230	 succeeded in 0ms:
+   231	     1	import { describe, it } from 'node:test';
+   232	     2	import assert from 'node:assert/strict';
+   233	     3	import * as nodeFs from 'node:fs';
+   234	     4	import { fileURLToPath } from 'node:url';
+   235	     5	import { join, dirname } from 'node:path';
+   236	     6	import { makeIo } from '../helpers/fakeio.mjs';
+   237	     7	import { run } from '../../core/src/cli.mjs';
+   238	     8	import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT } from '../../core/src/loop/state.mjs';
+   239	     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+   240	    10	
+   241	    11	// ---------------------------------------------------------------------------
+   242	    12	// RED — `baton pipeline run` (subtask pipeline, Layer 3). NEW command that
+   243	    13	// COMPOSES worktrees/children/state/failover into the dual-worktree per-subtask
+   244	    14	// cadence with a per-subtask seat swap; the merger role performs the final
+   245	    15	// adversarial merge (via the REAL mergeSubtask machinery — the merger CHILD
+   246	    16	// never merges). Source: plan §"baton pipeline (Layer 3 — a loop preset)".
+   247	    17	//
+   248	    18	// TARGET: core/src/commands/pipeline.mjs (+ cli.mjs routing for 'pipeline').
+   249	    19	// Driven through the real router run(['pipeline', …], io). Today 'pipeline' is
+   250	    20	// not a known command, so run() exits 2 ("unknown command 'pipeline'"); reds
+   251	    21	// assert TARGET behavior — distinguished from that generic exit 2.
+   252	    22	//
+   253	    23	// SEAMS (same as loop run): io.superviseChild (fake scripted runner recording
+   254	    24	// {command,args,env,opts}), io.execFile (STRICT fake git — unstubbed rejects),
+   255	    25	// io.processAlive. --detach is out of unit scope (deferred to e2e).
+   256	    26	//
+   257	    27	// PINNED EXIT CODES (shared with loop run): done 0 · escalated 3 · parked 4 ·
+   258	    28	// usage error 2.
+   259	    29	// ---------------------------------------------------------------------------
+   260	    30	
+
+codex
+The current diff shows the iteration-4 changes in the same tests-only file, including the new journal helper and raw `state.json` assertion. I’m narrowing now to the D6-D8 block with exact line numbers and the prior BLOCKED findings so the verdict maps to the requested closures.
+exec
+/bin/zsh -lc 'rg -n "VERDICT|FINDINGS|D6|D7|D8|gate-iteration|raw|snapshot|byte|ReferenceError|TypeError" reviews/2026-07-19-dogfood-milestone-c/test-verifier/iteration-03/raw-output.txt' in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1010,1245p'" in /Users/saksham/baton
+ succeeded in 0ms:
+  1010	describe('pipeline — D5: failover sessionHint is the runId (no double loop- prefix)', () => {
+  1011	  it('RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId>', async () => {
+  1012	    const io = makePipeRepo({
+  1013	      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }),
+  1014	      files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' },
+  1015	      config: { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-w', 'codex/cx-w@xhigh'] } },
+  1016	      runner: undefined,
+  1017	    });
+  1018	    io.superviseChild = fakeRunner(io, [
+  1019	      { verdict: 'BLOCKED', exitCode: 1, logContent: `implementing…\n${CC_LIMIT}\n` }, // writer usage-limit → seal/receive
+  1020	      { verdict: 'APPROVED' }, // relaunched writer (cx-w)
+  1021	      { verdict: 'APPROVED' }, // reviewer
+  1022	      { verdict: 'APPROVED' }, // merger
+  1023	    ]);
+  1024	    io.__runner = io.superviseChild;
+  1025	    await run(['pipeline', 'run'], io);
+  1026	    const runId = (await loadLoopState('/repo', io)).state.runId;
+  1027	    assert.match(runId, /^loop-/, 'sanity: the runId is already loop-prefixed');
+  1028	    const bundle = JSON.parse(io.files()['/repo/.handoff/bundle.json']);
+  1029	    assert.equal(bundle.origin.sessionHint, runId, 'the failover/checkpoint session hint is the runId itself');
+  1030	    assert.doesNotMatch(String(bundle.origin.sessionHint), /^loop-loop-/, 'no double loop- prefix (the live loop-loop-<hex> bug)');
+  1031	  });
+  1032	});
+  1033	
+  1034	// ===========================================================================
+  1035	// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
+  1036	// SAME classify→failover treatment as writers. Live: the subtask-reviewer
+  1037	// inherits the other seat's worker chain whose head was a dead model; each
+  1038	// unparseable death counted as a BLOCKED review and burned the whole gate cap.
+  1039	// A failure-class death must re-resolve the role (model-unavailable → entry
+  1040	// avoid), NOT consume a gate iteration, and park on chain exhaustion.
+  1041	describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+  1042	  const MU_LOG = `working…\n${MODEL_UNAVAIL}\n`;
+  1043	  const approve = () => ({ verdict: 'APPROVED', exitCode: 0 });
+  1044	  const deathMU = () => ({ verdict: 'BLOCKED', exitCode: 1, logContent: MU_LOG });
+  1045	  // A child runner keyed on the spawn's --model. handlers[model] is a function
+  1046	  // called per spawn (closures model queues); the default is APPROVED. Throws
+  1047	  // past `bound` so an unbounded re-resolution loop terminates the test RED.
+  1048	  function byModelRunner(io, handlers, { bound = 40 } = {}) {
+  1049	    const calls = [];
+  1050	    const fn = (spec, opts) => {
+  1051	      const args = (spec?.args ?? []).map(String);
+  1052	      const model = args[args.indexOf('--model') + 1];
+  1053	      calls.push({ spec, command: spec?.command, args, model });
+  1054	      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} spawns`);
+  1055	      const h = handlers[model] ?? approve;
+  1056	      const r = h();
+  1057	      if (typeof r.logContent === 'string' && opts.logPath) {
+  1058	        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+  1059	        io.fs.writeFileSync(opts.logPath, r.logContent);
+  1060	      }
+  1061	      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
+  1062	    };
+  1063	    fn.calls = calls;
+  1064	    return fn;
+  1065	  }
+  1066	  const reviewerModels = (runner) => reviewersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+  1067	  const mergersOf = (runner) => runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
+  1068	  const mergerModels = (runner) => mergersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
+  1069	  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  1070	  const mergeReceipts = (io) => {
+  1071	    const raw = io.files()[MERGES];
+  1072	    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  1073	  };
+  1074	  // Transitions are journaled — a re-resolved death must leave NO gate-iteration
+  1075	  // event, not merely a snapshot counter that happens to read 0.
+  1076	  const gateIterationEvents = (io, gate) => {
+  1077	    const raw = io.files()[loopPaths('/repo').journal];
+  1078	    const events = typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  1079	    return events.filter((e) => e.type === 'gate-iteration' && e.gate === gate);
+  1080	  };
+  1081	
+  1082	  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
+  1083	    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
+  1084	    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+  1085	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+  1086	    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: approve, 'mg-model': approve });
+  1087	    io.superviseChild = runner;
+  1088	    io.__runner = runner;
+  1089	    const code = await run(['pipeline', 'run'], io);
+  1090	    assert.equal(code, 0, `the review succeeds via re-resolution; stderr: ${io.stderrText()}`);
+  1091	    assert.deepEqual(reviewerModels(runner), ['r1', 'r2'], `the dead reviewer entry re-resolved to the next; got ${JSON.stringify(reviewerModels(runner))}`);
+  1092	    const state = (await loadLoopState('/repo', io)).state;
+  1093	    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable reviewer death did NOT burn a gate iteration');
+  1094	    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the reviewer death');
+  1095	    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+  1096	  });
+  1097	
+  1098	  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+  1099	    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
+  1100	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+  1101	    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
+  1102	    io.superviseChild = runner;
+  1103	    io.__runner = runner;
+  1104	    const code = await run(['pipeline', 'run'], io);
+  1105	    assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
+  1106	    assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
+  1107	    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+  1108	    const state = (await loadLoopState('/repo', io)).state;
+  1109	    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable merger death did NOT burn a gate iteration');
+  1110	    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the merger death');
+  1111	    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+  1112	  });
+  1113	
+  1114	  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+  1115	    // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
+  1116	    const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
+  1117	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+  1118	    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
+  1119	    io.superviseChild = runner;
+  1120	    io.__runner = runner;
+  1121	    const code = await run(['pipeline', 'run'], io);
+  1122	    assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
+  1123	    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
+  1124	  });
+  1125	
+  1126	  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+  1127	    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+  1128	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
+  1129	    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
+  1130	    io.superviseChild = runner;
+  1131	    io.__runner = runner;
+  1132	    let code = 'ran';
+  1133	    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+  1134	    assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
+  1135	    assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
+  1136	  });
+  1137	});
+  1138	
+  1139	// ===========================================================================
+  1140	// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+  1141	// Live: the synthesized state spec drops budgets, so the reducer caps at its
+  1142	// default (5) while drivePipeline enforces the spec cap — the run exited 3 with
+  1143	// state.json still status 'running', escalation null.
+  1144	describe('pipeline — D7: escalation persists to state.json', () => {
+  1145	  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+  1146	    const subtasks = [{ id: 't1', title: 'only' }];
+  1147	    const gate = 'subtask-t1-review';
+  1148	    const io = makePipeRepo({
+  1149	      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+  1150	      runner: undefined,
+  1151	    });
+  1152	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1153	    io.__runner = io.superviseChild;
+  1154	    // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
+  1155	    // before any child spawns.
+  1156	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+  1157	    const code = await run(['pipeline', 'run'], io);
+  1158	    assert.equal(code, 3, 'a capped gate escalates (exit 3)');
+  1159	    // The RAW snapshot must itself be escalated — loadLoopState replays the
+  1160	    // journal over the snapshot, which could MASK a state.json left 'running'.
+  1161	    const rawState = JSON.parse(io.files()[loopPaths('/repo').state]);
+  1162	    assert.equal(rawState.status, 'escalated', 'the RAW state.json snapshot is escalated (not merely masked by journal replay)');
+  1163	    assert.ok(rawState.escalation && rawState.escalation.gate === gate, `the raw snapshot escalation names the gate; got ${JSON.stringify(rawState.escalation)}`);
+  1164	    // And the loaded view agrees.
+  1165	    const { state } = await loadLoopState('/repo', io);
+  1166	    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
+  1167	    assert.ok(state.escalation && state.escalation.gate === gate, `the loaded escalation names the gate; got ${JSON.stringify(state.escalation)}`);
+  1168	  });
+  1169	});
+  1170	
+  1171	// ===========================================================================
+  1172	// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+  1173	// records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
+  1174	// the operator is not handed a blank escalation. The findings-present path stays
+  1175	// byte-compatible.
+  1176	describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+  1177	  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
+  1178	
+  1179	  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+  1180	    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+  1181	    const io = makePipeRepo({
+  1182	      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+  1183	      runner: undefined,
+  1184	    });
+  1185	    io.superviseChild = fakeRunner(io, [
+  1186	      { verdict: 'APPROVED', exitCode: 0 }, // writer passes
+  1187	      { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
+  1188	    ]);
+  1189	    io.__runner = io.superviseChild;
+  1190	    const code = await run(['pipeline', 'run'], io);
+  1191	    assert.equal(code, 3, 'the gate escalates at the cap');
+  1192	    const esc = io.files()[ESC];
+  1193	    assert.ok(esc, 'ESCALATION.md was written');
+  1194	    assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
+  1195	  });
+  1196	
+  1197	  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+  1198	    const finding = 'CONCRETE_FINDING_TEXT_D8';
+  1199	    const io = makePipeRepo({
+  1200	      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+  1201	      runner: undefined,
+  1202	    });
+  1203	    io.superviseChild = fakeRunner(io, [
+  1204	      { verdict: 'APPROVED', exitCode: 0 }, // writer
+  1205	      { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
+  1206	    ]);
+  1207	    io.__runner = io.superviseChild;
+  1208	    const code = await run(['pipeline', 'run'], io);
+  1209	    assert.equal(code, 3, 'the gate escalates at the cap');
+  1210	    const esc = io.files()[ESC];
+  1211	    // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
+  1212	    // format change OR an appended log tail on THIS path fails the guard.
+  1213	    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
+  1214	    assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
+  1215	  });
+  1216	});
+  1217	
+  1218	// ===========================================================================
+  1219	// H5 (B4) — state flavor + spec binding across loop/pipeline.
+  1220	describe('pipeline — H5: state flavor + spec-digest binding', () => {
+  1221	  it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+  1222	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+  1223	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1224	    io.__runner = io.superviseChild;
+  1225	    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+  1226	    const code = await run(['pipeline', 'run'], io);
+  1227	    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+  1228	    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+  1229	    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  1230	  });
+  1231	
+  1232	  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+  1233	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+  1234	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  1235	    io.__runner = io.superviseChild;
+  1236	    // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+  1237	    // the current subtasks, so resuming its phaseIndex would misalign.
+  1238	    const oldSubtasks = [{ id: 't1', title: 'a' }, { id: 'REMOVED', title: 'gone' }, { id: 't2', title: 'b' }];
+  1239	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+  1240	    const code = await run(['pipeline', 'run'], io);
+  1241	    assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+  1242	    assert.match(io.stderrText() + io.stdoutText(), /subtask|spec|changed|digest/i, 'the refusal names the spec change');
+  1243	    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+  1244	  });
+  1245	});
+
+ succeeded in 0ms:
+18:You are the test-verifier for the baton repo, d-series iteration 3 of 5, auditing the SECOND round of Milestone-C dogfood pins (findings D6–D8, "Attempt 2" section of reviews/2026-07-19-dogfood-milestone-c/findings.md — read it) BEFORE implementation. The D1–D5 fold you approved at iteration 2 is committed (728020d); baseline feb0e9e green at 1202. Uncommitted, tests-only: tests/commands/pipeline-run.test.mjs ("pipeline — D6"/D7/D8 blocks). Claimed totals: suite 1209, 1204 pass / 5 red, 2 guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — integration files are environment noise; judge by reading.
+21:- D6a (RED): a model-unavailable subtask-reviewer (other seat's worker chain [r1, r2]) re-resolves — reviewer --model sequence exactly [r1, r2], the death burns NO gate iteration (iterations[gate]===0), run DONE. Today the death counts as a BLOCKED review and burns the cap (exit 3).
+22:- D6b (RED): same for the merger ([m1, m2]) — sequence [m1, m2], a merge receipt lands, DONE.
+23:- D6c (GUARD, green): a genuine BLOCKED reviewer verdict still consumes exactly one gate iteration (retry-with-findings unchanged).
+24:- D6d (RED): a fully model-unavailable reviewer chain PARKS (exit 4, bounded) instead of cap-burn escalation (today exit 3).
+25:- D7 (RED): a run hitting the enforced cap (iterationCap 2) exits 3 AND persists state.status 'escalated' with escalation.gate named (live artifact: exit 3 with status 'running', escalation null — the synthesized state spec drops budgets so the reducer caps at its default 5).
+26:- D8 (RED): an escalation with EMPTY findings includes the dead child's distinctive log tail in ESCALATION.md; GUARD (green): present findings still appear under "Last findings:" byte-compatibly.
+29:1. Would a WRONG implementation pass? (a) D6a/b — is the model sequence asserted over ALL spawns of that role (an impl that retries r1 forever or skips to r2 without ever trying r1 must fail), and does the no-gate-burn assertion have teeth (could an impl decrement the counter after burning it)? (b) D6d — is the park bounded by a throwing/finite runner rather than a generous loop count? (c) D7 — is 'escalated' asserted from the PERSISTED state.json artifact, not stdout? Does the pin avoid over-constraining WHERE the cap lives (spec budgets vs reducer default), pinning only the observable equivalence? (d) D8 — is the planted log-tail string distinctive (not something ESCALATION.md would contain anyway)?
+30:2. Red-phase integrity: 5 reds fail on behavioral assertions (no ReferenceError/TypeError); guards meaningful; no regressions vs the 1202 baseline (including the D1–D5 pins you already approved).
+31:3. Coverage vs D6–D8: any sub-item unpinned (e.g. does a reviewer failure-class death correctly carry avoidEntries FORWARD so the writer resolution also avoids the dead entry, or is that intentionally out of scope)?
+38:VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+39:FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+40:(FINDINGS may be empty only with APPROVED.)
+45:  • Audit D6-D8 assertions against wrong-implementation risks
+62:+// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
+68:+describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+98:+    const raw = io.files()[MERGES];
+99:+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+102:+  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
+103:+    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
+117:+  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+130:+  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+142:+  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+156:+// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+160:+describe('pipeline — D7: escalation persists to state.json', () => {
+161:+  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+182:+// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+185:+// byte-compatible.
+186:+describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+189:+  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+190:+    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+207:+  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+208:+    const finding = 'CONCRETE_FINDING_TEXT_D8';
+350:   120	  const deleted = new Set(); // seats listed by git but raw-deleted on disk
+375:   145	    // A raw-deleted seat: git still LISTS it, but any command IN that cwd fails
+424:   194	  // Explicit seed: git LISTS this worktree; `raw` marks its dir as deleted on
+426:   196	  fn.seedWorktree = (/** @type {string} */ path, /** @type {string} */ branch, /** @type {{raw?: boolean}} */ o = {}) => {
+429:   199	    if (o.raw) deleted.add(path);
+495:/bin/zsh -lc 'rg -n "Attempt 2|D6|D7|D8|Iteration 3|728020d|feb0e9e" reviews/2026-07-19-dogfood-milestone-c/findings.md' in /Users/saksham/baton
+502:63:- **D6 (major) — reviewer/merger children get no classification or
+503:72:- **D7 (major) — the pipeline's escalation is not persisted.** The
+504:80:- **D8 (minor) — ESCALATION.md can be empty.** Unparseable child deaths
+573:    63	- **D6 (major) — reviewer/merger children get no classification or
+582:    72	- **D7 (major) — the pipeline's escalation is not persisted.** The
+590:    80	- **D8 (minor) — ESCALATION.md can be empty.** Unparseable child deaths
+639:  1035	// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
+645:  1041	describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+675:  1071	    const raw = io.files()[MERGES];
+676:  1072	    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+679:  1075	  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
+680:  1076	    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
+694:  1090	  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+707:  1103	  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+719:  1115	  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+733:  1129	// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+737:  1133	describe('pipeline — D7: escalation persists to state.json', () => {
+738:  1134	  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+759:  1155	// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+762:  1158	// byte-compatible.
+763:  1159	describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+766:  1162	  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+767:  1163	    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+784:  1180	  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+785:  1181	    const finding = 'CONCRETE_FINDING_TEXT_D8';
+844:feb0e9e dogfood attempt 2: full live cycle proven for subtask 1; findings D6-D8 (reviewer failover, escalation persistence)
+880:tests/commands/pipeline-run.test.mjs:1041:describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
+881:tests/commands/pipeline-run.test.mjs:1133:describe('pipeline — D7: escalation persists to state.json', () => {
+882:tests/commands/pipeline-run.test.mjs:1159:describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+885:The new blocks assert the concrete D6-D8 behaviors directly: reviewer/merger model order, persisted loop state, and escalation artifact content. I’m running the allowed command set next; failures caused by read-only tempdir behavior will be separated from behavioral reds.
+944:  ✔ RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash (0.530709ms)
+947:  ✔ RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable) (0.319666ms)
+966:▶ pipeline — D6: reviewer & merger get classify→failover like writers
+967:  ✖ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (1.329625ms)
+968:  ✖ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.83025ms)
+969:  ✔ GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged) (0.423375ms)
+970:  ✖ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.526292ms)
+971:✖ pipeline — D6: reviewer & merger get classify→failover like writers (3.566625ms)
+972:▶ pipeline — D7: escalation persists to state.json
+973:  ✖ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.428791ms)
+974:✖ pipeline — D7: escalation persists to state.json (0.456125ms)
+975:▶ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty
+976:  ✖ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.364333ms)
+977:  ✔ GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged) (0.2915ms)
+978:✖ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty (0.691166ms)
+1011:✖ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (1.329625ms)
+1031:✖ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.83025ms)
+1049:✖ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.526292ms)
+1066:✖ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.428791ms)
+1087:✖ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.364333ms)
+1097:    expected: /DISTINCTIVE_D8_TAIL_MARKER_Q9Z/,
+1104:Targeted validation behaved as claimed for the current baseline: five D6-D8 reds, both guards green, and typecheck passed. I’m checking the state/journal mechanics now because the main adversarial gap is whether a test can be satisfied by “burn then compensate” rather than no gate burn.
+1111:     2	 * Loop run state — snapshot + journal + replay for the Layer-2 supervisor,
+1113:     4	 * snapshots, torn-tail-tolerant NDJSON, seq-dedup replay). Everything lives
+1136:    27	  GATE_ITERATION: 'gate-iteration',
+1226:   117	 * Atomic snapshot write (tmp + rename under .handoff/loop).
+1237:   128	 * max(snapshot.journalSeq, journal tail) unless the entry carries one.
+1268:   159	 * Load = snapshot + torn-tail-tolerant replay of journal events PAST the
+1269:   160	 * snapshot's seq. Duplicate seqs/dedupeKeys apply exactly once, so a
+1279:   170	  if (!snap.ok) return { state: null, warnings: ['no loop state snapshot found'] };
+1290:   181	      if (seq !== null && seq <= baseSeq) continue; // already folded into the snapshot
+1462:   101	  const rawSpec = safeReadJson(io.fs, `${root}/loop.json`);
+1463:   102	  if (!rawSpec.ok) return usageError(io, flags, 'pipeline', `no loop.json at ${root} — scaffold one with: baton loop init "<goal>"`);
+1464:   103	  const spec = rawSpec.value;
+1471:   110	  const rawCap = spec?.budgets?.iterationCap;
+1472:   111	  if (rawCap !== undefined && (typeof rawCap !== 'number' || rawCap < 1 || rawCap > 5)) {
+1473:   112	    return usageError(io, flags, 'pipeline', `budgets.iterationCap must be a number between 1 and 5 (the 5-iteration cap is a hard invariant; got ${JSON.stringify(rawCap)})`);
+1475:   114	  const cap = typeof rawCap === 'number' ? rawCap : 5;
+1623:   262	  // Prepare a seat for use, healing a listed-but-raw-deleted worktree (prune
+1651:core/src/commands/loop.mjs:292:  /** Apply one event, journal it, persist the snapshot — one transition. */
+1713:core/src/loop/state.mjs:2: * Loop run state — snapshot + journal + replay for the Layer-2 supervisor,
+1718:core/src/loop/state.mjs:27:  GATE_ITERATION: 'gate-iteration',
+1734:core/src/loop/state.mjs:128: * max(snapshot.journalSeq, journal tail) unless the entry carries one.
+1741:core/src/loop/state.mjs:159: * Load = snapshot + torn-tail-tolerant replay of journal events PAST the
+1786:   315	    // Start the subtask branch in the writer's seat (self-healing a raw-deleted
+1830:   359	        "When your work is committed and self-checked, End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+1907:   436	        "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+1923:   452	        "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+2057:   928	    `\ntokens used: 512\nDone — committed on the branch.\nVERDICT: APPROVED\nFINDINGS: none\n`;
+2164:    19	//     reproducible in tests rather than drawing from Math.random.
+2292:   771	  it('RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash', async () => {
+2293:   772	    // git genuinely LISTS wt-a (explicit seed) but its dir is raw-deleted, so any
+2296:   775	    git.seedWorktree(WT_A, 'baton/wt-a/base', { raw: true });
+2306:   785	    assert.equal(threw, false, 'a raw-deleted seat must self-heal, not crash the supervisor');
+2308:   787	    assert.ok(io.__git.matching(/worktree add/).some((c) => c.argstr.includes(WT_A)), 'the raw-deleted seat was re-added');
+2340:   819	  it('RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable)', async () => {
+2349:   828	    assert.match(prompt, /VERDICT:/, 'the writer prompt names the VERDICT line it must emit');
+2374:One issue is emerging: D6b proves merger relaunch and merge, but I don’t see it proving the merger death did not consume the review gate counter. I’m checking the nearby cap tests to avoid duplicating coverage that already exists elsewhere.
+2600:tests/commands/pipeline-run.test.mjs:1115:  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+2604:tests/commands/pipeline-run.test.mjs:1134:  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+2610:tests/commands/pipeline-run.test.mjs:1159:describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+2614:tests/commands/pipeline-run.test.mjs:1180:  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+2757:  → Audit D6-D8 assertions against wrong-implementation risks
+2903:    19	import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
+3230:    73	const VERDICT_RE = /VERDICT:\s*(APPROVED_WITH_NOTES|APPROVED|BLOCKED)\b/g;
+3235:    78	  for (const m of region.matchAll(VERDICT_RE)) last = m;
+3290:   133	  if (Buffer.byteLength(s) <= maxBytes) return s;
+3395:The D7 assertion uses `loadLoopState`, which is the resume-facing logical state, but the task specifically asks for the raw persisted `state.json` artifact. Because `loadLoopState` replays journal entries, it can mask a stale snapshot in a way a raw artifact assertion would not.
+3524:Verified: targeted `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` has the intended 5 reds at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1083), [1097](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1097), [1123](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1123), [1149](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1149), and [1177](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1177). The D6c/D8 guards are present at [1110-1112](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1110) and [1191-1195](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1191). `npm run typecheck` exited 0; script is `tsc --noEmit` in [package.json](/Users/saksham/baton/package.json:19).
+3526:VERDICT: BLOCKED
+3527:FINDINGS:
+3528:1. [high] D6b allows a wrong merger implementation to relaunch `m1 -> m2` while still burning the review gate once. D6a checks `iterations['subtask-t1-review'] ?? 0 === 0` after reviewer failover, but D6b only checks exit 0, merger model sequence, merge receipt, and DONE status at [1096-1100](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1096). Fix: in D6b load state and assert `iterations['subtask-t1-review'] ?? 0` is 0; preferably also assert the raw journal has no `LOOP_EVENT.GATE_ITERATION` for that gate after D6a and D6b, since transitions are journaled in [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:132).
+3529:2. [medium] D7 does not assert the raw persisted `state.json` artifact; it asserts `loadLoopState()` at [1148-1150](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1148), and `loadLoopState` replays journal entries over the snapshot at [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:165). That can mask an implementation that leaves raw `state.json` running but appends enough journal to make the loaded state escalated. Fix: parse `io.files()[loopPaths('/repo').state]` directly and assert raw `status === LOOP_STATUS.ESCALATED` plus raw `escalation.gate === gate`, while keeping the loaded-state assertion if resume equivalence is also desired.
+3530:3. [medium] D8’s guard is not byte-compatible despite the test name and task requirement. It only asserts `/Last findings:/` and the finding text at [1193-1195](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1193), so an implementation that changes the findings-present artifact format or appends log-tail material would still pass. Fix: assert the exact expected `ESCALATION.md` string for the findings-present path, matching the current format used by pipeline escalation writes at [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:408).
+3533:Verified: targeted `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` has the intended 5 reds at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1083), [1097](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1097), [1123](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1123), [1149](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1149), and [1177](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1177). The D6c/D8 guards are present at [1110-1112](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1110) and [1191-1195](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1191). `npm run typecheck` exited 0; script is `tsc --noEmit` in [package.json](/Users/saksham/baton/package.json:19).
+3535:VERDICT: BLOCKED
+3536:FINDINGS:
+3537:1. [high] D6b allows a wrong merger implementation to relaunch `m1 -> m2` while still burning the review gate once. D6a checks `iterations['subtask-t1-review'] ?? 0 === 0` after reviewer failover, but D6b only checks exit 0, merger model sequence, merge receipt, and DONE status at [1096-1100](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1096). Fix: in D6b load state and assert `iterations['subtask-t1-review'] ?? 0` is 0; preferably also assert the raw journal has no `LOOP_EVENT.GATE_ITERATION` for that gate after D6a and D6b, since transitions are journaled in [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:132).
+3538:2. [medium] D7 does not assert the raw persisted `state.json` artifact; it asserts `loadLoopState()` at [1148-1150](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1148), and `loadLoopState` replays journal entries over the snapshot at [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:165). That can mask an implementation that leaves raw `state.json` running but appends enough journal to make the loaded state escalated. Fix: parse `io.files()[loopPaths('/repo').state]` directly and assert raw `status === LOOP_STATUS.ESCALATED` plus raw `escalation.gate === gate`, while keeping the loaded-state assertion if resume equivalence is also desired.
+3539:3. [medium] D8’s guard is not byte-compatible despite the test name and task requirement. It only asserts `/Last findings:/` and the finding text at [1193-1195](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1193), so an implementation that changes the findings-present artifact format or appends log-tail material would still pass. Fix: assert the exact expected `ESCALATION.md` string for the findings-present path, matching the current format used by pipeline escalation writes at [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:408).
+
+exec
+/bin/zsh -lc 'rg -n "D6|D7|D8|Attempt 2|attempt 2|dogfood" reviews/2026-07-19-dogfood-milestone-c/findings.md' in /Users/saksham/baton
+ succeeded in 0ms:
+1:# Milestone C — live dogfood findings (pipeline run 1)
+3:Setup: clone of baton@09e6264 at ~/baton-dogfood; `baton pipeline run` with two
+54:## Attempt 2 (post-D-fold 728020d, clone ~/baton-dogfood-2) — exit 3
+63:- **D6 (major) — reviewer/merger children get no classification or
+72:- **D7 (major) — the pipeline's escalation is not persisted.** The
+80:- **D8 (minor) — ESCALATION.md can be empty.** Unparseable child deaths
+88:the D-fold lands, re-run the pipeline dogfood from a fresh clone, then the
+89:loop dogfood (smoke-gate flow), then cherry-pick the good README commits.
+
+codex
+The three previous findings are reflected in this iteration’s diff. I’m checking the journal event shape before accepting the D6 closure, because a helper can look correct while filtering the wrong field.
+exec
+/bin/zsh -lc "nl -ba core/src/loop/state.mjs | sed -n '1,230p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-19-dogfood-milestone-c/findings.md | sed -n '54,86p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    54	## Attempt 2 (post-D-fold 728020d, clone ~/baton-dogfood-2) — exit 3
+    55	
+    56	PROOF: subtask doc-loop completed the ENTIRE live cycle — sol death →
+    57	gpt-5.5 failover → committed writer work (D2 grant held) → substantive
+    58	Fable review (verified README claims against the code, APPROVED_WITH_NOTES)
+    59	→ Fable merge-check → supervisor merge with receipt → sole-author commit
+    60	9c05a8b on the clone's main. Subtask doc-pipeline escalated at the cap with
+    61	EMPTY findings. New findings:
+    62	
+    63	- **D6 (major) — reviewer/merger children get no classification or
+    64	  failover.** The subtask-reviewer inherits the other seat's worker chain;
+    65	  for doc-pipeline that head is sol → the reviewer died on the account
+    66	  rejection three times (children/006/008/010), each unparseable death
+    67	  counted as a BLOCKED review, burning the whole gate cap. Only writers got
+    68	  the G3 classify→failover path. Fix: classify reviewer and merger logs
+    69	  (tail) exactly like writers; a failure-class death re-resolves the role
+    70	  with the subtask's avoidEntries (model-unavailable → entry-avoid) instead
+    71	  of consuming a gate iteration; park on chain exhaustion.
+    72	- **D7 (major) — the pipeline's escalation is not persisted.** The
+    73	  synthesized state spec omits budgets, so the reducer escalates at its
+    74	  default cap (5) while drivePipeline enforces the spec cap (3) up top —
+    75	  the run exited 3 with state.json still status 'running', escalation null,
+    76	  counter at 4 (live artifact). A later resume would see a running state.
+    77	  Fix: carry the effective iterationCap into initLoopState's spec so the
+    78	  reducer's escalation threshold equals the enforced cap and the escalated
+    79	  status persists.
+    80	- **D8 (minor) — ESCALATION.md can be empty.** Unparseable child deaths
+    81	  leave findings '' and the operator gets a blank escalation. Fix: when
+    82	  findings are empty, include the last child's log tail (bounded) in
+    83	  ESCALATION.md.
+    84	
+    85	## Process note
+    86	
+
+ succeeded in 0ms:
+     1	/**
+     2	 * Loop run state — snapshot + journal + replay for the Layer-2 supervisor,
+     3	 * mirroring the bundle store's crash-tolerance idioms (atomic tmp+rename
+     4	 * snapshots, torn-tail-tolerant NDJSON, seq-dedup replay). Everything lives
+     5	 * under <root>/.handoff/loop/; the supervisor is the sole writer. Plan:
+     6	 * docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop",
+     7	 * §"Smoke gate", §"Supervisor lifetime and recovery", §"Caps".
+     8	 */
+     9	import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+    10	import { atomicWriteJson, safeReadJson, ensureDir } from '../util/fsx.mjs';
+    11	import { dedupeKey } from '../util/ids.mjs';
+    12	
+    13	export const LOOP_STATE_SCHEMA = 'baton/loop-state@1';
+    14	
+    15	/** The frozen status vocabulary. */
+    16	export const LOOP_STATUS = Object.freeze({
+    17	  RUNNING: 'running',
+    18	  AWAITING_SMOKE_APPROVAL: 'awaiting-smoke-approval',
+    19	  PARKED: 'parked',
+    20	  ESCALATED: 'escalated',
+    21	  DONE: 'done',
+    22	});
+    23	
+    24	/** The frozen journal event vocabulary. */
+    25	export const LOOP_EVENT = Object.freeze({
+    26	  PHASE_ADVANCE: 'phase-advance',
+    27	  GATE_ITERATION: 'gate-iteration',
+    28	  PARK: 'park',
+    29	  RESUME: 'resume',
+    30	  SMOKE_AWAIT: 'smoke-await',
+    31	  SMOKE_APPROVE: 'smoke-approve',
+    32	});
+    33	
+    34	// Every gate loops at most 5 times — a repo-wide hard invariant (AGENTS.md
+    35	// §Review gates); the reducer refuses a 6th and escalates instead.
+    36	const GATE_ITERATION_CAP = 5;
+    37	
+    38	/** @param {string} root */
+    39	export function loopPaths(root) {
+    40	  const dir = `${root}/.handoff/loop`;
+    41	  return { dir, state: `${dir}/state.json`, journal: `${dir}/journal.ndjson` };
+    42	}
+    43	
+    44	/**
+    45	 * Fresh run state — pure and deterministic from the injected io (identity
+    46	 * facts + clock only; no Date.now/Math.random, which would break replay).
+    47	 * @param {any} spec a VALIDATED loop spec @param {any} io
+    48	 */
+    49	export function initLoopState(spec, io) {
+    50	  const runId = `loop-${dedupeKey({ host: io.host, pid: io.pid, startTime: io.startTime, at: io.now() }).slice(0, 12)}`;
+    51	  /** @type {Record<string, number>} */
+    52	  const iterations = {};
+    53	  for (const p of spec.phases ?? []) {
+    54	    if (/gate/.test(String(p.id))) iterations[p.id] = 0;
+    55	  }
+    56	  return {
+    57	    schema: LOOP_STATE_SCHEMA,
+    58	    runId,
+    59	    goal: spec.goal,
+    60	    phaseCount: Array.isArray(spec.phases) ? spec.phases.length : 0,
+    61	    phaseIndex: 0,
+    62	    iterations,
+    63	    status: LOOP_STATUS.RUNNING,
+    64	    parkReason: null,
+    65	    escalation: null,
+    66	    smokeApproval: null,
+    67	    createdAt: io.now(),
+    68	    journalSeq: 0,
+    69	  };
+    70	}
+    71	
+    72	/**
+    73	 * The pure transition reducer. Never mutates its input; unknown events and
+    74	 * refused transitions return the input state unchanged (a new reference is
+    75	 * only produced for a real transition).
+    76	 * @param {any} state @param {any} ev
+    77	 */
+    78	export function applyLoopEvent(state, ev) {
+    79	  switch (ev?.type) {
+    80	    case LOOP_EVENT.PHASE_ADVANCE: {
+    81	      const next = state.phaseIndex + 1;
+    82	      if (next >= state.phaseCount) return { ...state, phaseIndex: state.phaseCount, status: LOOP_STATUS.DONE };
+    83	      return { ...state, phaseIndex: next };
+    84	    }
+    85	    case LOOP_EVENT.GATE_ITERATION: {
+    86	      const gate = String(ev.gate);
+    87	      const current = state.iterations?.[gate] ?? 0;
+    88	      // The 6th attempt is REFUSED: the counter stays at the cap and the run
+    89	      // escalates with a record naming the gate — never a 6th run.
+    90	      if (current >= GATE_ITERATION_CAP) {
+    91	        return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: current } };
+    92	      }
+    93	      return { ...state, iterations: { ...state.iterations, [gate]: current + 1 } };
+    94	    }
+    95	    case LOOP_EVENT.PARK:
+    96	      return { ...state, status: LOOP_STATUS.PARKED, parkReason: ev.reason ?? null };
+    97	    case LOOP_EVENT.RESUME:
+    98	      // Only a PARK is resumable; an escalation is an operator decision.
+    99	      if (state.status !== LOOP_STATUS.PARKED) return state;
+   100	      return { ...state, status: LOOP_STATUS.RUNNING, parkReason: null };
+   101	    case LOOP_EVENT.SMOKE_AWAIT:
+   102	      return { ...state, status: LOOP_STATUS.AWAITING_SMOKE_APPROVAL };
+   103	    case LOOP_EVENT.SMOKE_APPROVE: {
+   104	      // Guarded transition: only meaningful while awaiting, and only with the
+   105	      // caller's verifySmokeToken result stamped verified === true. A missing
+   106	      // or false `verified` is unverified — it never resumes the run.
+   107	      if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) return state;
+   108	      if (ev.verified !== true) return state;
+   109	      return { ...state, status: LOOP_STATUS.RUNNING, smokeApproval: { token: ev.token, at: ev.ts ?? null } };
+   110	    }
+   111	    default:
+   112	      return state;
+   113	  }
+   114	}
+   115	
+   116	/**
+   117	 * Atomic snapshot write (tmp + rename under .handoff/loop).
+   118	 * @param {string} root @param {any} state @param {any} io
+   119	 */
+   120	export async function writeLoopState(root, state, io) {
+   121	  const p = loopPaths(root);
+   122	  ensureDir(io.fs, p.dir);
+   123	  atomicWriteJson(io.fs, p.state, state);
+   124	}
+   125	
+   126	/**
+   127	 * Append one journal event; allocates the next seq past
+   128	 * max(snapshot.journalSeq, journal tail) unless the entry carries one.
+   129	 * @param {string} root @param {any} ev @param {any} io
+   130	 * @returns {Promise<number>} the persisted seq
+   131	 */
+   132	export async function appendLoopEvent(root, ev, io) {
+   133	  const p = loopPaths(root);
+   134	  ensureDir(io.fs, p.dir);
+   135	  let seq = ev.seq;
+   136	  if (typeof seq !== 'number') {
+   137	    const snap = safeReadJson(io.fs, p.state);
+   138	    const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+   139	    let tailSeq = 0;
+   140	    if (io.fs.existsSync(p.journal)) {
+   141	      for (const e of readAllTolerant(io.fs, p.journal).entries) {
+   142	        if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+   143	      }
+   144	    }
+   145	    seq = Math.max(snapSeq, tailSeq) + 1;
+   146	  }
+   147	  const ts = typeof ev.ts === 'string' ? ev.ts : io.now();
+   148	  const entry = {
+   149	    ...ev,
+   150	    seq,
+   151	    ts,
+   152	    dedupeKey: typeof ev.dedupeKey === 'string' && ev.dedupeKey.length > 0 ? ev.dedupeKey : dedupeKey({ seq, ts, type: ev.type, gate: ev.gate ?? null }),
+   153	  };
+   154	  appendEntry(io.fs, p.journal, entry);
+   155	  return seq;
+   156	}
+   157	
+   158	/**
+   159	 * Load = snapshot + torn-tail-tolerant replay of journal events PAST the
+   160	 * snapshot's seq. Duplicate seqs/dedupeKeys apply exactly once, so a
+   161	 * supervisor-death recovery never re-runs a completed iteration.
+   162	 * @param {string} root @param {any} io
+   163	 * @returns {Promise<{state: any, warnings: string[]}>}
+   164	 */
+   165	export async function loadLoopState(root, io) {
+   166	  const p = loopPaths(root);
+   167	  /** @type {string[]} */
+   168	  const warnings = [];
+   169	  const snap = safeReadJson(io.fs, p.state);
+   170	  if (!snap.ok) return { state: null, warnings: ['no loop state snapshot found'] };
+   171	  let state = snap.value;
+   172	  const baseSeq = typeof state.journalSeq === 'number' ? state.journalSeq : 0;
+   173	
+   174	  if (io.fs.existsSync(p.journal)) {
+   175	    const { entries, warnings: jw } = readAllTolerant(io.fs, p.journal);
+   176	    for (const w of jw ?? []) warnings.push(`journal: ${w.kind ?? 'warning'} at line ${w.line ?? '?'}`);
+   177	    const applied = new Set();
+   178	    let maxSeq = baseSeq;
+   179	    for (const e of entries) {
+   180	      const seq = typeof e.seq === 'number' ? e.seq : null;
+   181	      if (seq !== null && seq <= baseSeq) continue; // already folded into the snapshot
+   182	      const key = e.dedupeKey ?? (seq !== null ? `seq:${seq}` : null);
+   183	      if (key !== null && applied.has(key)) continue; // replayed duplicate — apply once
+   184	      if (seq !== null && applied.has(`seq:${seq}`)) continue;
+   185	      state = applyLoopEvent(state, e);
+   186	      if (key !== null) applied.add(key);
+   187	      if (seq !== null) {
+   188	        applied.add(`seq:${seq}`);
+   189	        if (seq > maxSeq) maxSeq = seq;
+   190	      }
+   191	    }
+   192	    state = { ...state, journalSeq: maxSeq };
+   193	  }
+   194	  return { state, warnings };
+   195	}
+   196	
+   197	// ---------------------------------------------------------------------------
+   198	// Smoke-approval token — a STRUCTURED digest over the six bound inputs, so a
+   199	// stale approval is refused NAMING what moved (mirrors the receive receipt
+   200	// token's driftedInputs discipline).
+   201	// ---------------------------------------------------------------------------
+   202	
+   203	const SMOKE_TOKEN_PREFIX = 'smk1';
+   204	const SMOKE_TOKEN_FIELDS = /** @type {const} */ ([
+   205	  'stateDigest',
+   206	  'smokeCmd',
+   207	  'smokeOutputDigest',
+   208	  'gitHead',
+   209	  'gitContentDigest',
+   210	  'childAssignment',
+   211	]);
+   212	
+   213	/**
+   214	 * Deterministic structured token. Per-field digests keep field boundaries
+   215	 * (no concatenation collisions) and let verification name drifted inputs.
+   216	 * Missing bound fields throw — a token over partial inputs is meaningless.
+   217	 * @param {Record<string, string>} inputs
+   218	 * @returns {string}
+   219	 */
+   220	export function smokeApprovalToken(inputs) {
+   221	  for (const f of SMOKE_TOKEN_FIELDS) {
+   222	    if (typeof inputs?.[f] !== 'string') throw new Error(`smoke approval token: required input '${f}' is missing`);
+   223	  }
+   224	  return `${SMOKE_TOKEN_PREFIX}.` + SMOKE_TOKEN_FIELDS.map((f) => dedupeKey(inputs[f]).slice(0, 10)).join('.');
+   225	}
+   226	
+   227	/**
+   228	 * Recompute against current inputs; positional comparison names every
+   229	 * drifted input. Never throws — partial current inputs simply cannot verify.
+   230	 * @param {string} presented @param {Record<string, string>} inputs
+
+exec
+/bin/zsh -lc 'rg -n "GATE_ITERATION|gate-iteration|appendLoopEvent|record|iterations|escalat|ESCALATION" core/src/commands/pipeline.mjs core/src/commands/loop.mjs core/src/loop/state.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+core/src/loop/state.mjs:20:  ESCALATED: 'escalated',
+core/src/loop/state.mjs:27:  GATE_ITERATION: 'gate-iteration',
+core/src/loop/state.mjs:35:// §Review gates); the reducer refuses a 6th and escalates instead.
+core/src/loop/state.mjs:36:const GATE_ITERATION_CAP = 5;
+core/src/loop/state.mjs:52:  const iterations = {};
+core/src/loop/state.mjs:54:    if (/gate/.test(String(p.id))) iterations[p.id] = 0;
+core/src/loop/state.mjs:62:    iterations,
+core/src/loop/state.mjs:65:    escalation: null,
+core/src/loop/state.mjs:85:    case LOOP_EVENT.GATE_ITERATION: {
+core/src/loop/state.mjs:87:      const current = state.iterations?.[gate] ?? 0;
+core/src/loop/state.mjs:89:      // escalates with a record naming the gate — never a 6th run.
+core/src/loop/state.mjs:90:      if (current >= GATE_ITERATION_CAP) {
+core/src/loop/state.mjs:91:        return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: current } };
+core/src/loop/state.mjs:93:      return { ...state, iterations: { ...state.iterations, [gate]: current + 1 } };
+core/src/loop/state.mjs:98:      // Only a PARK is resumable; an escalation is an operator decision.
+core/src/loop/state.mjs:132:export async function appendLoopEvent(root, ev, io) {
+core/src/commands/loop.mjs:7:  appendLoopEvent,
+core/src/commands/loop.mjs:105:// 3 escalated · 4 parked.
+core/src/commands/loop.mjs:117: * owner refuses; a provably-dead one is reclaimed: its recorded in-flight
+core/src/commands/loop.mjs:149:      // start/retire records are truncated so a stale retire can never mask a
+core/src/commands/loop.mjs:170:    // recorded start time is a dead owner, not a live supervisor (I5).
+core/src/commands/loop.mjs:177:    // Provably dead (or our own stale lock): reap its recorded in-flight
+core/src/commands/loop.mjs:196:          // A torn record is unreapable — skip it.
+core/src/commands/loop.mjs:228: * role children, records every transition in the journal-replayable loop
+core/src/commands/loop.mjs:255:  // are reclaimed with their recorded child groups reaped first (B8 + G4).
+core/src/commands/loop.mjs:295:    const seq = await appendLoopEvent(root, ev, io);
+core/src/commands/loop.mjs:312:    // `loop resume` — a PARK is resumable; an escalation is operator-only.
+core/src/commands/loop.mjs:315:        io.stderr.write(`baton loop resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+core/src/commands/loop.mjs:330:      const record = safeReadJson(io.fs, `${p.dir}/smoke-approval.json`);
+core/src/commands/loop.mjs:331:      if (!record.ok) return usageError(io, flags, 'loop', 'no smoke-approval.json found — run the loop to the smoke gate first');
+core/src/commands/loop.mjs:336:        smokeOutputDigest: String(record.value?.inputs?.smokeOutputDigest ?? ''),
+core/src/commands/loop.mjs:339:        childAssignment: String(record.value?.inputs?.childAssignment ?? ''),
+core/src/commands/loop.mjs:353:      io.stderr.write(`baton loop run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+core/src/commands/loop.mjs:357:      io.stderr.write(`baton loop run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton loop resume)\n`);
+core/src/commands/loop.mjs:378:        // The cap gates the SPAWN: at the cap the reducer escalates and a
+core/src/commands/loop.mjs:380:        if ((state.iterations?.[phase.id] ?? 0) >= cap) {
+core/src/commands/loop.mjs:381:          await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict: 'BLOCKED' });
+core/src/commands/loop.mjs:384:            `${p.dir}/ESCALATION.md`,
+core/src/commands/loop.mjs:385:            `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n\nEscalation is operator-only: review and resolve the findings with the operator before any new gate attempt.\n`,
+core/src/commands/loop.mjs:387:          io.stderr.write(`baton loop run: gate '${phase.id}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
+core/src/commands/loop.mjs:463:            loopState: { runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+core/src/commands/loop.mjs:523:          const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict });
+core/src/commands/loop.mjs:527:              `${p.dir}/ESCALATION.md`,
+core/src/commands/loop.mjs:528:              `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n`,
+core/src/commands/loop.mjs:530:            io.stderr.write(`baton loop run: gate '${phase.id}' escalated at the cap — see ${p.dir}/ESCALATION.md\n`);
+core/src/commands/pipeline.mjs:16:  appendLoopEvent,
+core/src/commands/pipeline.mjs:178:    const seq = await appendLoopEvent(root, ev, io);
+core/src/commands/pipeline.mjs:189:  // `pipeline resume` — a PARK is resumable; an escalation is operator-only.
+core/src/commands/pipeline.mjs:194:      io.stderr.write(`baton pipeline resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+core/src/commands/pipeline.mjs:204:    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+core/src/commands/pipeline.mjs:208:    io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton pipeline resume)\n`);
+core/src/commands/pipeline.mjs:231:          return null; // a torn record proves nothing — ignore it
+core/src/commands/pipeline.mjs:304:        `subtask '${st.id}' has a stale branch '${branch}' whose tip is already contained in main, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
+core/src/commands/pipeline.mjs:337:      if ((state.iterations?.[gate] ?? 0) >= cap) {
+core/src/commands/pipeline.mjs:338:        await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+core/src/commands/pipeline.mjs:341:          `${p.dir}/ESCALATION.md`,
+core/src/commands/pipeline.mjs:342:          `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`,
+core/src/commands/pipeline.mjs:344:        io.stderr.write(`baton pipeline run: gate '${gate}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
+core/src/commands/pipeline.mjs:393:          loopState: { runId: state.runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+core/src/commands/pipeline.mjs:406:        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+core/src/commands/pipeline.mjs:408:          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+core/src/commands/pipeline.mjs:441:        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+core/src/commands/pipeline.mjs:443:          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+core/src/commands/pipeline.mjs:457:        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+core/src/commands/pipeline.mjs:459:          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+
+codex
+The journal entries do use top-level `type` and `gate`, so the new `gateIterationEvents` filter matches the persisted event shape. I’m running the target tests now to confirm the current reds/guards and failure kinds against the present worktree.
+exec
+/bin/zsh -lc "nl -ba core/src/commands/pipeline.mjs | sed -n '150,470p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   150	  // {flavor, specDigest} so a cross-flavor or changed-spec resume refuses
+   151	  // instead of misaligning (H5).
+   152	  const specDigest = dedupeKey(subtasks);
+   153	  /** @type {any} */
+   154	  let state = (await loadLoopState(root, io)).state;
+   155	  if (state === null) {
+   156	    // A resume with nothing persisted is a wrong-directory mistake, not a
+   157	    // fresh run — refusing beats silently initializing and running (N2).
+   158	    if (flags.__resume === true) {
+   159	      return usageError(io, flags, 'pipeline', 'nothing to resume — no run state exists here; start with: baton pipeline run');
+   160	    }
+   161	    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
+   162	    await writeLoopState(root, state, io);
+   163	  } else {
+   164	    if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
+   165	      return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+   166	    }
+   167	    // A missing stamp is a mismatch, not a grandfathered pass — pre-stamp
+   168	    // legacy state resumes with exactly the misalignment H5 prevents (I3).
+   169	    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+   170	      return usageError(io, flags, 'pipeline', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+   171	    }
+   172	    if (state.specDigest !== specDigest) {
+   173	      return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
+   174	    }
+   175	  }
+   176	  const transition = async (/** @type {any} */ ev) => {
+   177	    const next = applyLoopEvent(state, ev);
+   178	    const seq = await appendLoopEvent(root, ev, io);
+   179	    state = { ...next, journalSeq: seq };
+   180	    await writeLoopState(root, state, io);
+   181	    return state;
+   182	  };
+   183	  const park = async (/** @type {string} */ reason) => {
+   184	    await transition({ type: LOOP_EVENT.PARK, reason });
+   185	    io.stderr.write(`baton pipeline run: parked — ${reason}\n`);
+   186	    return EXIT_PARKED;
+   187	  };
+   188	
+   189	  // `pipeline resume` — a PARK is resumable; an escalation is operator-only.
+   190	  // Mirrors `loop resume` (G6/J1): the RESUME transition preserves the loaded
+   191	  // state's cap counters — resuming never refunds a gate.
+   192	  if (flags.__resume === true) {
+   193	    if (state.status === LOOP_STATUS.ESCALATED) {
+   194	      io.stderr.write(`baton pipeline resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+   195	      return EXIT_ESCALATED;
+   196	    }
+   197	    if (state.status === LOOP_STATUS.PARKED) {
+   198	      await transition({ type: LOOP_EVENT.RESUME });
+   199	      io.stdout.write('baton pipeline resume: the parked run is running again\n');
+   200	    }
+   201	  }
+   202	
+   203	  if (state.status === LOOP_STATUS.ESCALATED) {
+   204	    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+   205	    return EXIT_ESCALATED;
+   206	  }
+   207	  if (state.status === LOOP_STATUS.PARKED) {
+   208	    io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton pipeline resume)\n`);
+   209	    return EXIT_PARKED;
+   210	  }
+   211	  const runner = io.superviseChild ?? superviseChild;
+   212	  const seats = worktreePaths(root).seats;
+   213	  let childSeq = 0;
+   214	
+   215	  await setupWorktrees(root, io);
+   216	
+   217	  // Supervisor-owned merge receipts (I1): one appended line per merged
+   218	  // subtask, written BEFORE the phase advance is journaled, so a crash
+   219	  // between merge and advance resumes into a receipt-backed advance.
+   220	  const mergesPath = `${p.dir}/merges.ndjson`;
+   221	  /** @returns {any[]} */
+   222	  const mergeReceipts = () => {
+   223	    if (!io.fs.existsSync(mergesPath)) return [];
+   224	    return String(io.fs.readFileSync(mergesPath, 'utf8'))
+   225	      .split('\n')
+   226	      .filter((l) => l.trim() !== '')
+   227	      .map((l) => {
+   228	        try {
+   229	          return JSON.parse(l);
+   230	        } catch {
+   231	          return null; // a torn record proves nothing — ignore it
+   232	        }
+   233	      })
+   234	      .filter(Boolean);
+   235	  };
+   236	
+   237	  const spawn = async (/** @type {any} */ assignment, /** @type {string} */ prompt, /** @type {string} */ seatPath, /** @type {string} */ label) => {
+   238	    childSeq += 1;
+   239	    const childId = `${String(childSeq).padStart(3, '0')}-${label}`;
+   240	    const logPath = `${p.dir}/children/${childId}.log`;
+   241	    ensureDir(io.fs, `${p.dir}/children`);
+   242	    // gitDir: a linked worktree's index lives under the MAIN repo's .git —
+   243	    // write-capable children need it inside their sandbox to commit (D2);
+   244	    // buildChildArgv drops it for read-only roles.
+   245	    const childSpec = buildChildArgv(assignment, prompt, { root: seatPath, gitDir: `${root}/.git` });
+   246	    const result = await runner(childSpec, {
+   247	      timeoutMs,
+   248	      graceMs: 10_000,
+   249	      logPath,
+   250	      maxLogBytes: 1_000_000,
+   251	      platform: assignment.platform,
+   252	      onStart: (/** @type {{pid: number, pgid: number}} */ info) => {
+   253	        appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, pid: info.pid, pgid: info.pgid, startedAt: io.now() });
+   254	      },
+   255	    });
+   256	    // Retire on resolution — reclaim must never kill a completed child's
+   257	    // (possibly recycled) group (H3).
+   258	    appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, endedAt: io.now() });
+   259	    return result;
+   260	  };
+   261	
+   262	  // Prepare a seat for use, healing a listed-but-raw-deleted worktree (prune
+   263	  // + re-add) once before giving up (Gate-2 fold G5).
+   264	  const withSeatHealing = async (/** @type {string} */ seat, /** @type {() => Promise<any>} */ fn) => {
+   265	    try {
+   266	      return await fn();
+   267	    } catch (err) {
+   268	      const msg = String(/** @type {any} */ (err)?.message ?? err);
+   269	      if (/already exists/i.test(msg)) throw err; // a stale branch is a park, not a heal
+   270	      await selfHealWorktree(root, { seat, branch: `baton/wt-${seat}/base` }, io);
+   271	      return fn();
+   272	    }
+   273	  };
+   274	
+   275	  for (let i = state.phaseIndex; i < subtasks.length; i += 1) {
+   276	    const st = subtasks[i];
+   277	    const seat = i % 2 === 0 ? 'a' : 'b';
+   278	    const other = seat === 'a' ? 'b' : 'a';
+   279	    const branch = `baton/wt-${seat}/subtask-${st.id}`;
+   280	    const gate = `subtask-${st.id}-review`;
+   281	
+   282	    // A crash between merge and PHASE_ADVANCE leaves the branch fully merged:
+   283	    // recognize it and advance instead of a misleading empty-branch park (H7).
+   284	    // Recognition requires BOTH a supervisor-owned merge receipt AND the
+   285	    // branch tip being an ancestor of main (I1): is-ancestor alone
+   286	    // false-positives on a stale empty branch parked at main's old tip (a
+   287	    // writer that crashed before its first commit), and a receipt alone can
+   288	    // outlive a rewound main. Ancestor-without-receipt parks as stale;
+   289	    // receipt-without-ancestor re-runs the subtask.
+   290	    let isAncestor = false;
+   291	    try {
+   292	      await io.execFile('git', ['merge-base', '--is-ancestor', branch, 'main'], { cwd: root });
+   293	      isAncestor = true;
+   294	    } catch {
+   295	      // Not an ancestor (or the branch does not exist yet) — the normal path.
+   296	    }
+   297	    if (isAncestor) {
+   298	      if (mergeReceipts().some((r) => r?.subtaskId === st.id)) {
+   299	        io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main (receipt + ancestor) — advancing\n`);
+   300	        await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+   301	        continue;
+   302	      }
+   303	      return park(
+   304	        `subtask '${st.id}' has a stale branch '${branch}' whose tip is already contained in main, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
+   305	      );
+   306	    }
+   307	
+   308	    const writerAssignment = resolveOne(`worker-${seat}`);
+   309	    const reviewerModel = resolveOne(`worker-${other}`);
+   310	    const mergerModel = resolveOne('merger');
+   311	    if (!writerAssignment || !reviewerModel || !mergerModel) {
+   312	      return park(`no eligible assignment for subtask '${st.id}' (worker-${seat}/worker-${other}/merger must all resolve)`);
+   313	    }
+   314	
+   315	    // Start the subtask branch in the writer's seat (self-healing a raw-deleted
+   316	    // seat), then verify the seat. A pre-existing (stale) branch parks.
+   317	    let mainSha;
+   318	    try {
+   319	      const alreadyOnBranch =
+   320	        String((await withSeatHealing(seat, () => io.execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: seats[seat] }))).stdout).trim() === branch;
+   321	      if (!alreadyOnBranch) await withSeatHealing(seat, () => io.execFile('git', ['checkout', '-b', branch], { cwd: seats[seat] }));
+   322	      const pre = await preflightWorktree(root, { seat, branch }, io);
+   323	      if (pre.ok !== true) return park(`preflight refused subtask '${st.id}': ${pre.refusal}`);
+   324	      mainSha = (await io.execFile('git', ['rev-parse', 'main'], { cwd: root })).stdout.trim();
+   325	    } catch (err) {
+   326	      return park(`seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
+   327	    }
+   328	
+   329	    let findings = '';
+   330	    let merged = false;
+   331	    let failoverAttempt = 0;
+   332	    /** @type {Array<{platform: string, model: string}>} */
+   333	    let subtaskAvoidEntries = [];
+   334	    /** @type {any | null} */
+   335	    let forcedWriter = null;
+   336	    while (!merged) {
+   337	      if ((state.iterations?.[gate] ?? 0) >= cap) {
+   338	        await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+   339	        atomicWriteText(
+   340	          io.fs,
+   341	          `${p.dir}/ESCALATION.md`,
+   342	          `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`,
+   343	        );
+   344	        io.stderr.write(`baton pipeline run: gate '${gate}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
+   345	        return EXIT_ESCALATED;
+   346	      }
+   347	
+   348	      // Writer (write-capable, its own seat). Every resolution — including a
+   349	      // plain BLOCKED retry — honors the subtask's avoided entries, so a
+   350	      // model rejected earlier in this subtask is never re-picked (D4).
+   351	      const resolvedWriter = forcedWriter ?? resolveOne(`worker-${seat}`, subtaskAvoidEntries);
+   352	      if (!resolvedWriter) return park(`no eligible writer remains for subtask '${st.id}' (every chain entry is avoided)`);
+   353	      const writerAsg = { ...resolvedWriter, role: `worker-${seat}` };
+   354	      forcedWriter = null;
+   355	      const writerPrompt = [
+   356	        `You are the writer (worker-${seat}) for subtask '${st.id}': ${st.title}.`,
+   357	        `Goal: ${spec.goal}. Work ONLY on branch ${branch} in your worktree; commit your work there.`,
+   358	        findings ? `The previous attempt was BLOCKED — address every finding:\n${findings}` : '',
+   359	        "When your work is committed and self-checked, End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+   360	      ]
+   361	        .filter(Boolean)
+   362	        .join('\n\n');
+   363	      const writerResult = await spawn(writerAsg, writerPrompt, seats[seat], `${st.id}-writer`);
+   364	
+   365	      // The writer's result is CONSUMED, never discarded (Gate-2 fold G3):
+   366	      // classify its log first — a limit/model death routes through failover,
+   367	      // a BLOCKED self-check retries the writer, and only a passing writer
+   368	      // hands off to review.
+   369	      const writerLog = writerResult.logPath && io.fs.existsSync(writerResult.logPath) ? io.fs.readFileSync(writerResult.logPath, 'utf8') : '';
+   370	      const writerCls = classify({ text: transcriptTail(writerLog), exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
+   371	      if (writerCls !== 'ok') {
+   372	        failoverAttempt += 1;
+   373	        // Failover is BOUNDED: at most one relaunch per configured chain entry
+   374	        // for this seat — beyond that the subtask parks instead of ping-ponging
+   375	        // across platforms forever (H2).
+   376	        const chainLen = Array.isArray(config?.roles?.[`worker-${seat}`]) ? config.roles[`worker-${seat}`].length : 1;
+   377	        if (failoverAttempt > chainLen) {
+   378	          return park(`subtask '${st.id}' exhausted its failover budget (${chainLen} chain entr${chainLen === 1 ? 'y' : 'ies'}, ${failoverAttempt} deaths) — parked instead of looping`);
+   379	        }
+   380	        const decision = await runFailover({
+   381	          root,
+   382	          io,
+   383	          config,
+   384	          role: `worker-${seat}`,
+   385	          assignment: writerAsg,
+   386	          transcript: writerLog,
+   387	          exitCode: writerResult.exitCode ?? 1,
+   388	          sessionHint: state.runId,
+   389	          probes: null,
+   390	          avoid: [],
+   391	          avoidEntries: subtaskAvoidEntries,
+   392	          attempt: failoverAttempt,
+   393	          loopState: { runId: state.runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+   394	        });
+   395	        if (decision.action === 'park') return park(`writer failover parked subtask '${st.id}': ${decision.reason}`);
+   396	        if (decision.action === 'relaunch') {
+   397	          // Carry entry-level avoidance across relaunches — a rejected model
+   398	          // stays rejected for this subtask (H2).
+   399	          if (Array.isArray(decision.avoidEntries)) subtaskAvoidEntries = decision.avoidEntries;
+   400	          forcedWriter = { ...decision.assignment, role: `worker-${seat}` };
+   401	        }
+   402	        continue; // relaunch or retry the writer — never review a failed attempt
+   403	      }
+   404	      if (writerResult.verdict !== 'APPROVED' && writerResult.verdict !== 'APPROVED_WITH_NOTES') {
+   405	        findings = String(writerResult.findings ?? '');
+   406	        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+   407	        if (after.status === LOOP_STATUS.ESCALATED) {
+   408	          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+   409	          return EXIT_ESCALATED;
+   410	        }
+   411	        continue; // the writer retries; no reviewer sees a failed attempt
+   412	      }
+   413	
+   414	      const post = await postflightWorktree(root, { seat, branch, mainSha }, io);
+   415	      if (post.ok !== true) return park(`postflight refused subtask '${st.id}': ${post.refusal}`);
+   416	
+   417	      // An empty branch never merges (Gate-2 fold G3): the writer must have
+   418	      // actually committed work ahead of main.
+   419	      const ahead = String((await io.execFile('git', ['log', `main..${branch}`, '--format=%H'], { cwd: root })).stdout).trim();
+   420	      if (ahead.length === 0) return park(`subtask '${st.id}' produced an EMPTY branch (no commits ahead of main) — nothing to review or merge`);
+   421	
+   422	      // Reviewer-seat preflight (Gate-2 fold G5): the reviewing seat must be
+   423	      // listed and clean before a reviewer spawns into it.
+   424	      try {
+   425	        const otherBranch = String((await withSeatHealing(other, () => io.execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: seats[other] }))).stdout).trim();
+   426	        const reviewerPre = await preflightWorktree(root, { seat: other, branch: otherBranch }, io);
+   427	        if (reviewerPre.ok !== true) return park(`reviewer-seat preflight refused subtask '${st.id}': ${reviewerPre.refusal}`);
+   428	      } catch (err) {
+   429	        return park(`reviewer-seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
+   430	      }
+   431	
+   432	      // Reviewer (read-only, the OTHER seat's model and cwd, subtask-reviewer role).
+   433	      const reviewPrompt = [
+   434	        `You are the subtask-reviewer for subtask '${st.id}': ${st.title}.`,
+   435	        `Review the change on ${branch} against main from the ${other} seat (fresh context). Run: git diff main..${branch} (and git log main..${branch}) to see exactly what changed — branch refs are shared across worktrees.`,
+   436	        "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+   437	      ].join('\n\n');
+   438	      const review = await spawn({ ...reviewerModel, role: 'subtask-reviewer' }, reviewPrompt, seats[other], `${st.id}-review`);
+   439	      if (review.verdict !== 'APPROVED' && review.verdict !== 'APPROVED_WITH_NOTES') {
+   440	        findings = String(review.findings ?? '');
+   441	        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+   442	        if (after.status === LOOP_STATUS.ESCALATED) {
+   443	          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+   444	          return EXIT_ESCALATED;
+   445	        }
+   446	        continue;
+   447	      }
+   448	
+   449	      // Merger (read-only child — it re-checks; the SUPERVISOR merges).
+   450	      const mergerPrompt = [
+   451	        `You are the merger for subtask '${st.id}'. Adversarially re-check ${branch} against main before it merges.`,
+   452	        "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+   453	      ].join('\n\n');
+   454	      const mergerVerdict = await spawn({ ...mergerModel, role: 'merger' }, mergerPrompt, root, `${st.id}-merge-check`);
+   455	      if (mergerVerdict.verdict !== 'APPROVED' && mergerVerdict.verdict !== 'APPROVED_WITH_NOTES') {
+   456	        findings = String(mergerVerdict.findings ?? '');
+   457	        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+   458	        if (after.status === LOOP_STATUS.ESCALATED) {
+   459	          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+   460	          return EXIT_ESCALATED;
+   461	        }
+   462	        continue;
+   463	      }
+   464	
+   465	      const merge = await mergeSubtask(root, { branch }, io);
+   466	      if (merge.ok !== true) return park(`merge of '${branch}' refused: ${merge.reason}`);
+   467	      // The receipt lands BEFORE the phase-advance journal write (I1): a
+   468	      // crash between the two resumes into a receipt-backed advance.
+   469	      appendEntry(io.fs, mergesPath, { subtaskId: st.id, branch, mergedAt: io.now() });
+   470	      merged = true;
+
+exec
+/bin/zsh -lc 'npm run typecheck' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs' in /Users/saksham/baton
+ exited 1 in 142ms:
+▶ pipeline — CLI routing & flags
+  ✔ no subcommand -> usage error (exit 2) naming a subcommand, not "unknown command" (1.086584ms)
+  ✔ an unknown subcommand exits 2 naming it (0.152416ms)
+  ✔ a stray positional / unknown flag exits 2 with zero spawns (0.197292ms)
+  ✔ BATON_SUPERVISED_CHILD does NOT suppress pipeline run (supervisor-side) (4.477375ms)
+✔ pipeline — CLI routing & flags (6.904417ms)
+▶ pipeline — preconditions
+  ✔ no loop.json -> exit 2 naming loop.json, zero spawns (0.172ms)
+  ✔ missing / empty subtasks -> exit 2 naming subtasks, zero spawns (0.194875ms)
+  ✔ malformed subtask items exit 2 naming the offender, with zero spawns (0.364292ms)
+  ✔ setupWorktrees runs before subtask 1 (worktree adds recorded) and only once (1.044708ms)
+✔ pipeline — preconditions (1.936666ms)
+▶ pipeline — seat alternation (writer)
+  ✔ subtask 1 writes in wt-a on baton/wt-a/subtask-t1 (worker-a model); subtask 2 writes in wt-b on baton/wt-b/subtask-t2 (worker-b model) (0.93475ms)
+✔ pipeline — seat alternation (writer) (0.999583ms)
+▶ pipeline — reviewer seat (read-only, other seat)
+  ✔ both reviewers, in order: t1 = wb-model/WT_B/read-only, t2 = wa-model/WT_A/read-only, each under the subtask-reviewer role (1.266833ms)
+  ✔ RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>) (0.445375ms)
+✔ pipeline — reviewer seat (read-only, other seat) (1.785834ms)
+▶ pipeline — verdict flow
+  ✔ reviewer APPROVED -> the MERGER child runs (merger model); on its APPROVED the SUPERVISOR merges via mergeSubtask (0.706375ms)
+  ✔ reviewer BLOCKED -> the SAME writer seat re-runs with the findings in its prompt (0.665542ms)
+  ✔ review-gate cap exhaustion -> escalated, ESCALATION.md, exit 3, no 6th spawn (0.741208ms)
+  ✔ merger BLOCKED -> the writer retries (same gate-cap discipline) (0.650333ms)
+✔ pipeline — verdict flow (2.834584ms)
+▶ pipeline — merge failures park
+  ✔ a merge CONFLICT from mergeSubtask parks the run (exit 4) (0.51ms)
+  ✔ an attribution violation (foreign committer) blocks the merge and parks — no merge git call lands (0.365959ms)
+✔ pipeline — merge failures park (0.916083ms)
+▶ pipeline — worktree guard composition (preflight/postflight)
+  ✔ (a) a DIRTY writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.283709ms)
+  ✔ (b) a WRONG-branch writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.281875ms)
+  ✔ (c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge (0.922416ms)
+✔ pipeline — worktree guard composition (preflight/postflight) (1.546791ms)
+▶ pipeline — completion
+  ✔ both subtasks merged -> state done, exit 0; loop state + journal persisted under .handoff/loop (0.655958ms)
+✔ pipeline — completion (0.697417ms)
+▶ pipeline — G1: a claude-code worker seat writer carries model + seat cwd
+  ✔ RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer (0.631125ms)
+✔ pipeline — G1: a claude-code worker seat writer carries model + seat cwd (0.665375ms)
+▶ pipeline — G2: cap validation / resume / run-lock / stale branch
+  ✔ RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant) (0.136125ms)
+  ✔ RED (G2): a LIVE supervisor.lock refuses pipeline run (exit 1), zero spawns (0.140416ms)
+  ✔ RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing (0.38625ms)
+  ✔ RED (G2): a second pipeline run RESUMES loadLoopState — cap counters survive re-invocation (no refund) (1.215834ms)
+✔ pipeline — G2: cap validation / resume / run-lock / stale branch (1.958458ms)
+▶ pipeline — G3: writer result handling
+  ✔ RED (G3): a writer BLOCKED retries the WRITER without spawning a reviewer for the failed attempt (0.530917ms)
+  ✔ RED (G3): a writer whose LOG carries the claude session-limit banner routes to failover (not a plain review) (6.001708ms)
+  ✔ RED (G3): a writer that commits NOTHING (empty branch) is refused/parked — an empty branch never merges (0.325541ms)
+✔ pipeline — G3: writer result handling (6.931125ms)
+▶ pipeline — G5: reviewer-seat preflight + self-heal
+  ✔ RED (G5): a DIRTY reviewer seat parks BEFORE the reviewer spawns (0.332ms)
+  ✔ RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash (0.694125ms)
+✔ pipeline — G5: reviewer-seat preflight + self-heal (1.081333ms)
+▶ pipeline — H1: writer prompt carries the verdict-tail contract
+  ✔ RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable) (0.368666ms)
+✔ pipeline — H1: writer prompt carries the verdict-tail contract (0.399333ms)
+▶ pipeline — H2: bounded failover (avoid carries; exhaustion parks)
+  ✔ RED (H2a): always-model-unavailable on a two-entry codex chain never re-picks a rejected model; all rejected -> PARK (bounded) (0.938458ms)
+  ✔ RED (H2b): always-usage-limit across a cross-platform chain parks within a bounded child budget (no infinite loop) (4.37325ms)
+✔ pipeline — H2: bounded failover (avoid carries; exhaustion parks) (5.354625ms)
+▶ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root
+  ✔ RED (D2): the write-capable writer child runs in its SEAT cwd yet gets the MAIN /repo/.git in sandbox_workspace_write.writable_roots (0.405833ms)
+✔ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root (0.436583ms)
+▶ pipeline — D1: classification uses the transcript tail, not the body
+  ✔ RED (D1): a writer whose LOG BODY carries a usage-limit signature but whose TAIL is a clean exit-0 APPROVED is treated OK (proceeds to review, NO failover) (0.41625ms)
+  ✔ GUARD (D1): a death banner at the END of the log still classifies and routes to failover (0.416125ms)
+✔ pipeline — D1: classification uses the transcript tail, not the body (0.872208ms)
+▶ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry
+  ✔ RED (D4): after a model-unavailable relaunch onto wa2, a later BLOCKED retry re-runs wa2 (NOT the avoided wa1) — exactly one wa1 attempt (0.617334ms)
+✔ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry (0.650958ms)
+▶ pipeline — D5: failover sessionHint is the runId (no double loop- prefix)
+  ✔ RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId> (2.679125ms)
+✔ pipeline — D5: failover sessionHint is the runId (no double loop- prefix) (2.718708ms)
+▶ pipeline — D6: reviewer & merger get classify→failover like writers
+  ✖ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (1.38475ms)
+  ✖ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.846875ms)
+  ✔ GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged) (0.438708ms)
+  ✖ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.52ms)
+✖ pipeline — D6: reviewer & merger get classify→failover like writers (3.285792ms)
+▶ pipeline — D7: escalation persists to state.json
+  ✖ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.821167ms)
+✖ pipeline — D7: escalation persists to state.json (0.849958ms)
+▶ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty
+  ✖ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.375917ms)
+  ✔ GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged) (0.290292ms)
+✖ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty (0.702709ms)
+▶ pipeline — H5: state flavor + spec-digest binding
+  ✔ RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns (0.174ms)
+  ✔ RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex (0.177959ms)
+✔ pipeline — H5: state flavor + spec-digest binding (0.409833ms)
+▶ pipeline — I1: merge-receipt-gated auto-advance
+  ✔ RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park) (0.473459ms)
+  ✔ RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances (0.296125ms)
+  ✔ GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped (0.443417ms)
+  ✔ RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled (0.40125ms)
+✔ pipeline — I1: merge-receipt-gated auto-advance (1.671834ms)
+▶ pipeline — I3: unstamped legacy state is refused
+  ✔ RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns (0.14825ms)
+✔ pipeline — I3: unstamped legacy state is refused (0.170084ms)
+▶ pipeline — J1: pipeline resume
+  ✔ RED (J1a): resume transitions a PARKED run to running — the same subtask re-runs its writer, gate counters intact (no refund) (0.428625ms)
+  ✔ RED (J1b): resume refuses an ESCALATED run (exit 3, operator-only), zero spawns (0.132583ms)
+  ✔ RED (J1c): pipeline resume refuses a loop-flavored state (exit 2, flavor guard), zero spawns (0.143708ms)
+  ✔ GREEN (J1d companion): `baton loop resume` still refuses a pipeline-flavored state (exit 2), zero spawns — the boundary holds both ways (0.770042ms)
+  ✔ RED (J1e): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run (0.153667ms)
+✔ pipeline — J1: pipeline resume (1.692125ms)
+ℹ tests 94
+ℹ suites 45
+ℹ pass 89
+ℹ fail 5
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 128.847
+
+✖ failing tests:
+
+test at tests/commands/pipeline-run.test.mjs:1082:3
+✖ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (1.38475ms)
+  AssertionError [ERR_ASSERTION]: the review succeeds via re-resolution; stderr: baton pipeline run: gate 'subtask-t1-review' hit the 5-iteration cap — escalated (see /repo/.handoff/loop/ESCALATION.md)
+  
+  
+  3 !== 0
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1090:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1098:3
+✖ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.846875ms)
+  AssertionError [ERR_ASSERTION]: the merge-check succeeds via re-resolution; stderr: baton pipeline run: gate 'subtask-t1-review' hit the 5-iteration cap — escalated (see /repo/.handoff/loop/ESCALATION.md)
+  
+  
+  3 !== 0
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1105:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1126:3
+✖ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.52ms)
+  AssertionError [ERR_ASSERTION]: reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation
+  
+  3 !== 4
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1134:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 3,
+    expected: 4,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1145:3
+✖ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.821167ms)
+  AssertionError [ERR_ASSERTION]: the RAW state.json snapshot is escalated (not merely masked by journal replay)
+  + actual - expected
+  
+  + 'running'
+  - 'escalated'
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1162:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'running',
+    expected: 'escalated',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1179:3
+✖ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.375917ms)
+  AssertionError [ERR_ASSERTION]: an empty-findings escalation includes the last child’s log tail so the operator sees WHY
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1194:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: "# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n\n",
+    expected: /DISTINCTIVE_D8_TAIL_MARKER_Q9Z/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+ succeeded in 715ms:
+exec
+/bin/zsh -lc 'rg -n "function seedPipelineState|const seedPipelineState|seedPipelineState" tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+794:function seedPipelineState(io, over = {}) {
+1156:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+1225:    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+1239:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+1273:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+1292:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+1319:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+1392:    seedPipelineState(io, {
+1421:    seedPipelineState(io, {
+1436:    seedPipelineState(io, { flavor: 'loop', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'parked', parkReason: 'x' });
+
+exec
+/bin/zsh -lc "nl -ba package.json | sed -n '1,40p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	{
+     2	  "name": "@sakshamuboweja/baton",
+     3	  "version": "0.2.0",
+     4	  "description": "Usage-limit failover for AI coding sessions across Claude Code, Codex CLI, and Cursor: checkpoint, hand off, resume with remapped model roles.",
+     5	  "type": "module",
+     6	  "bin": {
+     7	    "baton": "core/bin/baton.mjs"
+     8	  },
+     9	  "engines": {
+    10	    "node": ">=20"
+    11	  },
+    12	  "files": [
+    13	    "core/",
+    14	    "adapters/",
+    15	    "templates/",
+    16	    ".claude-plugin/",
+    17	    "baton.config.json"
+    18	  ],
+    19	  "scripts": {
+    20	    "test": "node --test",
+    21	    "typecheck": "tsc --noEmit"
+    22	  },
+    23	  "keywords": [
+    24	    "claude-code",
+    25	    "codex",
+    26	    "cursor",
+    27	    "handoff",
+    28	    "failover",
+    29	    "agents"
+    30	  ],
+    31	  "author": "SakshamUboweja <ssakshamu@gmail.com>",
+    32	  "license": "MIT",
+    33	  "repository": {
+    34	    "type": "git",
+    35	    "url": "https://github.com/SakshamUboweja/baton"
+    36	  },
+    37	  "devDependencies": {
+    38	    "@types/node": "^20.14.0",
+    39	    "typescript": "^5.6.0"
+    40	  },
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '520,620p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   520	    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'no subtask merge (any seat) is issued when the attribution scan fails');
+   521	    const { state } = await loadLoopState('/repo', io);
+   522	    assert.equal(state.status, LOOP_STATUS.PARKED);
+   523	  });
+   524	});
+   525	
+   526	// ===========================================================================
+   527	describe('pipeline — worktree guard composition (preflight/postflight)', () => {
+   528	  it('(a) a DIRTY writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4', async () => {
+   529	    const git = pipelineGit({ over: { 'status --porcelain': { stdout: ' M src/x.js\n' } } });
+   530	    const io = makePipeRepo({ git, runner: undefined });
+   531	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+   532	    io.__runner = io.superviseChild;
+   533	    const code = await run(['pipeline', 'run'], io);
+   534	    assert.equal(code, 4, 'a dirty seat parks the pipeline');
+   535	    assert.equal(io.__runner.calls.length, 0, 'preflight refuses BEFORE any child spawns');
+   536	    assert.ok(!io.__git.issued(/^merge baton\//), 'no merge on a preflight refusal');
+   537	    const { state } = await loadLoopState('/repo', io);
+   538	    assert.equal(state.status, LOOP_STATUS.PARKED, 'the parked state is persisted');
+   539	  });
+   540	
+   541	  it('(b) a WRONG-branch writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4', async () => {
+   542	    const git = pipelineGit({ over: { 'rev-parse --abbrev-ref HEAD': { stdout: 'some-other-branch\n' } } });
+   543	    const io = makePipeRepo({ git, runner: undefined });
+   544	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+   545	    io.__runner = io.superviseChild;
+   546	    const code = await run(['pipeline', 'run'], io);
+   547	    assert.equal(code, 4, 'a wrong-branch seat parks the pipeline');
+   548	    assert.equal(io.__runner.calls.length, 0, 'preflight refuses BEFORE any child spawns');
+   549	    assert.ok(!io.__git.issued(/^merge baton\//), 'no merge on a preflight refusal');
+   550	    const { state } = await loadLoopState('/repo', io);
+   551	    assert.equal(state.status, LOOP_STATUS.PARKED);
+   552	  });
+   553	
+   554	  it('(c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge', async () => {
+   555	    const git = pipelineGit();
+   556	    const io = makePipeRepo({ git, runner: undefined });
+   557	    // The writer child (first spawn) moves main between preflight-capture and postflight.
+   558	    io.superviseChild = fakeRunner(io, [
+   559	      { verdict: 'APPROVED', effect: () => git.moveMain('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') },
+   560	      ...cleanSubtask(),
+   561	    ]);
+   562	    io.__runner = io.superviseChild;
+   563	    const code = await run(['pipeline', 'run'], io);
+   564	    assert.equal(code, 4, 'postflight drift parks the pipeline');
+   565	    // Exactly one child ran (the writer); postflight refuses before the reviewer.
+   566	    assert.equal(io.__runner.calls.length, 1, 'only the writer ran — no reviewer/merger after postflight refusal');
+   567	    assert.equal(reviewersOf(io.__runner).length, 0, 'no reviewer spawned');
+   568	    assert.equal(childWithModel(io.__runner, 'mg-model').length, 0, 'no merger spawned');
+   569	    assert.ok(!io.__git.issued(/^merge baton\//), 'no merge on a postflight refusal');
+   570	    const { state } = await loadLoopState('/repo', io);
+   571	    assert.equal(state.status, LOOP_STATUS.PARKED);
+   572	  });
+   573	});
+   574	
+   575	// ===========================================================================
+   576	describe('pipeline — completion', () => {
+   577	  it('both subtasks merged -> state done, exit 0; loop state + journal persisted under .handoff/loop', async () => {
+   578	    const io = makePipeRepo({ runner: undefined });
+   579	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+   580	    io.__runner = io.superviseChild;
+   581	    const code = await run(['pipeline', 'run'], io);
+   582	    assert.equal(code, 0);
+   583	    assert.equal(io.__git.matching(/^merge baton\/wt-a\/subtask-t1$/).length, 1, 'subtask 1 merged');
+   584	    assert.equal(io.__git.matching(/^merge baton\/wt-b\/subtask-t2$/).length, 1, 'subtask 2 merged');
+   585	    const { state } = await loadLoopState('/repo', io);
+   586	    assert.equal(state.status, LOOP_STATUS.DONE, 'the pipeline completed');
+   587	    assert.ok(loopFile(io, 'state.json'), 'loop state persisted');
+   588	    assert.ok(io.fs.existsSync(loopPaths('/repo').journal), 'the loop journal persisted');
+   589	  });
+   590	});
+   591	
+   592	// ===========================================================================
+   593	// G1 (A1/B1/B2) — a claude worker seat's writer child carries its model + cwd.
+   594	describe('pipeline — G1: a claude-code worker seat writer carries model + seat cwd', () => {
+   595	  // worker-b on claude-code so subtask 2's writer is a claude child.
+   596	  const CLAUDE_SEAT_CONFIG = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-b': ['claude-code/cc-writer'] } };
+   597	
+   598	  it('RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer', async () => {
+   599	    const io = makePipeRepo({ config: CLAUDE_SEAT_CONFIG, runner: undefined });
+   600	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+   601	    io.__runner = io.superviseChild;
+   602	    await run(['pipeline', 'run'], io);
+   603	    // subtask 2 writer is the write-capable claude child (command 'claude').
+   604	    const claudeWriter = io.__runner.calls.find((c) => c.command === 'claude' && argsOf(c).includes('cc-writer'));
+   605	    assert.ok(claudeWriter, 'the wt-b writer ran as a claude child on the resolved model');
+   606	    assert.equal(claudeWriter.spec.cwd, WT_B, 'the claude writer runs in its seat worktree (spec.cwd), not the supervisor cwd');
+   607	    assert.equal(valAfter(argsOf(claudeWriter), '--output-format'), 'json', 'the claude writer emits a structured result');
+   608	  });
+   609	});
+   610	
+   611	// ===========================================================================
+   612	// G2 (A2/B3) — pipeline preconditions, caps, resume, run-lock.
+   613	describe('pipeline — G2: cap validation / resume / run-lock / stale branch', () => {
+   614	  it('RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant)', async () => {
+   615	    const io = makePipeRepo({ spec: pipelineSpec({ budgets: { iterationCap: 6, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }) });
+   616	    const code = await run(['pipeline', 'run'], io);
+   617	    assert.equal(code, 2, 'a spec asking for a 6th iteration is invalid');
+   618	    assert.match(io.stderrText() + io.stdoutText(), /iterationCap|cap/i, 'the error names the cap');
+   619	    assert.equal(io.__runner.calls.length, 0, 'no child spawns for an invalid spec');
+   620	  });
+
+2026-07-19T23:02:40.683724Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '780,815p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   780	    try {
+   781	      await run(['pipeline', 'run'], io);
+   782	    } catch {
+   783	      threw = true;
+   784	    }
+   785	    assert.equal(threw, false, 'a raw-deleted seat must self-heal, not crash the supervisor');
+   786	    assert.ok(io.__git.issued(/worktree prune/), 'the stale worktree metadata was pruned during self-heal');
+   787	    assert.ok(io.__git.matching(/worktree add/).some((c) => c.argstr.includes(WT_A)), 'the raw-deleted seat was re-added');
+   788	  });
+   789	});
+   790	
+   791	// A persisted loop-state fixture. `flavor`/`specDigest` are the state-binding
+   792	// stamp (H5 design): flavor ∈ {'loop','pipeline'}; specDigest = dedupeKey of the
+   793	// driving spec (subtasks for pipeline, phases for loop).
+   794	function seedPipelineState(io, over = {}) {
+   795	  const state = {
+   796	    schema: 'baton/loop-state@1',
+   797	    runId: 'loop-seeded',
+   798	    goal: 'Ship the pipeline',
+   799	    phaseCount: 2,
+   800	    phaseIndex: 0,
+   801	    iterations: {},
+   802	    status: 'running',
+   803	    parkReason: null,
+   804	    escalation: null,
+   805	    smokeApproval: null,
+   806	    createdAt: T0,
+   807	    journalSeq: 0,
+   808	    flavor: 'pipeline',
+   809	    ...over,
+   810	  };
+   811	  io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+   812	  io.fs.writeFileSync(loopPaths('/repo').state, JSON.stringify(state, null, 2) + '\n');
+   813	  return state;
+   814	}
+   815	
+
+exec
+/bin/zsh -lc 'git diff --stat && git diff --check' in /Users/saksham/baton
+ succeeded in 0ms:
+ tests/commands/pipeline-run.test.mjs | 184 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 184 insertions(+)
+
+exec
+/bin/zsh -lc "git diff -- tests/commands/pipeline-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+index 618f3e2..e70d681 100644
+--- a/tests/commands/pipeline-run.test.mjs
++++ b/tests/commands/pipeline-run.test.mjs
+@@ -1031,6 +1031,190 @@ describe('pipeline — D5: failover sessionHint is the runId (no double loop- pr
+   });
+ });
+ 
++// ===========================================================================
++// D6 (dogfood milestone C, attempt 2) — reviewer and merger children get the
++// SAME classify→failover treatment as writers. Live: the subtask-reviewer
++// inherits the other seat's worker chain whose head was a dead model; each
++// unparseable death counted as a BLOCKED review and burned the whole gate cap.
++// A failure-class death must re-resolve the role (model-unavailable → entry
++// avoid), NOT consume a gate iteration, and park on chain exhaustion.
++describe('pipeline — D6: reviewer & merger get classify→failover like writers', () => {
++  const MU_LOG = `working…\n${MODEL_UNAVAIL}\n`;
++  const approve = () => ({ verdict: 'APPROVED', exitCode: 0 });
++  const deathMU = () => ({ verdict: 'BLOCKED', exitCode: 1, logContent: MU_LOG });
++  // A child runner keyed on the spawn's --model. handlers[model] is a function
++  // called per spawn (closures model queues); the default is APPROVED. Throws
++  // past `bound` so an unbounded re-resolution loop terminates the test RED.
++  function byModelRunner(io, handlers, { bound = 40 } = {}) {
++    const calls = [];
++    const fn = (spec, opts) => {
++      const args = (spec?.args ?? []).map(String);
++      const model = args[args.indexOf('--model') + 1];
++      calls.push({ spec, command: spec?.command, args, model });
++      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} spawns`);
++      const h = handlers[model] ?? approve;
++      const r = h();
++      if (typeof r.logContent === 'string' && opts.logPath) {
++        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
++        io.fs.writeFileSync(opts.logPath, r.logContent);
++      }
++      return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
++    };
++    fn.calls = calls;
++    return fn;
++  }
++  const reviewerModels = (runner) => reviewersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
++  const mergersOf = (runner) => runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
++  const mergerModels = (runner) => mergersOf(runner).map((c) => valAfter(argsOf(c), '--model'));
++  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
++  const mergeReceipts = (io) => {
++    const raw = io.files()[MERGES];
++    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++  };
++  // Transitions are journaled — a re-resolved death must leave NO gate-iteration
++  // event, not merely a snapshot counter that happens to read 0.
++  const gateIterationEvents = (io, gate) => {
++    const raw = io.files()[loopPaths('/repo').journal];
++    const events = typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++    return events.filter((e) => e.type === 'gate-iteration' && e.gate === gate);
++  };
++
++  it('RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE', async () => {
++    // subtask t1 uses seat a; the reviewer draws the OTHER seat's chain (worker-b).
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: approve, 'mg-model': approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the review succeeds via re-resolution; stderr: ${io.stderrText()}`);
++    assert.deepEqual(reviewerModels(runner), ['r1', 'r2'], `the dead reviewer entry re-resolved to the next; got ${JSON.stringify(reviewerModels(runner))}`);
++    const state = (await loadLoopState('/repo', io)).state;
++    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable reviewer death did NOT burn a gate iteration');
++    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the reviewer death');
++    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
++  });
++
++  it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
++    assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
++    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
++    const state = (await loadLoopState('/repo', io)).state;
++    assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable merger death did NOT burn a gate iteration');
++    assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the merger death');
++    assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
++  });
++
++  it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
++    // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
++    const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
++    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
++  });
++
++  it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
++    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
++    const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
++    io.superviseChild = runner;
++    io.__runner = runner;
++    let code = 'ran';
++    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
++    assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
++    assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
++  });
++});
++
++// ===========================================================================
++// D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
++// Live: the synthesized state spec drops budgets, so the reducer caps at its
++// default (5) while drivePipeline enforces the spec cap — the run exited 3 with
++// state.json still status 'running', escalation null.
++describe('pipeline — D7: escalation persists to state.json', () => {
++  it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
++    const subtasks = [{ id: 't1', title: 'only' }];
++    const gate = 'subtask-t1-review';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
++    // before any child spawns.
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'a capped gate escalates (exit 3)');
++    // The RAW snapshot must itself be escalated — loadLoopState replays the
++    // journal over the snapshot, which could MASK a state.json left 'running'.
++    const rawState = JSON.parse(io.files()[loopPaths('/repo').state]);
++    assert.equal(rawState.status, 'escalated', 'the RAW state.json snapshot is escalated (not merely masked by journal replay)');
++    assert.ok(rawState.escalation && rawState.escalation.gate === gate, `the raw snapshot escalation names the gate; got ${JSON.stringify(rawState.escalation)}`);
++    // And the loaded view agrees.
++    const { state } = await loadLoopState('/repo', io);
++    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
++    assert.ok(state.escalation && state.escalation.gate === gate, `the loaded escalation names the gate; got ${JSON.stringify(state.escalation)}`);
++  });
++});
++
++// ===========================================================================
++// D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
++// records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
++// the operator is not handed a blank escalation. The findings-present path stays
++// byte-compatible.
++describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
++  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
++
++  it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
++    const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, [
++      { verdict: 'APPROVED', exitCode: 0 }, // writer passes
++      { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
++    ]);
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'the gate escalates at the cap');
++    const esc = io.files()[ESC];
++    assert.ok(esc, 'ESCALATION.md was written');
++    assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
++  });
++
++  it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
++    const finding = 'CONCRETE_FINDING_TEXT_D8';
++    const io = makePipeRepo({
++      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
++      runner: undefined,
++    });
++    io.superviseChild = fakeRunner(io, [
++      { verdict: 'APPROVED', exitCode: 0 }, // writer
++      { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
++    ]);
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 3, 'the gate escalates at the cap');
++    const esc = io.files()[ESC];
++    // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
++    // format change OR an appended log tail on THIS path fails the guard.
++    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
++    assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
++  });
++});
++
+ // ===========================================================================
+ // H5 (B4) — state flavor + spec binding across loop/pipeline.
+ describe('pipeline — H5: state flavor + spec-digest binding', () => {
+
+2026-07-19T23:02:46.131202Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+Verified the iteration-4 closures. D6a/D6b now check both snapshot counter and raw journal absence for `gate-iteration` events at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1092) and [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1108); the helper matches the journal’s top-level `type`/`gate` shape from [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:148). D7 now parses raw `state.json` before the loaded replay view at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1161). D8’s present-findings guard is byte-exact at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1213).
+
+Allowed validation: `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` produced 94 tests, 89 pass, 5 fail, with the five failures on the intended behavioral assertions at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1090), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1105), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1134), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1162), and [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1194). `npm run typecheck` exited 0; the script is [package.json](/Users/saksham/baton/package.json:21).
+
+VERDICT: APPROVED
+FINDINGS:
+tokens used
+64,812
+Verified the iteration-4 closures. D6a/D6b now check both snapshot counter and raw journal absence for `gate-iteration` events at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1092) and [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1108); the helper matches the journal’s top-level `type`/`gate` shape from [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:148). D7 now parses raw `state.json` before the loaded replay view at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1161). D8’s present-findings guard is byte-exact at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1213).
+
+Allowed validation: `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` produced 94 tests, 89 pass, 5 fail, with the five failures on the intended behavioral assertions at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1090), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1105), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1134), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1162), and [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1194). `npm run typecheck` exited 0; the script is [package.json](/Users/saksham/baton/package.json:21).
+
+VERDICT: APPROVED
+FINDINGS:

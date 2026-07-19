@@ -25,6 +25,7 @@ export const LOOP_STATUS = Object.freeze({
 export const LOOP_EVENT = Object.freeze({
   PHASE_ADVANCE: 'phase-advance',
   GATE_ITERATION: 'gate-iteration',
+  ESCALATE: 'escalate',
   PARK: 'park',
   RESUME: 'resume',
   SMOKE_AWAIT: 'smoke-await',
@@ -91,6 +92,16 @@ export function applyLoopEvent(state, ev) {
         return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: current } };
       }
       return { ...state, iterations: { ...state.iterations, [gate]: current + 1 } };
+    }
+    case LOOP_EVENT.ESCALATE: {
+      // Supervisors enforce spec caps LOWER than the hard invariant; this
+      // event persists that escalation (dogfood finding D7: a cap-3 pipeline
+      // exit left state.json 'running' because only the reducer's own 5-cap
+      // could flip the status). Idempotent — an already-escalated run keeps
+      // its original record.
+      if (state.status === LOOP_STATUS.ESCALATED) return state;
+      const gate = String(ev.gate);
+      return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: state.iterations?.[gate] ?? 0 } };
     }
     case LOOP_EVENT.PARK:
       return { ...state, status: LOOP_STATUS.PARKED, parkReason: ev.reason ?? null };

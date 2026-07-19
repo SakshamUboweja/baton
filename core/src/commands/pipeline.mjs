@@ -185,6 +185,27 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     io.stderr.write(`baton pipeline run: parked — ${reason}\n`);
     return EXIT_PARKED;
   };
+  /**
+   * Persist the escalation (D7 — the exit-3 path must leave state.json
+   * escalated, not 'running') and write ESCALATION.md. When the findings are
+   * empty (an unparseable child death reached the cap), the operator gets the
+   * last child's log tail instead of a blank report (D8); the findings-present
+   * format is byte-stable.
+   * @param {string} gateId @param {string} findingsText @param {number} capN
+   */
+  const escalate = async (gateId, findingsText, capN) => {
+    await transition({ type: LOOP_EVENT.ESCALATE, gate: gateId });
+    let body = `# Pipeline escalation\n\nGate '${gateId}' exhausted its ${capN}-iteration cap.\nLast findings:\n\n${findingsText}\n`;
+    if (findingsText === '') {
+      const tail =
+        lastChildLogPath && io.fs.existsSync(lastChildLogPath)
+          ? transcriptTail(String(io.fs.readFileSync(lastChildLogPath, 'utf8')), 2048)
+          : '(no child log recorded)';
+      body += `\n(The last child produced no parseable findings — its log tail follows.)\n\nLast child log tail:\n\n${tail}\n`;
+    }
+    atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, body);
+    return EXIT_ESCALATED;
+  };
 
   // `pipeline resume` — a PARK is resumable; an escalation is operator-only.
   // Mirrors `loop resume` (G6/J1): the RESUME transition preserves the loaded
@@ -211,6 +232,8 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
   const runner = io.superviseChild ?? superviseChild;
   const seats = worktreePaths(root).seats;
   let childSeq = 0;
+  /** @type {string | null} */
+  let lastChildLogPath = null;
 
   await setupWorktrees(root, io);
 
@@ -243,6 +266,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     // write-capable children need it inside their sandbox to commit (D2);
     // buildChildArgv drops it for read-only roles.
     const childSpec = buildChildArgv(assignment, prompt, { root: seatPath, gitDir: `${root}/.git` });
+    lastChildLogPath = logPath;
     const result = await runner(childSpec, {
       timeoutMs,
       graceMs: 10_000,
@@ -333,16 +357,61 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     let subtaskAvoidEntries = [];
     /** @type {any | null} */
     let forcedWriter = null;
+
+    /**
+     * Spawn a verdict child (reviewer/merger) with the writer's death
+     * discipline (D6): a failure-class result re-resolves the role from its
+     * chain (entry avoidance carried on subtaskAvoidEntries) and relaunches
+     * through the bounded failover — a death NEVER reaches the gate; only a
+     * real verdict returns.
+     * @param {{roleChain: string, childRole: string, prompt: string, seatPath: string, label: string, subtaskId: string, roleLabel: string}} c
+     * @returns {Promise<{result?: any, parked?: number}>}
+     */
+    const superviseVerdictChild = async (c) => {
+      let attempt = 0;
+      /** @type {any | null} */
+      let forced = null;
+      const chainLen = Array.isArray(config?.roles?.[c.roleChain]) ? config.roles[c.roleChain].length : 1;
+      for (;;) {
+        const resolved = forced ?? resolveOne(c.roleChain, subtaskAvoidEntries);
+        if (!resolved) return { parked: await park(`no eligible ${c.roleLabel} remains for subtask '${c.subtaskId}' (every chain entry is avoided)`) };
+        forced = null;
+        const asg = { ...resolved, role: c.childRole };
+        const result = await spawn(asg, c.prompt, c.seatPath, c.label);
+        const log = result.logPath && io.fs.existsSync(result.logPath) ? io.fs.readFileSync(result.logPath, 'utf8') : '';
+        const cls = classify({ text: transcriptTail(log), exitCode: result.exitCode ?? 0, platform: asg.platform, table }).class;
+        if (cls === 'ok') return { result };
+        attempt += 1;
+        if (attempt > chainLen) {
+          return { parked: await park(`subtask '${c.subtaskId}' exhausted its ${c.roleLabel} failover budget (${chainLen} chain entr${chainLen === 1 ? 'y' : 'ies'}, ${attempt} deaths) — parked instead of looping`) };
+        }
+        const decision = await runFailover({
+          root,
+          io,
+          config,
+          role: c.roleChain,
+          assignment: asg,
+          transcript: log,
+          exitCode: result.exitCode ?? 1,
+          sessionHint: state.runId,
+          probes: null,
+          avoid: [],
+          avoidEntries: subtaskAvoidEntries,
+          attempt,
+          loopState: { runId: state.runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+        });
+        if (decision.action === 'park') return { parked: await park(`${c.roleLabel} failover parked subtask '${c.subtaskId}': ${decision.reason}`) };
+        if (decision.action === 'relaunch') {
+          if (Array.isArray(decision.avoidEntries)) subtaskAvoidEntries = decision.avoidEntries;
+          forced = { ...decision.assignment, role: c.childRole };
+        }
+      }
+    };
+
     while (!merged) {
       if ((state.iterations?.[gate] ?? 0) >= cap) {
-        await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
-        atomicWriteText(
-          io.fs,
-          `${p.dir}/ESCALATION.md`,
-          `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`,
-        );
         io.stderr.write(`baton pipeline run: gate '${gate}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
-        return EXIT_ESCALATED;
+        return escalate(gate, findings, cap);
       }
 
       // Writer (write-capable, its own seat). Every resolution — including a
@@ -404,9 +473,8 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       if (writerResult.verdict !== 'APPROVED' && writerResult.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(writerResult.findings ?? '');
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
-        if (after.status === LOOP_STATUS.ESCALATED) {
-          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
-          return EXIT_ESCALATED;
+        if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
+          return escalate(gate, findings, cap);
         }
         continue; // the writer retries; no reviewer sees a failed attempt
       }
@@ -435,13 +503,25 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         `Review the change on ${branch} against main from the ${other} seat (fresh context). Run: git diff main..${branch} (and git log main..${branch}) to see exactly what changed — branch refs are shared across worktrees.`,
         "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ].join('\n\n');
-      const review = await spawn({ ...reviewerModel, role: 'subtask-reviewer' }, reviewPrompt, seats[other], `${st.id}-review`);
-      if (review.verdict !== 'APPROVED' && review.verdict !== 'APPROVED_WITH_NOTES') {
-        findings = String(review.findings ?? '');
+      // A reviewer DEATH is never a review verdict (dogfood finding D6): a
+      // failure-class result re-resolves the role (entry avoidance carried on
+      // subtaskAvoidEntries) and relaunches, bounded by the chain length —
+      // only a real verdict reaches the gate.
+      const review = await superviseVerdictChild({
+        roleChain: `worker-${other}`,
+        childRole: 'subtask-reviewer',
+        prompt: reviewPrompt,
+        seatPath: seats[other],
+        label: `${st.id}-review`,
+        subtaskId: st.id,
+        roleLabel: 'reviewer',
+      });
+      if (review.parked !== undefined) return review.parked;
+      if (review.result.verdict !== 'APPROVED' && review.result.verdict !== 'APPROVED_WITH_NOTES') {
+        findings = String(review.result.findings ?? '');
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
-        if (after.status === LOOP_STATUS.ESCALATED) {
-          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
-          return EXIT_ESCALATED;
+        if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
+          return escalate(gate, findings, cap);
         }
         continue;
       }
@@ -451,13 +531,21 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         `You are the merger for subtask '${st.id}'. Adversarially re-check ${branch} against main before it merges.`,
         "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ].join('\n\n');
-      const mergerVerdict = await spawn({ ...mergerModel, role: 'merger' }, mergerPrompt, root, `${st.id}-merge-check`);
-      if (mergerVerdict.verdict !== 'APPROVED' && mergerVerdict.verdict !== 'APPROVED_WITH_NOTES') {
-        findings = String(mergerVerdict.findings ?? '');
+      const mergerCheck = await superviseVerdictChild({
+        roleChain: 'merger',
+        childRole: 'merger',
+        prompt: mergerPrompt,
+        seatPath: root,
+        label: `${st.id}-merge-check`,
+        subtaskId: st.id,
+        roleLabel: 'merger',
+      });
+      if (mergerCheck.parked !== undefined) return mergerCheck.parked;
+      if (mergerCheck.result.verdict !== 'APPROVED' && mergerCheck.result.verdict !== 'APPROVED_WITH_NOTES') {
+        findings = String(mergerCheck.result.findings ?? '');
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
-        if (after.status === LOOP_STATUS.ESCALATED) {
-          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
-          return EXIT_ESCALATED;
+        if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
+          return escalate(gate, findings, cap);
         }
         continue;
       }
