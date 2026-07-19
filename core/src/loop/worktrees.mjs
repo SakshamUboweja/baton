@@ -240,8 +240,21 @@ export async function teardownWorktrees(root, io) {
     const entry = listed.find((e) => e.path === p.seats[seat]);
     if (!entry) continue;
     await git(io, root, ['worktree', 'remove', '--force', p.seats[seat]]);
-    if (entry.branch && WORKTREE_BRANCH_RE.test(entry.branch)) {
-      await git(io, root, ['branch', '-D', entry.branch]);
+    // Delete the seat's CURRENT branch and its setup base branch — a seat
+    // that moved on to subtask branches orphans its base otherwise
+    // (acceptance constraint 5: teardown leaves a plain git repo). Only
+    // namespaced branches are ever deleted.
+    /** @type {Set<string>} */
+    const toDelete = new Set();
+    if (entry.branch && WORKTREE_BRANCH_RE.test(entry.branch)) toDelete.add(entry.branch);
+    toDelete.add(seatBranch(seat));
+    for (const branch of toDelete) {
+      if (!WORKTREE_BRANCH_RE.test(branch)) continue;
+      try {
+        await git(io, root, ['branch', '-D', branch]);
+      } catch {
+        // Already gone (current === base, or deleted earlier) — fine.
+      }
     }
     removed.push(seat);
   }

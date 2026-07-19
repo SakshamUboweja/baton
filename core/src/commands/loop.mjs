@@ -317,7 +317,12 @@ async function runLoop(flags, io) {
             return EXIT_PARKED;
           }
           if (decision.action === 'relaunch') {
-            if (decision.class === 'usage-limit') avoid = avoid.includes(assignment.platform) ? avoid : [...avoid, assignment.platform];
+            // Platform avoidance is PER-DEATH, not cumulative: runFailover
+            // already avoided the just-died platform when it resolved the
+            // relaunch. Accumulating here would exhaust every platform on a
+            // chained A→B→A failover and park instead of returning to A
+            // (acceptance constraint 2). Entry-level avoidance (dead MODELS)
+            // does accumulate — a rejected model stays rejected.
             if (Array.isArray(decision.avoidEntries)) avoidEntries = decision.avoidEntries;
             forcedAssignment = { ...decision.assignment, role: phase.role };
             forcedPrompt = typeof decision.prompt === 'string' && decision.prompt.length > 0 ? decision.prompt : null;
