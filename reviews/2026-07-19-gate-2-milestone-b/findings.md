@@ -173,3 +173,37 @@ findings take the higher severity):
 Fold all five now (I4/I5 are one-line-cheap; I1–I3 sit on the crash/recovery
 acceptance constraint). TDD flow: test-author pins → verifier → implement →
 Gate-2 iteration 4 (cap 5, both reviewers at 3).
+
+# Iteration 4 (post-fold c986afb) — reviewer-a APPROVED; reviewer-b BLOCKED
+
+Reviewer-a: APPROVED, zero findings (all I-dispositions verified; typecheck
++ targeted suites green in its sandbox). Reviewer-b: BLOCKED, 1 major +
+1 minor, both in the fold's own recovery flow; all five I-dispositions
+audited GENUINE. Iteration 5 is reviewer-b-only (re-review by the raising
+reviewer) and FINAL under the 5-cap.
+
+## Major
+- **J1 (B1)** — every pipeline park is terminal: `baton pipeline` has no
+  resume subcommand, drivePipeline refuses PARKED unconditionally, and
+  `baton loop resume` refuses flavor 'pipeline' — yet the I1a stale-branch
+  park instructs "delete the branch and resume", and the documented
+  fallback (archive .handoff/loop) discards merges.ndjson, so surviving
+  merged branches re-park as stale and a re-init refunds G2's cap counters.
+  Fix: `baton pipeline resume` (PARKED-only RESUME transition,
+  flavor-guarded, mirroring G6's loop resume); correct the I1a message; pin
+  park → resume → the same subtask re-runs with cap counters intact.
+
+## Minor
+- **J2 (B2)** — a crash between mergeSubtask succeeding and the receipt
+  append resumes into the I1a park whose message misdiagnoses merged work
+  as "a writer likely crashed before committing", and whose "delete the
+  branch" step fails while the branch is checked out in the writer's seat.
+  Fix: hedge the message (pre-commit crash OR merged-without-receipt;
+  point the operator at `git log main..<branch>`) and include the
+  seat-checkout step in the remediation.
+
+## Disposition plan
+Fold both now (J1 via TDD pins; J2 rides along as message/remediation
+wording pinned in the same pass). Then reviewer-b iteration 5 — FINAL: any
+iteration-5 BLOCK hard-stops the gate and escalates the outstanding
+findings to Saksham per the 5-cap rule.
