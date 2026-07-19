@@ -66,8 +66,9 @@ export async function cmdPipeline(args, io) {
 
   const sub = positionals[0];
   if (sub === undefined) return usageError(io, flags, 'pipeline', 'a subcommand is required — try: baton pipeline run');
-  if (sub !== 'run') return usageError(io, flags, 'pipeline', `unknown subcommand '${sub}' (supported: run)`);
+  if (sub !== 'run' && sub !== 'resume') return usageError(io, flags, 'pipeline', `unknown subcommand '${sub}' (supported: run, resume)`);
   if (positionals.length > 1) return usageError(io, flags, 'pipeline', `unexpected argument '${positionals[1]}'`);
+  if (sub === 'resume') flags.__resume = true;
 
   return runPipeline(flags, io);
 }
@@ -167,18 +168,6 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
     }
   }
-  if (state.status === LOOP_STATUS.ESCALATED) {
-    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
-    return EXIT_ESCALATED;
-  }
-  if (state.status === LOOP_STATUS.PARKED) {
-    io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'}\n`);
-    return EXIT_PARKED;
-  }
-  const runner = io.superviseChild ?? superviseChild;
-  const seats = worktreePaths(root).seats;
-  let childSeq = 0;
-
   const transition = async (/** @type {any} */ ev) => {
     const next = applyLoopEvent(state, ev);
     const seq = await appendLoopEvent(root, ev, io);
@@ -191,6 +180,32 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     io.stderr.write(`baton pipeline run: parked — ${reason}\n`);
     return EXIT_PARKED;
   };
+
+  // `pipeline resume` — a PARK is resumable; an escalation is operator-only.
+  // Mirrors `loop resume` (G6/J1): the RESUME transition preserves the loaded
+  // state's cap counters — resuming never refunds a gate.
+  if (flags.__resume === true) {
+    if (state.status === LOOP_STATUS.ESCALATED) {
+      io.stderr.write(`baton pipeline resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+      return EXIT_ESCALATED;
+    }
+    if (state.status === LOOP_STATUS.PARKED) {
+      await transition({ type: LOOP_EVENT.RESUME });
+      io.stdout.write('baton pipeline resume: the parked run is running again\n');
+    }
+  }
+
+  if (state.status === LOOP_STATUS.ESCALATED) {
+    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+    return EXIT_ESCALATED;
+  }
+  if (state.status === LOOP_STATUS.PARKED) {
+    io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton pipeline resume)\n`);
+    return EXIT_PARKED;
+  }
+  const runner = io.superviseChild ?? superviseChild;
+  const seats = worktreePaths(root).seats;
+  let childSeq = 0;
 
   await setupWorktrees(root, io);
 
@@ -277,7 +292,9 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
         continue;
       }
-      return park(`subtask '${st.id}' has a stale branch '${branch}' sitting at main's tip with no merge receipt — a writer likely crashed before committing; delete the branch and resume`);
+      return park(
+        `subtask '${st.id}' has a stale branch '${branch}' at main's tip with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
+      );
     }
 
     const writerAssignment = resolveOne(`worker-${seat}`);

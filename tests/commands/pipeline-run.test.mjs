@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { run } from '../../core/src/cli.mjs';
-import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT } from '../../core/src/loop/state.mjs';
 import { dedupeKey } from '../../core/src/util/ids.mjs';
 
 // ---------------------------------------------------------------------------
@@ -959,8 +959,17 @@ describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
 
     const code = await run(['pipeline', 'run'], io);
     assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
-    assert.match(io.stderrText() + io.stdoutText(), /stale/i, 'the park names the stale branch');
+    const out = io.stderrText() + io.stdoutText();
+    assert.match(out, /stale/i, 'the park names the stale branch');
     assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
+    // J2: the message must hedge BOTH causes — each pinned SEPARATELY so a
+    // single-cause misdiagnosis cannot pass — point at the range to inspect, and
+    // account for the branch still being checked out in the writer seat (a bare
+    // "delete the branch" fails while it is checked out).
+    assert.match(out, /crashed before committing|before.*first commit|pre-?commit/i, 'names the pre-commit-crash cause');
+    assert.match(out, /merged without a receipt|merge.*receipt.*missing|not.*recorded/i, 'ALSO names the merged-without-receipt cause (no single-cause misdiagnosis)');
+    assert.match(out, /git log main\.\.baton\/wt-a\/subtask-t1/, 'points at `git log main..<branch>` to disambiguate');
+    assert.match(out, /seat|worktree|checked out|checkout/i, 'remediation accounts for the branch still being checked out in the writer seat');
   });
 
   it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
@@ -1030,6 +1039,91 @@ describe('pipeline — I3: unstamped legacy state is refused', () => {
     assert.equal(code, 2, 'an unstamped state is refused, not resumed');
     assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
     assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+  });
+});
+
+// ===========================================================================
+// J1 (B1) — `baton pipeline resume` mirrors G6's loop resume: PARKED -> running
+// (cap counters intact), ESCALATED refused, flavor-guarded.
+describe('pipeline — J1: pipeline resume', () => {
+  const gate = 'subtask-t1-review';
+
+  it('RED (J1a): resume transitions a PARKED run to running — the same subtask re-runs its writer, gate counters intact (no refund)', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    // A parked run mid-subtask t1 with the gate already iterated 3 times.
+    seedPipelineState(io, {
+      flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1,
+      status: 'parked', parkReason: 'operator paused', iterations: { [gate]: 3 },
+    });
+
+    const code = await run(['pipeline', 'resume'], io);
+    assert.notEqual(code, 2, 'resume is a recognized subcommand (not a usage error)');
+    const writers = writersOf(io.__runner);
+    assert.ok(writers.length >= 1, 'resume re-runs the parked subtask — its writer spawns again');
+    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the re-run writer is t1 in wt-a (not skipped)');
+    assert.ok((await loadLoopState('/repo', io)).state.iterations[gate] >= 3, 'the gate cap counter survives resume — no refund');
+    // J1a: resume must pin SUCCESSFUL continuation of the clean case, not merely
+    // "not-unknown + writer respawns". The clean subtask completes: exit 0, the
+    // run reaches DONE, and the journal records a RESUME event BEFORE completion.
+    assert.equal(code, 0, `resume completes the clean subtask; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed pipeline reaches DONE');
+    const journal = (io.files()[loopPaths('/repo').journal] ?? '')
+      .split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+    const resumeIdx = journal.findIndex((e) => e.type === LOOP_EVENT.RESUME);
+    assert.ok(resumeIdx >= 0, 'the resume is journaled (a RESUME event is appended)');
+    const advanceIdx = journal.findIndex((e) => e.type === LOOP_EVENT.PHASE_ADVANCE);
+    assert.ok(advanceIdx > resumeIdx, 'the RESUME event precedes the phase-advance that completes the run');
+  });
+
+  it('RED (J1b): resume refuses an ESCALATED run (exit 3, operator-only), zero spawns', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, {
+      flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1,
+      status: 'escalated', escalation: { gate, iteration: 5 },
+    });
+    const code = await run(['pipeline', 'resume'], io);
+    assert.equal(code, 3, 'an escalated run cannot be resumed (operator-only)');
+    assert.equal(io.__runner.calls.length, 0, 'resume never spawns on an escalated run');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.ESCALATED, 'the run stays escalated');
+  });
+
+  it('RED (J1c): pipeline resume refuses a loop-flavored state (exit 2, flavor guard), zero spawns', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'loop', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'parked', parkReason: 'x' });
+    const code = await run(['pipeline', 'resume'], io);
+    assert.equal(code, 2, 'a loop-flavored state cannot be resumed by pipeline');
+    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  });
+
+  it('GREEN (J1d companion): `baton loop resume` still refuses a pipeline-flavored state (exit 2), zero spawns — the boundary holds both ways', async () => {
+    // A loop repo (loop.json with phases) whose state was stamped by a pipeline run.
+    const loopJson = { schema: 'baton/loop@1', goal: 'boundary', constraints: [], budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 }, phases: [{ id: 'plan', role: 'planner' }, { id: 'gate-1', role: 'plan-reviewer' }] };
+    const io = makePipeRepo({ spec: loopJson, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+    io.fs.writeFileSync(
+      loopPaths('/repo').state,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'x', goal: 'boundary', phaseCount: 2, phaseIndex: 0,
+        iterations: {}, status: 'parked', parkReason: 'x', escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        flavor: 'pipeline', specDigest: dedupeKey(loopJson.phases),
+      }, null, 2) + '\n',
+    );
+    const code = await run(['loop', 'resume'], io);
+    assert.equal(code, 2, 'loop resume refuses a pipeline-flavored state');
+    assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned across the flavor boundary');
   });
 });
 
