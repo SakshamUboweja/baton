@@ -10,6 +10,7 @@ import { cmdLoop } from '../../core/src/commands/loop.mjs';
 import { loadBundle, bundlePaths } from '../../core/src/bundle/store.mjs';
 import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
 import { teardownWorktrees } from '../../core/src/loop/worktrees.mjs';
+import { dedupeKey } from '../../core/src/util/ids.mjs';
 
 // ---------------------------------------------------------------------------
 // RED/acceptance — real-fs, real-git end-to-end proofs for the Layer-2/3 loop &
@@ -306,6 +307,10 @@ describe('e2e — supervisor-death recovery via JOURNAL REPLAY on real fs (const
       smokeApproval: null,
       createdAt: NOW,
       journalSeq: 0,
+      // I3 reconciliation: a crashed post-fold run carries the stamp from init,
+      // so the resume is not refused as unstamped legacy.
+      flavor: 'loop',
+      specDigest: dedupeKey(spec.phases),
     };
     nodeFs.writeFileSync(p.state, JSON.stringify(staleSnapshot, null, 2) + '\n');
     // JOURNAL ahead of the snapshot: a committed phase-advance (seq 1, > snapshot's

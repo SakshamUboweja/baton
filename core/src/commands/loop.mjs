@@ -145,6 +145,14 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     if (tryExclusive()) {
+      // A fresh acquisition owns a fresh child registry: prior invocations'
+      // start/retire records are truncated so a stale retire can never mask a
+      // later in-flight child that reuses the same childId (I2).
+      try {
+        if (io.fs.existsSync(childrenPath)) io.fs.unlinkSync(childrenPath);
+      } catch {
+        // Best effort.
+      }
       return {
         ok: true,
         release: () => {
@@ -158,7 +166,9 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
     }
     const existing = safeReadJson(io.fs, lockPath);
     const other = existing.ok ? existing.value : null;
-    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid) : true;
+    // Liveness verifies the (pid, startTime) PAIR — a recycled pid without the
+    // recorded start time is a dead owner, not a live supervisor (I5).
+    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid, other.startTime) : true;
     const sameProcess = other && other.pid === io.pid && other.startTime === io.startTime;
     if (!sameProcess && (!other || other.host !== io.host || alive)) {
       io.stderr.write(`baton ${cmdLabel}: another supervisor (pid ${other?.pid ?? 'unknown'} on ${other?.host ?? 'unknown'}, run ${other?.runId ?? '?'}) holds the run lock — refusing a second supervisor\n`);
@@ -168,25 +178,32 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
     // child groups BEFORE anything else runs, then reclaim.
     if (io.fs.existsSync(childrenPath)) {
       const lines = String(io.fs.readFileSync(childrenPath, 'utf8')).split('\n').filter((l) => l.trim() !== '');
-      /** @type {Map<string, any>} */
-      const starts = new Map();
-      const retired = new Set();
+      // Match retires to starts IN ORDER per childId — a resumed invocation
+      // reuses childIds, and a prior run's retire must never mask the newer
+      // in-flight start of the same id (I2). Whatever start remains unmatched
+      // is genuinely in-flight.
+      /** @type {Map<string, any[]>} */
+      const inflight = new Map();
       for (const line of lines) {
         try {
           const rec = JSON.parse(line);
-          if (typeof rec?.endedAt === 'string') retired.add(rec.childId);
-          else if (typeof rec?.pgid === 'number') starts.set(rec.childId, rec);
+          if (typeof rec?.endedAt === 'string') inflight.get(rec.childId)?.shift();
+          else if (typeof rec?.pgid === 'number') {
+            if (!inflight.has(rec.childId)) inflight.set(rec.childId, []);
+            inflight.get(rec.childId)?.push(rec);
+          }
         } catch {
           // A torn record is unreapable — skip it.
         }
       }
-      // Kill ONLY genuinely in-flight children (start with no retire): a
-      // retired child's pgid may have been recycled by an unrelated live
-      // process — killing it would be a pid-reuse casualty (H3).
-      for (const [childId, rec] of starts) {
-        if (retired.has(childId)) continue;
-        if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
-          if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+      // Kill ONLY genuinely in-flight children (start with no matching
+      // retire): a retired child's pgid may have been recycled by an
+      // unrelated live process — killing it would be a pid-reuse casualty (H3).
+      for (const recs of inflight.values()) {
+        for (const rec of recs) {
+          if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+          }
         }
       }
       try {
@@ -240,7 +257,9 @@ async function runLoop(flags, io) {
   if (lock.ok !== true) return lock.code;
 
   // Load or initialize the run state — stamped with {flavor, specDigest} so
-  // cross-flavor or changed-spec resumes refuse instead of misaligning (H5).
+  // cross-flavor, changed-spec, or pre-stamp resumes refuse instead of
+  // misaligning (H5 + I3). These refusals release the lock explicitly — an
+  // early return here must not leave supervisor.lock behind (I4).
   const specDigest = dedupeKey(spec.phases);
   let { state } = await loadLoopState(root, io);
   if (state === null) {
@@ -248,9 +267,15 @@ async function runLoop(flags, io) {
     await writeLoopState(root, state, io);
   } else {
     if (typeof state.flavor === 'string' && state.flavor !== 'loop') {
+      lock.release();
       return usageError(io, flags, 'loop', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a loop (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
     }
-    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
+    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+      lock.release();
+      return usageError(io, flags, 'loop', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+    }
+    if (state.specDigest !== specDigest) {
+      lock.release();
       return usageError(io, flags, 'loop', 'loop.json phases changed since this run started (spec digest mismatch) — resuming would misalign the phase position; archive .handoff/loop to start fresh');
     }
   }

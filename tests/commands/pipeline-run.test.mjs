@@ -910,26 +910,126 @@ describe('pipeline — H5: state flavor + spec-digest binding', () => {
 });
 
 // ===========================================================================
-// H7 (B7) — a crash between merge and PHASE_ADVANCE advances, not empty-park.
-describe('pipeline — H7: an already-merged subtask advances on resume (no empty-branch park)', () => {
-  it('RED (H7): a resumed subtask whose branch is already an ancestor of main ADVANCES (no writer, no empty-branch park)', async () => {
+// I1 (A1/B1) — auto-advance requires a supervisor-owned MERGE RECEIPT, not just
+// is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
+// must PARK, not silently skip the subtask.
+//
+// Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
+// one line per merged subtask `{ subtaskId, branch, mergedAt }`. Auto-advance on
+// resume requires is-ancestor(branch, main) AND a receipt for that subtask.
+describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
+  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  const seedReceipt = (io, subtaskId, branch) => {
+    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId, branch, mergedAt: T0 }) + '\n');
+  };
+  const receipts = (io) => {
+    const raw = io.files()[MERGES];
+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  };
+
+  it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
     const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
-    // t1's branch is already merged: `merge-base --is-ancestor` exits 0 AND
-    // `log main..t1` is empty; t2 is a normal, unmerged subtask.
+    // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
     const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
     const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
     io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
     io.__runner = io.superviseChild;
-    // A crash left the run at phaseIndex 0 (t1 merged but not advanced).
     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1');
 
     const code = await run(['pipeline', 'run'], io);
-    assert.equal(code, 0, `an already-merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
-    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge/i, 'the already-merged subtask is NOT mistaken for an empty branch');
-    // t1 (seat a) is skipped — the first writer is t2's, in wt-b.
+    assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
     const writers = writersOf(io.__runner);
     assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
-    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as already merged and skipped');
+    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
+  });
+
+  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+    // t1's branch is empty at main's tip: is-ancestor true, empty main..t1 — but
+    // NO merge receipt (the writer crashed before its first commit).
+    const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+    // No receipt seeded.
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+    assert.match(io.stderrText() + io.stdoutText(), /stale/i, 'the park names the stale branch');
+    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
+  });
+
+  it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
+    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+    // A receipt exists for t1, but the branch is NOT an ancestor of main (the
+    // merge did not actually land — e.g. main was rewound). A receipt-ONLY
+    // advance would skip t1; the required conjunction re-runs it.
+    const git = pipelineGit({ mergedBranches: [] }); // is-ancestor FALSE for every branch
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the run completes by re-running t1; stderr: ${io.stderrText()}`);
+    const writers = writersOf(io.__runner);
+    assert.ok(writers.length >= 1, 'a writer ran');
+    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
+  });
+
+  it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+
+    // Ordering hook: at each phase-advance journal write, capture whether the t1
+    // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
+    const journalPath = `${loopPaths('/repo').dir}/journal.ndjson`;
+    const receiptAtAdvance = [];
+    const realAppend = io.fs.appendFileSync.bind(io.fs);
+    io.fs.appendFileSync = (/** @type {any} */ path, /** @type {any} */ data) => {
+      if (String(path) === journalPath && /"type":"phase-advance"/.test(String(data))) {
+        receiptAtAdvance.push(receipts(io).some((r) => r.subtaskId === 't1'));
+      }
+      return realAppend(path, data);
+    };
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0);
+    const rec = receipts(io).find((r) => r.subtaskId === 't1');
+    assert.ok(rec, 'a merge receipt is persisted after the subtask merges');
+    assert.equal(rec.branch, 'baton/wt-a/subtask-t1', 'the receipt names the merged branch');
+    assert.ok(typeof rec.mergedAt === 'string' && rec.mergedAt.length > 0, 'the receipt records mergedAt');
+    assert.ok(receiptAtAdvance.length >= 1 && receiptAtAdvance.every(Boolean), 'the receipt is durable on disk BEFORE the phase advance is journaled (crash-safe)');
+  });
+});
+
+// ===========================================================================
+// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
+// pipeline run, with the archive instruction, zero spawns.
+describe('pipeline — I3: unstamped legacy state is refused', () => {
+  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+    io.fs.writeFileSync(
+      loopPaths('/repo').state,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the pipeline', phaseCount: 2, phaseIndex: 1,
+        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        // NO flavor, NO specDigest.
+      }, null, 2) + '\n',
+    );
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 2, 'an unstamped state is refused, not resumed');
+    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
   });
 });
 

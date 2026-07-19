@@ -426,6 +426,9 @@ describe('loop run — recovery from a mid-run crash', () => {
       smokeApproval: null,
       createdAt: T0,
       journalSeq: 1,
+      // I3 reconciliation: stamped so the resume is not refused as unstamped.
+      flavor: 'loop',
+      specDigest: dedupeKey(spec.phases),
     };
     io.fs.writeFileSync(p.state, JSON.stringify(midState, null, 2) + '\n');
     io.fs.writeFileSync(p.journal, JSON.stringify({ seq: 1, ts: T0, type: 'phase-advance' }) + '\n');
@@ -599,6 +602,9 @@ describe('loop run — resume (G6)', () => {
     smokeApproval: null,
     createdAt: T0,
     journalSeq: 0,
+    // I3 reconciliation: stamped so a valid resume is not refused as unstamped.
+    flavor: 'loop',
+    specDigest: dedupeKey(loopSpec().phases),
     ...over,
   });
 
@@ -711,6 +717,7 @@ describe('loop run — state flavor binding (H5)', () => {
     assert.equal(code, 2, 'a pipeline-flavored state cannot be resumed as a loop');
     assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the flavor-mismatch refusal leaves no supervisor.lock behind (I4)');
   });
 
   it('RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns', async () => {
@@ -733,6 +740,7 @@ describe('loop run — state flavor binding (H5)', () => {
     assert.equal(code, 2, 'a resume against a changed phase list refuses rather than misaligning');
     assert.match(io.stderrText() + io.stdoutText(), /phase|spec|changed|digest/i, 'the refusal names the spec change');
     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the spec-digest refusal leaves no supervisor.lock behind (I4)');
   });
 });
 
@@ -752,7 +760,7 @@ describe('loop run — ESCALATION.md wording (H6)', () => {
       JSON.stringify({
         schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 0,
         iterations: { 'gate-1': 5 }, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
-        flavor: 'loop',
+        flavor: 'loop', specDigest: dedupeKey(spec.phases), // I3 reconciliation: stamped so it reaches the cap gate, not a stamp refusal
       }, null, 2) + '\n',
     );
     const code = await cmdLoop(['run'], io);
@@ -784,5 +792,113 @@ describe('loop run — lock runId correlates with state runId (H8)', () => {
     assert.equal(code, 0);
     const stateRunId = (await loadLoopState('/repo', io)).state.runId;
     assert.equal(lockRunIdAtSpawn, stateRunId, `the lock runId matches the state runId at spawn time (got lock=${lockRunIdAtSpawn}, state=${stateRunId})`);
+  });
+});
+
+// ===========================================================================
+// I2 (B2) — retire records must not mask a SAME-childId in-flight child across
+// invocations; the registry is truncated on each successful acquisition.
+describe('loop run — retire records never mask a resumed in-flight child (I2)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+
+  it('RED (I2a): run 1 retired childId X; run 2 has a FRESH in-flight X (no retire) + dead lock -> reclaim MUST kill X', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    const killCalls = [];
+    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { killCalls.push({ pid, sig }); return true; };
+    // The resumed run's in-flight child (pgid 9002) is alive; run 1's retired X is not.
+    io.processAlive = (/** @type {number} */ p) => p === 9002;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'crashed' }));
+    io.fs.writeFileSync(
+      `${DIR}/children.ndjson`,
+      // Run 1: childId '001-plan' started (pgid 9001) then retired.
+      JSON.stringify({ childId: '001-plan', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n' +
+        JSON.stringify({ childId: '001-plan', endedAt: T0 }) + '\n' +
+        // Run 2 (the crashed resume): the SAME childId '001-plan' started again (pgid 9002), never retired.
+        JSON.stringify({ childId: '001-plan', pid: 8002, pgid: 9002, startedAt: T0 }) + '\n',
+    );
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the reclaiming run completes; stderr: ${io.stderrText()}`);
+    assert.ok(killCalls.some((k) => Math.abs(k.pid) === 9002), `the resumed in-flight X (9002) is killed despite an earlier retire of the same childId; kills: ${JSON.stringify(killCalls)}`);
+  });
+
+  it('RED (I2b): a NORMAL (non-reclaim) acquisition truncates prior-invocation records — a stale retire cannot linger to mask a future child', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    // A prior invocation's stale records (a distinctive pgid 4242000) are present;
+    // no lock, so this is a clean acquisition.
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(
+      `${DIR}/children.ndjson`,
+      JSON.stringify({ childId: '001-plan', pid: 4242000, pgid: 4242000, startedAt: T0 }) + '\n' + JSON.stringify({ childId: '001-plan', endedAt: T0 }) + '\n',
+    );
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0);
+    const raw = io.files()[`${DIR}/children.ndjson`] ?? '';
+    assert.doesNotMatch(raw, /4242000/, "a prior invocation's records are truncated at acquisition — they cannot mask a current child");
+  });
+});
+
+// ===========================================================================
+// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused,
+// with the archive instruction; I4 — the refusal leaves no lock behind.
+describe('loop run — unstamped legacy state is refused (I3 + I4)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  it('RED (I3/I4): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns, no leaked lock', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(
+      `${DIR}/state.json`,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 1,
+        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        // NO flavor, NO specDigest — a pre-stamp/stripped legacy state.
+      }, null, 2) + '\n',
+    );
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 2, 'an unstamped state is a mismatch — refused, not grandfathered');
+    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the refusal leaves no supervisor.lock behind (I4)');
+  });
+});
+
+// ===========================================================================
+// I5 (B5) — the run lock passes startTime to processAlive: a recycled pid
+// (alive by pid alone but failing the pid+startTime pair) is reclaimed, not
+// refused as live.
+describe('loop run — lock reclaim uses pid+startTime (I5)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  it('RED (I5): a lock whose pid is alive by a 1-arg check but fails the (pid, startTime) pair is treated as DEAD and reclaimed', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    // pid 7777 reads as alive for ANY defined startTime EXCEPT the recorded 999
+    // (which is the reused-pid case → dead). A 1-arg check, or a wrong-but-defined
+    // second arg, would read live and wedge the lock. Only passing the RECORDED
+    // startTime (999) reclaims — so the fake is inverted vs. a "match one value"
+    // trap, and the calls are recorded to prove the pair is passed through.
+    const aliveCalls = [];
+    io.processAlive = (/** @type {number} */ pid, /** @type {number | undefined} */ startTime) => {
+      aliveCalls.push({ pid, startTime });
+      if (pid !== 7777) return false;
+      return startTime !== 999; // dead ONLY for the recorded (pid, startTime) pair
+    };
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 7777, startTime: 999, runId: 'recycled' }));
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `a reused-pid lock is reclaimed (not refused as live); stderr: ${io.stderrText()}`);
+    assert.ok(io.__runner.calls.length >= 1, 'the run proceeds after reclaiming the reused-pid lock');
+    assert.ok(
+      aliveCalls.some((c) => c.pid === 7777 && c.startTime === 999),
+      `the reclaim passes the RECORDED (pid, startTime) pair to processAlive; calls: ${JSON.stringify(aliveCalls)}`,
+    );
   });
 });

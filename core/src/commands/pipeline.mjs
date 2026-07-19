@@ -158,7 +158,12 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
       return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
     }
-    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
+    // A missing stamp is a mismatch, not a grandfathered pass — pre-stamp
+    // legacy state resumes with exactly the misalignment H5 prevents (I3).
+    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+      return usageError(io, flags, 'pipeline', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+    }
+    if (state.specDigest !== specDigest) {
       return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
     }
   }
@@ -188,6 +193,26 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
   };
 
   await setupWorktrees(root, io);
+
+  // Supervisor-owned merge receipts (I1): one appended line per merged
+  // subtask, written BEFORE the phase advance is journaled, so a crash
+  // between merge and advance resumes into a receipt-backed advance.
+  const mergesPath = `${p.dir}/merges.ndjson`;
+  /** @returns {any[]} */
+  const mergeReceipts = () => {
+    if (!io.fs.existsSync(mergesPath)) return [];
+    return String(io.fs.readFileSync(mergesPath, 'utf8'))
+      .split('\n')
+      .filter((l) => l.trim() !== '')
+      .map((l) => {
+        try {
+          return JSON.parse(l);
+        } catch {
+          return null; // a torn record proves nothing — ignore it
+        }
+      })
+      .filter(Boolean);
+  };
 
   const spawn = async (/** @type {any} */ assignment, /** @type {string} */ prompt, /** @type {string} */ seatPath, /** @type {string} */ label) => {
     childSeq += 1;
@@ -232,19 +257,27 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     const gate = `subtask-${st.id}-review`;
 
     // A crash between merge and PHASE_ADVANCE leaves the branch fully merged:
-    // recognize it (tip is an ancestor of main) and advance instead of a
-    // misleading empty-branch park (H7).
-    let alreadyMerged = false;
+    // recognize it and advance instead of a misleading empty-branch park (H7).
+    // Recognition requires BOTH a supervisor-owned merge receipt AND the
+    // branch tip being an ancestor of main (I1): is-ancestor alone
+    // false-positives on a stale empty branch parked at main's old tip (a
+    // writer that crashed before its first commit), and a receipt alone can
+    // outlive a rewound main. Ancestor-without-receipt parks as stale;
+    // receipt-without-ancestor re-runs the subtask.
+    let isAncestor = false;
     try {
       await io.execFile('git', ['merge-base', '--is-ancestor', branch, 'main'], { cwd: root });
-      alreadyMerged = true;
+      isAncestor = true;
     } catch {
-      // Not merged (or the branch does not exist yet) — the normal path.
+      // Not an ancestor (or the branch does not exist yet) — the normal path.
     }
-    if (alreadyMerged) {
-      io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main — advancing\n`);
-      await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
-      continue;
+    if (isAncestor) {
+      if (mergeReceipts().some((r) => r?.subtaskId === st.id)) {
+        io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main (receipt + ancestor) — advancing\n`);
+        await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+        continue;
+      }
+      return park(`subtask '${st.id}' has a stale branch '${branch}' sitting at main's tip with no merge receipt — a writer likely crashed before committing; delete the branch and resume`);
     }
 
     const writerAssignment = resolveOne(`worker-${seat}`);
@@ -402,6 +435,9 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
 
       const merge = await mergeSubtask(root, { branch }, io);
       if (merge.ok !== true) return park(`merge of '${branch}' refused: ${merge.reason}`);
+      // The receipt lands BEFORE the phase-advance journal write (I1): a
+      // crash between the two resumes into a receipt-backed advance.
+      appendEntry(io.fs, mergesPath, { subtaskId: st.id, branch, mergedAt: io.now() });
       merged = true;
     }
 

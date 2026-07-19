@@ -1,0 +1,1841 @@
+Reading additional input from stdin...
+2026-07-19T16:32:47.846650Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7b39-1dbc-7e90-ace4-dc4fa0516126
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, i-series iteration 3 of 5 — a SCOPED pass auditing ONE test modification made after your iteration-2 APPROVED verdict on the I1–I5 pins. Context: the I1–I5 implementation landed (uncommitted, in the working tree alongside the pins you approved); all 9 pins went green; the single remaining failure was a fourth fixture in the same I3 reconciliation class you approved at iteration 2 ("stamps only, prior assertions preserved") — this one in the integration file.
+
+The edit to audit, in tests/integration/loop-pipeline-e2e.test.mjs, test "supervisor-death recovery via JOURNAL REPLAY on real fs (constraint 4)": the hand-seeded staleSnapshot gained `flavor: 'loop'` and `specDigest: dedupeKey(spec.phases)` (with a dedupeKey import), because the scenario models a crashed run that would carry the init-time stamp — without it the new I3 refusal (correctly) rejects the resume as unstamped legacy. Nothing else in the file changed.
+
+Audit:
+1. Diff-level: is the change genuinely stamps-only (git diff the file) — no assertion weakened, no behavior expectation changed? The test must still prove journal REPLAY (stale snapshot phaseIndex 0 → journal advances to 1, only phase 1 spawns, dead lock reclaimed).
+2. Does stamping the fixture undermine what I3 pins elsewhere? (It must not: the unstamped-refusal pins live in tests/commands/{loop-run,pipeline-run}.test.mjs and still seed unstamped states.)
+3. Anything in the implementation now in the working tree that this reconciliation quietly excuses?
+
+NOTE: your sandbox cannot mkdtemp — you CANNOT run this integration file; judge by reading. Locally: that file 7/7 green, full suite 1183/1183, typecheck clean.
+
+You may run: git diff tests/integration/loop-pipeline-e2e.test.mjs, node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+Phase: review. I’ll verify the scoped integration diff first, then read the neighboring command pins and relevant implementation paths to see whether this fixture stamp masks any behavior change.
+exec
+/bin/zsh -lc 'git diff -- tests/integration/loop-pipeline-e2e.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/tests/integration/loop-pipeline-e2e.test.mjs b/tests/integration/loop-pipeline-e2e.test.mjs
+index 72c4435..9180522 100644
+--- a/tests/integration/loop-pipeline-e2e.test.mjs
++++ b/tests/integration/loop-pipeline-e2e.test.mjs
+@@ -10,6 +10,7 @@ import { cmdLoop } from '../../core/src/commands/loop.mjs';
+ import { loadBundle, bundlePaths } from '../../core/src/bundle/store.mjs';
+ import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+ import { teardownWorktrees } from '../../core/src/loop/worktrees.mjs';
++import { dedupeKey } from '../../core/src/util/ids.mjs';
+ 
+ // ---------------------------------------------------------------------------
+ // RED/acceptance — real-fs, real-git end-to-end proofs for the Layer-2/3 loop &
+@@ -306,6 +307,10 @@ describe('e2e — supervisor-death recovery via JOURNAL REPLAY on real fs (const
+       smokeApproval: null,
+       createdAt: NOW,
+       journalSeq: 0,
++      // I3 reconciliation: a crashed post-fold run carries the stamp from init,
++      // so the resume is not refused as unstamped legacy.
++      flavor: 'loop',
++      specDigest: dedupeKey(spec.phases),
+     };
+     nodeFs.writeFileSync(p.state, JSON.stringify(staleSnapshot, null, 2) + '\n');
+     // JOURNAL ahead of the snapshot: a committed phase-advance (seq 1, > snapshot's
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/saksham/baton
+ succeeded in 0ms:
+ M core/src/commands/loop.mjs
+ M core/src/commands/pipeline.mjs
+ M tests/commands/loop-run.test.mjs
+ M tests/commands/pipeline-run.test.mjs
+ M tests/integration/loop-pipeline-e2e.test.mjs
+?? reviews/2026-07-19-gate-2-milestone-b/test-verifier/i-series/
+
+exec
+/bin/zsh -lc 'rg -n "supervisor-death recovery|staleSnapshot|dedupeKey|unstamped|specDigest|flavor" tests/integration/loop-pipeline-e2e.test.mjs tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs core/src adapters/codex adapters/cursor adapters/claude-code' in /Users/saksham/baton
+ succeeded in 0ms:
+tests/integration/loop-pipeline-e2e.test.mjs:13:import { dedupeKey } from '../../core/src/util/ids.mjs';
+tests/integration/loop-pipeline-e2e.test.mjs:289:describe('e2e — supervisor-death recovery via JOURNAL REPLAY on real fs (constraint 4)', () => {
+tests/integration/loop-pipeline-e2e.test.mjs:297:    const staleSnapshot = {
+tests/integration/loop-pipeline-e2e.test.mjs:311:      // so the resume is not refused as unstamped legacy.
+tests/integration/loop-pipeline-e2e.test.mjs:312:      flavor: 'loop',
+tests/integration/loop-pipeline-e2e.test.mjs:313:      specDigest: dedupeKey(spec.phases),
+tests/integration/loop-pipeline-e2e.test.mjs:315:    nodeFs.writeFileSync(p.state, JSON.stringify(staleSnapshot, null, 2) + '\n');
+tests/commands/pipeline-run.test.mjs:9:import { dedupeKey } from '../../core/src/util/ids.mjs';
+tests/commands/pipeline-run.test.mjs:791:// A persisted loop-state fixture. `flavor`/`specDigest` are the state-binding
+tests/commands/pipeline-run.test.mjs:792:// stamp (H5 design): flavor ∈ {'loop','pipeline'}; specDigest = dedupeKey of the
+tests/commands/pipeline-run.test.mjs:808:    flavor: 'pipeline',
+tests/commands/pipeline-run.test.mjs:884:// H5 (B4) — state flavor + spec binding across loop/pipeline.
+tests/commands/pipeline-run.test.mjs:885:describe('pipeline — H5: state flavor + spec-digest binding', () => {
+tests/commands/pipeline-run.test.mjs:886:  it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+tests/commands/pipeline-run.test.mjs:890:    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+tests/commands/pipeline-run.test.mjs:892:    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+tests/commands/pipeline-run.test.mjs:893:    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+tests/commands/pipeline-run.test.mjs:894:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+tests/commands/pipeline-run.test.mjs:897:  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+tests/commands/pipeline-run.test.mjs:901:    // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+tests/commands/pipeline-run.test.mjs:904:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+tests/commands/pipeline-run.test.mjs:938:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+tests/commands/pipeline-run.test.mjs:957:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+tests/commands/pipeline-run.test.mjs:975:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+tests/commands/pipeline-run.test.mjs:1013:// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
+tests/commands/pipeline-run.test.mjs:1015:describe('pipeline — I3: unstamped legacy state is refused', () => {
+tests/commands/pipeline-run.test.mjs:1016:  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
+tests/commands/pipeline-run.test.mjs:1026:        // NO flavor, NO specDigest.
+tests/commands/pipeline-run.test.mjs:1030:    assert.equal(code, 2, 'an unstamped state is refused, not resumed');
+tests/commands/pipeline-run.test.mjs:1032:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+tests/commands/loop-run.test.mjs:9:import { dedupeKey } from '../../core/src/util/ids.mjs';
+tests/commands/loop-run.test.mjs:429:      // I3 reconciliation: stamped so the resume is not refused as unstamped.
+tests/commands/loop-run.test.mjs:430:      flavor: 'loop',
+tests/commands/loop-run.test.mjs:431:      specDigest: dedupeKey(spec.phases),
+tests/commands/loop-run.test.mjs:605:    // I3 reconciliation: stamped so a valid resume is not refused as unstamped.
+tests/commands/loop-run.test.mjs:606:    flavor: 'loop',
+tests/commands/loop-run.test.mjs:607:    specDigest: dedupeKey(loopSpec().phases),
+tests/commands/loop-run.test.mjs:700:// H5 (B4) vice-versa — a pipeline-flavored state is refused by `loop run`.
+tests/commands/loop-run.test.mjs:701:describe('loop run — state flavor binding (H5)', () => {
+tests/commands/loop-run.test.mjs:703:  it('RED (H5): a state.json created by `pipeline run` (flavor pipeline) is REFUSED by loop run (exit 2), zero spawns', async () => {
+tests/commands/loop-run.test.mjs:713:        flavor: 'pipeline',
+tests/commands/loop-run.test.mjs:717:    assert.equal(code, 2, 'a pipeline-flavored state cannot be resumed as a loop');
+tests/commands/loop-run.test.mjs:718:    assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
+tests/commands/loop-run.test.mjs:719:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+tests/commands/loop-run.test.mjs:720:    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the flavor-mismatch refusal leaves no supervisor.lock behind (I4)');
+tests/commands/loop-run.test.mjs:723:  it('RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns', async () => {
+tests/commands/loop-run.test.mjs:736:        flavor: 'loop', specDigest: dedupeKey(oldPhases),
+tests/commands/loop-run.test.mjs:763:        flavor: 'loop', specDigest: dedupeKey(spec.phases), // I3 reconciliation: stamped so it reaches the cap gate, not a stamp refusal
+tests/commands/loop-run.test.mjs:847:// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused,
+tests/commands/loop-run.test.mjs:849:describe('loop run — unstamped legacy state is refused (I3 + I4)', () => {
+tests/commands/loop-run.test.mjs:851:  it('RED (I3/I4): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns, no leaked lock', async () => {
+tests/commands/loop-run.test.mjs:861:        // NO flavor, NO specDigest — a pre-stamp/stripped legacy state.
+tests/commands/loop-run.test.mjs:865:    assert.equal(code, 2, 'an unstamped state is a mismatch — refused, not grandfathered');
+tests/commands/loop-run.test.mjs:867:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+core/src/receive/txn.mjs:10:import { dedupeKey } from '../util/ids.mjs';
+core/src/receive/txn.mjs:83:    configDigest = dedupeKey(io.fs.readFileSync(`${root}/baton.config.json`, 'utf8'));
+core/src/receive/txn.mjs:102:    gitDigest: dedupeKey(opts.gitSnapshot ?? null),
+core/src/receive/txn.mjs:103:    probesDigest: dedupeKey(opts.probes ?? null),
+core/src/receive/txn.mjs:117:  return `${TOKEN_PREFIX}.` + TOKEN_FIELDS.map(([key]) => dedupeKey(inputs[key] ?? null).slice(0, 10)).join('.');
+core/src/receive/txn.mjs:249:    const receipt = dedupeKey(token).slice(0, 16);
+core/src/receive/txn.mjs:267:    receipt: dedupeKey(token).slice(0, 16),
+core/src/bundle/store.mjs:150:      // rather than crash replay on `e.seq` / `e.dedupeKey`.
+core/src/bundle/lock.mjs:3:import { dedupeKey } from '../util/ids.mjs';
+core/src/bundle/lock.mjs:66:  // Allocate seq + dedupeKey like every other journal entry (gate-2 fix,
+core/src/bundle/lock.mjs:89:    dedupeKey: dedupeKey({ ts, type: 'note', source: 'lock', text }),
+core/src/util/ids.mjs:33:export function dedupeKey(obj) {
+core/src/commands/loop.mjs:21:import { dedupeKey } from '../util/ids.mjs';
+core/src/commands/loop.mjs:112:const gitContentOf = (g) => g?.contentDigest ?? dedupeKey(g ?? null);
+core/src/commands/loop.mjs:259:  // Load or initialize the run state — stamped with {flavor, specDigest} so
+core/src/commands/loop.mjs:260:  // cross-flavor, changed-spec, or pre-stamp resumes refuse instead of
+core/src/commands/loop.mjs:263:  const specDigest = dedupeKey(spec.phases);
+core/src/commands/loop.mjs:266:    state = { ...initLoopState(spec, io), flavor: 'loop', specDigest };
+core/src/commands/loop.mjs:269:    if (typeof state.flavor === 'string' && state.flavor !== 'loop') {
+core/src/commands/loop.mjs:271:      return usageError(io, flags, 'loop', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a loop (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+core/src/commands/loop.mjs:273:    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+core/src/commands/loop.mjs:275:      return usageError(io, flags, 'loop', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+core/src/commands/loop.mjs:277:    if (state.specDigest !== specDigest) {
+core/src/commands/loop.mjs:327:        stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+core/src/commands/loop.mjs:496:              stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+core/src/commands/loop.mjs:498:              smokeOutputDigest: dedupeKey(smokeOut),
+core/src/bundle/merge.mjs:11: * Idempotent: an event whose dedupeKey is still in the bundle's ring is a no-op.
+core/src/bundle/merge.mjs:17: * @param {{seq: number, ts: string, type: string, dedupeKey: string, writerId?: string, source?: string, payload: any}} event
+core/src/bundle/merge.mjs:25:  if (bundle.dedupeRing.includes(event.dedupeKey)) return bundle;
+core/src/bundle/merge.mjs:156:  // never poison journalSeq to NaN, and an absent dedupeKey must never enter
+core/src/bundle/merge.mjs:159:  if (typeof event.dedupeKey === 'string' && event.dedupeKey.length > 0) {
+core/src/bundle/merge.mjs:160:    out.dedupeRing.push(event.dedupeKey);
+core/src/commands/pipeline.mjs:29:import { dedupeKey } from '../util/ids.mjs';
+core/src/commands/pipeline.mjs:149:  // {flavor, specDigest} so a cross-flavor or changed-spec resume refuses
+core/src/commands/pipeline.mjs:151:  const specDigest = dedupeKey(subtasks);
+core/src/commands/pipeline.mjs:155:    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
+core/src/commands/pipeline.mjs:158:    if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
+core/src/commands/pipeline.mjs:159:      return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+core/src/commands/pipeline.mjs:163:    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+core/src/commands/pipeline.mjs:164:      return usageError(io, flags, 'pipeline', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+core/src/commands/pipeline.mjs:166:    if (state.specDigest !== specDigest) {
+core/src/loop/state.mjs:11:import { dedupeKey } from '../util/ids.mjs';
+core/src/loop/state.mjs:50:  const runId = `loop-${dedupeKey({ host: io.host, pid: io.pid, startTime: io.startTime, at: io.now() }).slice(0, 12)}`;
+core/src/loop/state.mjs:152:    dedupeKey: typeof ev.dedupeKey === 'string' && ev.dedupeKey.length > 0 ? ev.dedupeKey : dedupeKey({ seq, ts, type: ev.type, gate: ev.gate ?? null }),
+core/src/loop/state.mjs:160: * snapshot's seq. Duplicate seqs/dedupeKeys apply exactly once, so a
+core/src/loop/state.mjs:161: * supervisor-death recovery never re-runs a completed iteration.
+core/src/loop/state.mjs:182:      const key = e.dedupeKey ?? (seq !== null ? `seq:${seq}` : null);
+core/src/loop/state.mjs:224:  return `${SMOKE_TOKEN_PREFIX}.` + SMOKE_TOKEN_FIELDS.map((f) => dedupeKey(inputs[f]).slice(0, 10)).join('.');
+core/src/commands/checkpoint.mjs:6:import { dedupeKey } from '../util/ids.mjs';
+core/src/commands/checkpoint.mjs:348:        dedupeKey: dedupeKey({ ts: io.now(), type: 'bundle.seed', bundleId: active.bundleId }),
+core/src/commands/checkpoint.mjs:374:      dedupeKey:
+core/src/commands/checkpoint.mjs:375:        typeof ev.dedupeKey === 'string' && ev.dedupeKey.length > 0
+core/src/commands/checkpoint.mjs:376:          ? ev.dedupeKey
+core/src/commands/checkpoint.mjs:377:          : dedupeKey({ ts, type: ev.type, payload: ev.payload, source: ev.source, sessionHint: ev.sessionHint }),
+
+codex
+The scoped diff is two additions to the fixture plus the import. I’m checking the surrounding assertions now, because the key question is whether the stamped stale snapshot still forces replay to advance from phase 0 to phase 1 and only launches that resumed phase.
+exec
+/bin/zsh -lc "awk 'NR>=280 && NR<=370 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/integration/loop-pipeline-e2e.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  280:    assert.equal(code, 0, `chained A→B→A must complete; stderr: ${io.stderrText()}`);
+  281:    const live = loadBundle(cwd, io).bundle;
+  282:    assert.ok(live.generation >= 3, 'two failovers opened a third generation');
+  283:    assert.equal(live.origin.platform, 'claude-code', 'the chain returned to the first platform (A→B→A)');
+  284:    assert.equal(runner.calls[2].command, 'claude', 'the third child ran back on claude-code');
+  285:  });
+  286:});
+  287:
+  288:// ===========================================================================
+  289:describe('e2e — supervisor-death recovery via JOURNAL REPLAY on real fs (constraint 4)', () => {
+  290:  it('a stale snapshot + a phase-advance journal event past its seq (with a torn tail) + a dead lock -> replay resumes, only the remaining phase spawns', { skip: SKIP_WIN }, async () => {
+  291:    const spec = { schema: 'baton/loop@1', goal: 'e2e recovery', constraints: [], budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 }, phases: [{ id: 'p0', role: 'implementer' }, { id: 'p1', role: 'implementer' }] };
+  292:    const cwd = initRepo('baton-e2e-recover-', spec);
+  293:    const p = loopPaths(cwd);
+  294:    nodeFs.mkdirSync(p.dir, { recursive: true });
+  295:
+  296:    // STALE snapshot: phase 0 not yet advanced, journalSeq behind the journal.
+  297:    const staleSnapshot = {
+  298:      schema: 'baton/loop-state@1',
+  299:      runId: 'loop-crashed',
+  300:      goal: 'e2e recovery',
+  301:      phaseCount: 2,
+  302:      phaseIndex: 0, // the snapshot predates phase 0 completing
+  303:      iterations: {},
+  304:      status: 'running',
+  305:      parkReason: null,
+  306:      escalation: null,
+  307:      smokeApproval: null,
+  308:      createdAt: NOW,
+  309:      journalSeq: 0,
+  310:      // I3 reconciliation: a crashed post-fold run carries the stamp from init,
+  311:      // so the resume is not refused as unstamped legacy.
+  312:      flavor: 'loop',
+  313:      specDigest: dedupeKey(spec.phases),
+  314:    };
+  315:    nodeFs.writeFileSync(p.state, JSON.stringify(staleSnapshot, null, 2) + '\n');
+  316:    // JOURNAL ahead of the snapshot: a committed phase-advance (seq 1, > snapshot's
+  317:    // journalSeq 0) plus a TORN final line the tolerant reader must skip.
+  318:    nodeFs.writeFileSync(
+  319:      p.journal,
+  320:      JSON.stringify({ seq: 1, ts: NOW, type: 'phase-advance' }) + '\n' + '{"seq":2,"type":"phase-adv', // torn tail, no newline
+  321:    );
+  322:    // A DEAD supervisor lock (a never-existing pid) — the crash marker.
+  323:    nodeFs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'e2e-host', pid: 999999, startTime: 7, runId: 'loop-crashed' }));
+  324:
+  325:    // Prove the fixture reconstructs mid-state via REPLAY, not a hand-written index:
+  326:    // the snapshot says phaseIndex 0, the journal advances it to 1.
+  327:    const io0 = makeRealIo(cwd);
+  328:    assert.equal((await loadLoopState(cwd, io0)).state.phaseIndex, 1, 'journal replay advances the stale snapshot to phase 1');
+  329:
+  330:    // A fresh run reclaims the dead lock, replays to phase 1, and runs ONLY phase 1.
+  331:    const runner = (() => { const calls = []; const fn = async (s, o) => { calls.push(s.command); return { timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '', logPath: o.logPath }; }; fn.calls = calls; return fn; })();
+  332:    const io = makeRealIo(cwd, { superviseChild: runner });
+  333:    const code = await cmdLoop(['run'], io);
+  334:    assert.equal(code, 0, `the resumed run completes; stderr: ${io.stderrText()}`);
+  335:    assert.equal(runner.calls.length, 1, 'the journal-recovered phase 0 is NOT re-run — only phase 1 spawns a child');
+  336:    assert.equal((await loadLoopState(cwd, io)).state.status, LOOP_STATUS.DONE);
+  337:  });
+  338:});
+  339:
+  340:// ===========================================================================
+  341:describe('e2e — loop leaves no residue (constraint 5, loop half)', () => {
+  342:  it('after a completed loop run, removing .handoff leaves git status clean', { skip: SKIP_WIN }, async () => {
+  343:    const spec = { schema: 'baton/loop@1', goal: 'e2e residue', constraints: [], budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 }, phases: [{ id: 'p0', role: 'implementer' }] };
+  344:    const cwd = initRepo('baton-e2e-residue-', spec);
+  345:    const io = makeRealIo(cwd, { superviseChild: async (s, o) => ({ timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '', logPath: o.logPath }) });
+  346:    const code = await cmdLoop(['run'], io);
+  347:    assert.equal(code, 0, `the loop completes; stderr: ${io.stderrText()}`);
+  348:
+  349:    // The loop wrote only under the gitignored .handoff/ tree.
+  350:    rmSync(join(cwd, '.handoff'), { recursive: true, force: true });
+  351:    assert.equal(git(cwd, ['status', '--porcelain']).trim(), '', 'no tracked residue after a loop run (.gitignore pre-seeded)');
+  352:  });
+  353:});
+
+exec
+/bin/zsh -lc "awk 'NR>=1 && NR<=20 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/integration/loop-pipeline-e2e.test.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "awk 'NR>=145 && NR<=172 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/commands/pipeline.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+    1:import { describe, it, after } from 'node:test';
+    2:import assert from 'node:assert/strict';
+    3:import { spawnSync, execFile as realExecFile } from 'node:child_process';
+    4:import { promisify } from 'node:util';
+    5:import * as nodeFs from 'node:fs';
+    6:import { mkdtempSync, rmSync } from 'node:fs';
+    7:import { tmpdir } from 'node:os';
+    8:import { join } from 'node:path';
+    9:import { cmdLoop } from '../../core/src/commands/loop.mjs';
+   10:import { loadBundle, bundlePaths } from '../../core/src/bundle/store.mjs';
+   11:import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+   12:import { teardownWorktrees } from '../../core/src/loop/worktrees.mjs';
+   13:import { dedupeKey } from '../../core/src/util/ids.mjs';
+   14:
+   15:// ---------------------------------------------------------------------------
+   16:// RED/acceptance — real-fs, real-git end-to-end proofs for the Layer-2/3 loop &
+   17:// pipeline (subtask e2e-acceptance). Source: plan §"Acceptance constraints" 1–6.
+   18:// Units already cover the composition over memfs; these run the REAL git binary
+   19:// over mkdtemp repos with a real io (mirrors tests/integration/e2e-failover +
+   20:// loop-children-spawn). Children are in-process async fns injected via
+
+ succeeded in 0ms:
+  145:    phases: subtasks.map((/** @type {any} */ st, /** @type {number} */ i) => ({ id: `subtask-${st.id}`, role: `worker-${i % 2 === 0 ? 'a' : 'b'}` })),
+  146:  };
+  147:  // RESUME, never re-init: a prior run's cap counters and position survive a
+  148:  // re-invocation (Gate-2 fold G2 — no cap refunds). The state is stamped
+  149:  // {flavor, specDigest} so a cross-flavor or changed-spec resume refuses
+  150:  // instead of misaligning (H5).
+  151:  const specDigest = dedupeKey(subtasks);
+  152:  /** @type {any} */
+  153:  let state = (await loadLoopState(root, io)).state;
+  154:  if (state === null) {
+  155:    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
+  156:    await writeLoopState(root, state, io);
+  157:  } else {
+  158:    if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
+  159:      return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+  160:    }
+  161:    // A missing stamp is a mismatch, not a grandfathered pass — pre-stamp
+  162:    // legacy state resumes with exactly the misalignment H5 prevents (I3).
+  163:    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+  164:      return usageError(io, flags, 'pipeline', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+  165:    }
+  166:    if (state.specDigest !== specDigest) {
+  167:      return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
+  168:    }
+  169:  }
+  170:  if (state.status === LOOP_STATUS.ESCALATED) {
+  171:    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+  172:    return EXIT_ESCALATED;
+
+exec
+/bin/zsh -lc "awk 'NR>=250 && NR<=285 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/commands/loop.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  250:    return usageError(io, flags, 'loop', `loop.json is invalid:\n  - ${validated.errors.join('\n  - ')}`);
+  251:  }
+  252:  const spec = validated.spec;
+  253:
+  254:  // Supervisor run lock — atomic exclusive acquisition; provably-dead owners
+  255:  // are reclaimed with their recorded child groups reaped first (B8 + G4).
+  256:  const lock = await acquireSupervisorLock(root, io, 'loop run');
+  257:  if (lock.ok !== true) return lock.code;
+  258:
+  259:  // Load or initialize the run state — stamped with {flavor, specDigest} so
+  260:  // cross-flavor, changed-spec, or pre-stamp resumes refuse instead of
+  261:  // misaligning (H5 + I3). These refusals release the lock explicitly — an
+  262:  // early return here must not leave supervisor.lock behind (I4).
+  263:  const specDigest = dedupeKey(spec.phases);
+  264:  let { state } = await loadLoopState(root, io);
+  265:  if (state === null) {
+  266:    state = { ...initLoopState(spec, io), flavor: 'loop', specDigest };
+  267:    await writeLoopState(root, state, io);
+  268:  } else {
+  269:    if (typeof state.flavor === 'string' && state.flavor !== 'loop') {
+  270:      lock.release();
+  271:      return usageError(io, flags, 'loop', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a loop (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+  272:    }
+  273:    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
+  274:      lock.release();
+  275:      return usageError(io, flags, 'loop', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
+  276:    }
+  277:    if (state.specDigest !== specDigest) {
+  278:      lock.release();
+  279:      return usageError(io, flags, 'loop', 'loop.json phases changed since this run started (spec digest mismatch) — resuming would misalign the phase position; archive .handoff/loop to start fresh');
+  280:    }
+  281:  }
+  282:  const runId = state.runId;
+  283:  // The lock payload's runId now correlates with the run it guards (H8).
+  284:  io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: io.host, pid: io.pid, startTime: io.startTime, runId }));
+  285:
+
+exec
+/bin/zsh -lc "awk 'NR>=840 && NR<=872 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  840:    assert.equal(code, 0);
+  841:    const raw = io.files()[`${DIR}/children.ndjson`] ?? '';
+  842:    assert.doesNotMatch(raw, /4242000/, "a prior invocation's records are truncated at acquisition — they cannot mask a current child");
+  843:  });
+  844:});
+  845:
+  846:// ===========================================================================
+  847:// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused,
+  848:// with the archive instruction; I4 — the refusal leaves no lock behind.
+  849:describe('loop run — unstamped legacy state is refused (I3 + I4)', () => {
+  850:  const DIR = `${loopPaths('/repo').dir}`;
+  851:  it('RED (I3/I4): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns, no leaked lock', async () => {
+  852:    const io = makeLoopRepo({ runner: undefined });
+  853:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+  854:    io.__runner = io.superviseChild;
+  855:    io.fs.mkdirSync(DIR, { recursive: true });
+  856:    io.fs.writeFileSync(
+  857:      `${DIR}/state.json`,
+  858:      JSON.stringify({
+  859:        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 1,
+  860:        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+  861:        // NO flavor, NO specDigest — a pre-stamp/stripped legacy state.
+  862:      }, null, 2) + '\n',
+  863:    );
+  864:    const code = await cmdLoop(['run'], io);
+  865:    assert.equal(code, 2, 'an unstamped state is a mismatch — refused, not grandfathered');
+  866:    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
+  867:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+  868:    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the refusal leaves no supervisor.lock behind (I4)');
+  869:  });
+  870:});
+  871:
+  872:// ===========================================================================
+
+exec
+/bin/zsh -lc "awk 'NR>=1010 && NR<=1035 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/pipeline-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+ 1010:});
+ 1011:
+ 1012:// ===========================================================================
+ 1013:// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
+ 1014:// pipeline run, with the archive instruction, zero spawns.
+ 1015:describe('pipeline — I3: unstamped legacy state is refused', () => {
+ 1016:  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
+ 1017:    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+ 1018:    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+ 1019:    io.__runner = io.superviseChild;
+ 1020:    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+ 1021:    io.fs.writeFileSync(
+ 1022:      loopPaths('/repo').state,
+ 1023:      JSON.stringify({
+ 1024:        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the pipeline', phaseCount: 2, phaseIndex: 1,
+ 1025:        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+ 1026:        // NO flavor, NO specDigest.
+ 1027:      }, null, 2) + '\n',
+ 1028:    );
+ 1029:    const code = await run(['pipeline', 'run'], io);
+ 1030:    assert.equal(code, 2, 'an unstamped state is refused, not resumed');
+ 1031:    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
+ 1032:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+ 1033:  });
+ 1034:});
+ 1035:
+
+codex
+The surrounding integration assertions are still intact: the test explicitly checks `loadLoopState()` returns phase 1 before `cmdLoop(['run'])`, then checks exactly one child spawn and final DONE. I’m reading the replay and stamp gate implementation next to see whether any altered production path makes that proof narrower than it looks.
+exec
+/bin/zsh -lc "awk 'NR>=286 && NR<=365 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/commands/loop.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "awk 'NR>=120 && NR<=200 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/loop/state.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  286:  /** Apply one event, journal it, persist the snapshot — one transition. */
+  287:  const transition = async (/** @type {any} */ ev) => {
+  288:    const next = applyLoopEvent(state, ev);
+  289:    const seq = await appendLoopEvent(root, ev, io);
+  290:    state = { ...next, journalSeq: seq };
+  291:    await writeLoopState(root, state, io);
+  292:    return state;
+  293:  };
+  294:
+  295:  const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
+  296:  const runner = io.superviseChild ?? superviseChild;
+  297:  const sessionHint = `loop-${runId}`;
+  298:  /** @type {string[]} */
+  299:  let avoid = [];
+  300:  /** @type {Array<{platform: string, model: string}>} */
+  301:  let avoidEntries = [];
+  302:  let childSeq = 0;
+  303:
+  304:  try {
+  305:    // `loop resume` — a PARK is resumable; an escalation is operator-only.
+  306:    if (flags.__resume === true) {
+  307:      if (state.status === LOOP_STATUS.ESCALATED) {
+  308:        io.stderr.write(`baton loop resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+  309:        return EXIT_ESCALATED;
+  310:      }
+  311:      if (state.status === LOOP_STATUS.PARKED) {
+  312:        await transition({ type: LOOP_EVENT.RESUME });
+  313:        io.stdout.write('baton loop resume: the parked run is running again\n');
+  314:      }
+  315:    }
+  316:
+  317:    // --approve-smoke: verify the presented token against RECOMPUTED inputs;
+  318:    // drift parks (the human approved a state that no longer exists).
+  319:    if (typeof flags['approve-smoke'] === 'string') {
+  320:      if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+  321:        return usageError(io, flags, 'loop', `--approve-smoke only applies while the run awaits smoke approval (status: ${state.status})`);
+  322:      }
+  323:      const record = safeReadJson(io.fs, `${p.dir}/smoke-approval.json`);
+  324:      if (!record.ok) return usageError(io, flags, 'loop', 'no smoke-approval.json found — run the loop to the smoke gate first');
+  325:      const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+  326:      const currentInputs = {
+  327:        stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+  328:        smokeCmd: String(spec.smoke?.cmd ?? ''),
+  329:        smokeOutputDigest: String(record.value?.inputs?.smokeOutputDigest ?? ''),
+  330:        gitHead: gitHeadOf(git),
+  331:        gitContentDigest: gitContentOf(git),
+  332:        childAssignment: String(record.value?.inputs?.childAssignment ?? ''),
+  333:      };
+  334:      const verify = verifySmokeToken(String(flags['approve-smoke']), currentInputs);
+  335:      if (verify.ok !== true) {
+  336:        const drifted = 'driftedInputs' in verify ? verify.driftedInputs.join(', ') : 'unknown';
+  337:        await transition({ type: LOOP_EVENT.PARK, reason: `smoke approval token is stale — drifted inputs: ${drifted}; re-run the smoke gate` });
+  338:        io.stderr.write(`baton loop run: smoke approval REFUSED — inputs drifted since the token was issued (${drifted}); the run is parked for a fresh smoke pass\n`);
+  339:        return EXIT_PARKED;
+  340:      }
+  341:      await transition({ type: LOOP_EVENT.SMOKE_APPROVE, token: flags['approve-smoke'], verified: true });
+  342:      io.stdout.write('baton loop run: smoke approval verified — continuing the run\n');
+  343:    }
+  344:
+  345:    if (state.status === LOOP_STATUS.ESCALATED) {
+  346:      io.stderr.write(`baton loop run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+  347:      return EXIT_ESCALATED;
+  348:    }
+  349:    if (state.status === LOOP_STATUS.PARKED) {
+  350:      io.stderr.write(`baton loop run: the run is parked — ${state.parkReason ?? 'no reason recorded'}\n`);
+  351:      return EXIT_PARKED;
+  352:    }
+  353:    if (state.status === LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+  354:      io.stdout.write(`baton loop run: awaiting smoke approval — resume with: baton loop run --approve-smoke <token from ${p.dir}/smoke-approval.json>\n`);
+  355:      return 0;
+  356:    }
+  357:
+  358:    // ---- The phase loop. ---------------------------------------------------
+  359:    while (state.status === LOOP_STATUS.RUNNING && state.phaseIndex < state.phaseCount) {
+  360:      const phase = spec.phases[state.phaseIndex];
+  361:      const cap = spec.budgets.iterationCap;
+  362:      let findings = '';
+  363:      let failoverAttempt = 0;
+  364:      /** @type {any | null} */
+  365:      let forcedAssignment = null;
+
+ succeeded in 0ms:
+  120:export async function writeLoopState(root, state, io) {
+  121:  const p = loopPaths(root);
+  122:  ensureDir(io.fs, p.dir);
+  123:  atomicWriteJson(io.fs, p.state, state);
+  124:}
+  125:
+  126:/**
+  127: * Append one journal event; allocates the next seq past
+  128: * max(snapshot.journalSeq, journal tail) unless the entry carries one.
+  129: * @param {string} root @param {any} ev @param {any} io
+  130: * @returns {Promise<number>} the persisted seq
+  131: */
+  132:export async function appendLoopEvent(root, ev, io) {
+  133:  const p = loopPaths(root);
+  134:  ensureDir(io.fs, p.dir);
+  135:  let seq = ev.seq;
+  136:  if (typeof seq !== 'number') {
+  137:    const snap = safeReadJson(io.fs, p.state);
+  138:    const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+  139:    let tailSeq = 0;
+  140:    if (io.fs.existsSync(p.journal)) {
+  141:      for (const e of readAllTolerant(io.fs, p.journal).entries) {
+  142:        if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+  143:      }
+  144:    }
+  145:    seq = Math.max(snapSeq, tailSeq) + 1;
+  146:  }
+  147:  const ts = typeof ev.ts === 'string' ? ev.ts : io.now();
+  148:  const entry = {
+  149:    ...ev,
+  150:    seq,
+  151:    ts,
+  152:    dedupeKey: typeof ev.dedupeKey === 'string' && ev.dedupeKey.length > 0 ? ev.dedupeKey : dedupeKey({ seq, ts, type: ev.type, gate: ev.gate ?? null }),
+  153:  };
+  154:  appendEntry(io.fs, p.journal, entry);
+  155:  return seq;
+  156:}
+  157:
+  158:/**
+  159: * Load = snapshot + torn-tail-tolerant replay of journal events PAST the
+  160: * snapshot's seq. Duplicate seqs/dedupeKeys apply exactly once, so a
+  161: * supervisor-death recovery never re-runs a completed iteration.
+  162: * @param {string} root @param {any} io
+  163: * @returns {Promise<{state: any, warnings: string[]}>}
+  164: */
+  165:export async function loadLoopState(root, io) {
+  166:  const p = loopPaths(root);
+  167:  /** @type {string[]} */
+  168:  const warnings = [];
+  169:  const snap = safeReadJson(io.fs, p.state);
+  170:  if (!snap.ok) return { state: null, warnings: ['no loop state snapshot found'] };
+  171:  let state = snap.value;
+  172:  const baseSeq = typeof state.journalSeq === 'number' ? state.journalSeq : 0;
+  173:
+  174:  if (io.fs.existsSync(p.journal)) {
+  175:    const { entries, warnings: jw } = readAllTolerant(io.fs, p.journal);
+  176:    for (const w of jw ?? []) warnings.push(`journal: ${w.kind ?? 'warning'} at line ${w.line ?? '?'}`);
+  177:    const applied = new Set();
+  178:    let maxSeq = baseSeq;
+  179:    for (const e of entries) {
+  180:      const seq = typeof e.seq === 'number' ? e.seq : null;
+  181:      if (seq !== null && seq <= baseSeq) continue; // already folded into the snapshot
+  182:      const key = e.dedupeKey ?? (seq !== null ? `seq:${seq}` : null);
+  183:      if (key !== null && applied.has(key)) continue; // replayed duplicate — apply once
+  184:      if (seq !== null && applied.has(`seq:${seq}`)) continue;
+  185:      state = applyLoopEvent(state, e);
+  186:      if (key !== null) applied.add(key);
+  187:      if (seq !== null) {
+  188:        applied.add(`seq:${seq}`);
+  189:        if (seq > maxSeq) maxSeq = seq;
+  190:      }
+  191:    }
+  192:    state = { ...state, journalSeq: maxSeq };
+  193:  }
+  194:  return { state, warnings };
+  195:}
+  196:
+  197:// ---------------------------------------------------------------------------
+  198:// Smoke-approval token — a STRUCTURED digest over the six bound inputs, so a
+  199:// stale approval is refused NAMING what moved (mirrors the receive receipt
+  200:// token's driftedInputs discipline).
+
+exec
+/bin/zsh -lc "awk 'NR>=590 && NR<=612 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "awk 'NR>=400 && NR<=440 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "awk 'NR>=780 && NR<=815 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/pipeline-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  590:describe('loop run — resume (G6)', () => {
+  591:  const DIR = `${loopPaths('/repo').dir}`;
+  592:  const seedState = (over) => ({
+  593:    schema: 'baton/loop-state@1',
+  594:    runId: 'loop-r',
+  595:    goal: 'Ship the loop',
+  596:    phaseCount: 2,
+  597:    phaseIndex: 0,
+  598:    iterations: {},
+  599:    status: 'running',
+  600:    parkReason: null,
+  601:    escalation: null,
+  602:    smokeApproval: null,
+  603:    createdAt: T0,
+  604:    journalSeq: 0,
+  605:    // I3 reconciliation: stamped so a valid resume is not refused as unstamped.
+  606:    flavor: 'loop',
+  607:    specDigest: dedupeKey(loopSpec().phases),
+  608:    ...over,
+  609:  });
+  610:
+  611:  it('RED (G6): `baton loop resume` transitions a PARKED run back to running and continues (spawns the pending phase)', async () => {
+  612:    const io = makeLoopRepo({ runner: undefined });
+
+ succeeded in 0ms:
+  780:    try {
+  781:      await run(['pipeline', 'run'], io);
+  782:    } catch {
+  783:      threw = true;
+  784:    }
+  785:    assert.equal(threw, false, 'a raw-deleted seat must self-heal, not crash the supervisor');
+  786:    assert.ok(io.__git.issued(/worktree prune/), 'the stale worktree metadata was pruned during self-heal');
+  787:    assert.ok(io.__git.matching(/worktree add/).some((c) => c.argstr.includes(WT_A)), 'the raw-deleted seat was re-added');
+  788:  });
+  789:});
+  790:
+  791:// A persisted loop-state fixture. `flavor`/`specDigest` are the state-binding
+  792:// stamp (H5 design): flavor ∈ {'loop','pipeline'}; specDigest = dedupeKey of the
+  793:// driving spec (subtasks for pipeline, phases for loop).
+  794:function seedPipelineState(io, over = {}) {
+  795:  const state = {
+  796:    schema: 'baton/loop-state@1',
+  797:    runId: 'loop-seeded',
+  798:    goal: 'Ship the pipeline',
+  799:    phaseCount: 2,
+  800:    phaseIndex: 0,
+  801:    iterations: {},
+  802:    status: 'running',
+  803:    parkReason: null,
+  804:    escalation: null,
+  805:    smokeApproval: null,
+  806:    createdAt: T0,
+  807:    journalSeq: 0,
+  808:    flavor: 'pipeline',
+  809:    ...over,
+  810:  };
+  811:  io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+  812:  io.fs.writeFileSync(loopPaths('/repo').state, JSON.stringify(state, null, 2) + '\n');
+  813:  return state;
+  814:}
+  815:
+
+ succeeded in 0ms:
+  400:    assert.equal(io.__runner.calls[0].command, 'codex', 'the dead child genuinely ran on codex (so the codex-only signature applies)');
+  401:    assert.equal(code, 4, 'a parked run exits 4 (defined nonzero)');
+  402:    const { state } = await loadLoopState('/repo', io);
+  403:    assert.equal(state.status, LOOP_STATUS.PARKED, 'the run is parked');
+  404:  });
+  405:});
+  406:
+  407:// ===========================================================================
+  408:describe('loop run — recovery from a mid-run crash', () => {
+  409:  it('resumes from the journal position: only the REMAINING phase spawns a child', async () => {
+  410:    const spec = loopSpec(); // plan -> gate-1
+  411:    const io = makeLoopRepo({ spec, runner: undefined });
+  412:    // Seed a mid-run state: plan already completed (phaseIndex 1), gate-1 pending,
+  413:    // plus a matching journal and a DEAD supervisor lock.
+  414:    const p = loopPaths('/repo');
+  415:    io.fs.mkdirSync(p.dir, { recursive: true });
+  416:    const midState = {
+  417:      schema: 'baton/loop-state@1',
+  418:      runId: 'loop-prior',
+  419:      goal: 'Ship the loop',
+  420:      phaseCount: 2,
+  421:      phaseIndex: 1,
+  422:      iterations: { 'gate-1': 0 },
+  423:      status: LOOP_STATUS.RUNNING,
+  424:      parkReason: null,
+  425:      escalation: null,
+  426:      smokeApproval: null,
+  427:      createdAt: T0,
+  428:      journalSeq: 1,
+  429:      // I3 reconciliation: stamped so the resume is not refused as unstamped.
+  430:      flavor: 'loop',
+  431:      specDigest: dedupeKey(spec.phases),
+  432:    };
+  433:    io.fs.writeFileSync(p.state, JSON.stringify(midState, null, 2) + '\n');
+  434:    io.fs.writeFileSync(p.journal, JSON.stringify({ seq: 1, ts: T0, type: 'phase-advance' }) + '\n');
+  435:    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'loop-prior' }));
+  436:
+  437:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]); // only gate-1 remains
+  438:    io.__runner = io.superviseChild;
+  439:
+  440:    const code = await cmdLoop(['run'], io);
+
+exec
+/bin/zsh -lc 'git diff -- core/src/commands/loop.mjs core/src/commands/pipeline.mjs tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/core/src/commands/loop.mjs b/core/src/commands/loop.mjs
+index 9ed2dc6..f8054c8 100644
+--- a/core/src/commands/loop.mjs
++++ b/core/src/commands/loop.mjs
+@@ -145,6 +145,14 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
+ 
+   for (let attempt = 1; attempt <= 2; attempt += 1) {
+     if (tryExclusive()) {
++      // A fresh acquisition owns a fresh child registry: prior invocations'
++      // start/retire records are truncated so a stale retire can never mask a
++      // later in-flight child that reuses the same childId (I2).
++      try {
++        if (io.fs.existsSync(childrenPath)) io.fs.unlinkSync(childrenPath);
++      } catch {
++        // Best effort.
++      }
+       return {
+         ok: true,
+         release: () => {
+@@ -158,7 +166,9 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
+     }
+     const existing = safeReadJson(io.fs, lockPath);
+     const other = existing.ok ? existing.value : null;
+-    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid) : true;
++    // Liveness verifies the (pid, startTime) PAIR — a recycled pid without the
++    // recorded start time is a dead owner, not a live supervisor (I5).
++    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid, other.startTime) : true;
+     const sameProcess = other && other.pid === io.pid && other.startTime === io.startTime;
+     if (!sameProcess && (!other || other.host !== io.host || alive)) {
+       io.stderr.write(`baton ${cmdLabel}: another supervisor (pid ${other?.pid ?? 'unknown'} on ${other?.host ?? 'unknown'}, run ${other?.runId ?? '?'}) holds the run lock — refusing a second supervisor\n`);
+@@ -168,25 +178,32 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
+     // child groups BEFORE anything else runs, then reclaim.
+     if (io.fs.existsSync(childrenPath)) {
+       const lines = String(io.fs.readFileSync(childrenPath, 'utf8')).split('\n').filter((l) => l.trim() !== '');
+-      /** @type {Map<string, any>} */
+-      const starts = new Map();
+-      const retired = new Set();
++      // Match retires to starts IN ORDER per childId — a resumed invocation
++      // reuses childIds, and a prior run's retire must never mask the newer
++      // in-flight start of the same id (I2). Whatever start remains unmatched
++      // is genuinely in-flight.
++      /** @type {Map<string, any[]>} */
++      const inflight = new Map();
+       for (const line of lines) {
+         try {
+           const rec = JSON.parse(line);
+-          if (typeof rec?.endedAt === 'string') retired.add(rec.childId);
+-          else if (typeof rec?.pgid === 'number') starts.set(rec.childId, rec);
++          if (typeof rec?.endedAt === 'string') inflight.get(rec.childId)?.shift();
++          else if (typeof rec?.pgid === 'number') {
++            if (!inflight.has(rec.childId)) inflight.set(rec.childId, []);
++            inflight.get(rec.childId)?.push(rec);
++          }
+         } catch {
+           // A torn record is unreapable — skip it.
+         }
+       }
+-      // Kill ONLY genuinely in-flight children (start with no retire): a
+-      // retired child's pgid may have been recycled by an unrelated live
+-      // process — killing it would be a pid-reuse casualty (H3).
+-      for (const [childId, rec] of starts) {
+-        if (retired.has(childId)) continue;
+-        if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+-          if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
++      // Kill ONLY genuinely in-flight children (start with no matching
++      // retire): a retired child's pgid may have been recycled by an
++      // unrelated live process — killing it would be a pid-reuse casualty (H3).
++      for (const recs of inflight.values()) {
++        for (const rec of recs) {
++          if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
++            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
++          }
+         }
+       }
+       try {
+@@ -240,7 +257,9 @@ async function runLoop(flags, io) {
+   if (lock.ok !== true) return lock.code;
+ 
+   // Load or initialize the run state — stamped with {flavor, specDigest} so
+-  // cross-flavor or changed-spec resumes refuse instead of misaligning (H5).
++  // cross-flavor, changed-spec, or pre-stamp resumes refuse instead of
++  // misaligning (H5 + I3). These refusals release the lock explicitly — an
++  // early return here must not leave supervisor.lock behind (I4).
+   const specDigest = dedupeKey(spec.phases);
+   let { state } = await loadLoopState(root, io);
+   if (state === null) {
+@@ -248,9 +267,15 @@ async function runLoop(flags, io) {
+     await writeLoopState(root, state, io);
+   } else {
+     if (typeof state.flavor === 'string' && state.flavor !== 'loop') {
++      lock.release();
+       return usageError(io, flags, 'loop', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a loop (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+     }
+-    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
++    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
++      lock.release();
++      return usageError(io, flags, 'loop', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
++    }
++    if (state.specDigest !== specDigest) {
++      lock.release();
+       return usageError(io, flags, 'loop', 'loop.json phases changed since this run started (spec digest mismatch) — resuming would misalign the phase position; archive .handoff/loop to start fresh');
+     }
+   }
+diff --git a/core/src/commands/pipeline.mjs b/core/src/commands/pipeline.mjs
+index 95555bb..cfc4bfd 100644
+--- a/core/src/commands/pipeline.mjs
++++ b/core/src/commands/pipeline.mjs
+@@ -158,7 +158,12 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs
+     if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
+       return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+     }
+-    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
++    // A missing stamp is a mismatch, not a grandfathered pass — pre-stamp
++    // legacy state resumes with exactly the misalignment H5 prevents (I3).
++    if (typeof state.flavor !== 'string' || typeof state.specDigest !== 'string') {
++      return usageError(io, flags, 'pipeline', 'the persisted run state is missing its {flavor, specDigest} stamp (pre-stamp legacy state) — resuming it could misalign the run; archive .handoff/loop to start fresh');
++    }
++    if (state.specDigest !== specDigest) {
+       return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
+     }
+   }
+@@ -189,6 +194,26 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs
+ 
+   await setupWorktrees(root, io);
+ 
++  // Supervisor-owned merge receipts (I1): one appended line per merged
++  // subtask, written BEFORE the phase advance is journaled, so a crash
++  // between merge and advance resumes into a receipt-backed advance.
++  const mergesPath = `${p.dir}/merges.ndjson`;
++  /** @returns {any[]} */
++  const mergeReceipts = () => {
++    if (!io.fs.existsSync(mergesPath)) return [];
++    return String(io.fs.readFileSync(mergesPath, 'utf8'))
++      .split('\n')
++      .filter((l) => l.trim() !== '')
++      .map((l) => {
++        try {
++          return JSON.parse(l);
++        } catch {
++          return null; // a torn record proves nothing — ignore it
++        }
++      })
++      .filter(Boolean);
++  };
++
+   const spawn = async (/** @type {any} */ assignment, /** @type {string} */ prompt, /** @type {string} */ seatPath, /** @type {string} */ label) => {
+     childSeq += 1;
+     const childId = `${String(childSeq).padStart(3, '0')}-${label}`;
+@@ -232,19 +257,27 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs
+     const gate = `subtask-${st.id}-review`;
+ 
+     // A crash between merge and PHASE_ADVANCE leaves the branch fully merged:
+-    // recognize it (tip is an ancestor of main) and advance instead of a
+-    // misleading empty-branch park (H7).
+-    let alreadyMerged = false;
++    // recognize it and advance instead of a misleading empty-branch park (H7).
++    // Recognition requires BOTH a supervisor-owned merge receipt AND the
++    // branch tip being an ancestor of main (I1): is-ancestor alone
++    // false-positives on a stale empty branch parked at main's old tip (a
++    // writer that crashed before its first commit), and a receipt alone can
++    // outlive a rewound main. Ancestor-without-receipt parks as stale;
++    // receipt-without-ancestor re-runs the subtask.
++    let isAncestor = false;
+     try {
+       await io.execFile('git', ['merge-base', '--is-ancestor', branch, 'main'], { cwd: root });
+-      alreadyMerged = true;
++      isAncestor = true;
+     } catch {
+-      // Not merged (or the branch does not exist yet) — the normal path.
++      // Not an ancestor (or the branch does not exist yet) — the normal path.
+     }
+-    if (alreadyMerged) {
+-      io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main — advancing\n`);
+-      await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+-      continue;
++    if (isAncestor) {
++      if (mergeReceipts().some((r) => r?.subtaskId === st.id)) {
++        io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main (receipt + ancestor) — advancing\n`);
++        await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
++        continue;
++      }
++      return park(`subtask '${st.id}' has a stale branch '${branch}' sitting at main's tip with no merge receipt — a writer likely crashed before committing; delete the branch and resume`);
+     }
+ 
+     const writerAssignment = resolveOne(`worker-${seat}`);
+@@ -402,6 +435,9 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs
+ 
+       const merge = await mergeSubtask(root, { branch }, io);
+       if (merge.ok !== true) return park(`merge of '${branch}' refused: ${merge.reason}`);
++      // The receipt lands BEFORE the phase-advance journal write (I1): a
++      // crash between the two resumes into a receipt-backed advance.
++      appendEntry(io.fs, mergesPath, { subtaskId: st.id, branch, mergedAt: io.now() });
+       merged = true;
+     }
+ 
+diff --git a/tests/commands/loop-run.test.mjs b/tests/commands/loop-run.test.mjs
+index 029a651..974a1b5 100644
+--- a/tests/commands/loop-run.test.mjs
++++ b/tests/commands/loop-run.test.mjs
+@@ -426,6 +426,9 @@ describe('loop run — recovery from a mid-run crash', () => {
+       smokeApproval: null,
+       createdAt: T0,
+       journalSeq: 1,
++      // I3 reconciliation: stamped so the resume is not refused as unstamped.
++      flavor: 'loop',
++      specDigest: dedupeKey(spec.phases),
+     };
+     io.fs.writeFileSync(p.state, JSON.stringify(midState, null, 2) + '\n');
+     io.fs.writeFileSync(p.journal, JSON.stringify({ seq: 1, ts: T0, type: 'phase-advance' }) + '\n');
+@@ -599,6 +602,9 @@ describe('loop run — resume (G6)', () => {
+     smokeApproval: null,
+     createdAt: T0,
+     journalSeq: 0,
++    // I3 reconciliation: stamped so a valid resume is not refused as unstamped.
++    flavor: 'loop',
++    specDigest: dedupeKey(loopSpec().phases),
+     ...over,
+   });
+ 
+@@ -711,6 +717,7 @@ describe('loop run — state flavor binding (H5)', () => {
+     assert.equal(code, 2, 'a pipeline-flavored state cannot be resumed as a loop');
+     assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
+     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
++    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the flavor-mismatch refusal leaves no supervisor.lock behind (I4)');
+   });
+ 
+   it('RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns', async () => {
+@@ -733,6 +740,7 @@ describe('loop run — state flavor binding (H5)', () => {
+     assert.equal(code, 2, 'a resume against a changed phase list refuses rather than misaligning');
+     assert.match(io.stderrText() + io.stdoutText(), /phase|spec|changed|digest/i, 'the refusal names the spec change');
+     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
++    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the spec-digest refusal leaves no supervisor.lock behind (I4)');
+   });
+ });
+ 
+@@ -752,7 +760,7 @@ describe('loop run — ESCALATION.md wording (H6)', () => {
+       JSON.stringify({
+         schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 0,
+         iterations: { 'gate-1': 5 }, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+-        flavor: 'loop',
++        flavor: 'loop', specDigest: dedupeKey(spec.phases), // I3 reconciliation: stamped so it reaches the cap gate, not a stamp refusal
+       }, null, 2) + '\n',
+     );
+     const code = await cmdLoop(['run'], io);
+@@ -786,3 +794,111 @@ describe('loop run — lock runId correlates with state runId (H8)', () => {
+     assert.equal(lockRunIdAtSpawn, stateRunId, `the lock runId matches the state runId at spawn time (got lock=${lockRunIdAtSpawn}, state=${stateRunId})`);
+   });
+ });
++
++// ===========================================================================
++// I2 (B2) — retire records must not mask a SAME-childId in-flight child across
++// invocations; the registry is truncated on each successful acquisition.
++describe('loop run — retire records never mask a resumed in-flight child (I2)', () => {
++  const DIR = `${loopPaths('/repo').dir}`;
++
++  it('RED (I2a): run 1 retired childId X; run 2 has a FRESH in-flight X (no retire) + dead lock -> reclaim MUST kill X', async () => {
++    const io = makeLoopRepo({ runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
++    io.__runner = io.superviseChild;
++    const killCalls = [];
++    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { killCalls.push({ pid, sig }); return true; };
++    // The resumed run's in-flight child (pgid 9002) is alive; run 1's retired X is not.
++    io.processAlive = (/** @type {number} */ p) => p === 9002;
++    io.fs.mkdirSync(DIR, { recursive: true });
++    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'crashed' }));
++    io.fs.writeFileSync(
++      `${DIR}/children.ndjson`,
++      // Run 1: childId '001-plan' started (pgid 9001) then retired.
++      JSON.stringify({ childId: '001-plan', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n' +
++        JSON.stringify({ childId: '001-plan', endedAt: T0 }) + '\n' +
++        // Run 2 (the crashed resume): the SAME childId '001-plan' started again (pgid 9002), never retired.
++        JSON.stringify({ childId: '001-plan', pid: 8002, pgid: 9002, startedAt: T0 }) + '\n',
++    );
++
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0, `the reclaiming run completes; stderr: ${io.stderrText()}`);
++    assert.ok(killCalls.some((k) => Math.abs(k.pid) === 9002), `the resumed in-flight X (9002) is killed despite an earlier retire of the same childId; kills: ${JSON.stringify(killCalls)}`);
++  });
++
++  it('RED (I2b): a NORMAL (non-reclaim) acquisition truncates prior-invocation records — a stale retire cannot linger to mask a future child', async () => {
++    const io = makeLoopRepo({ runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
++    io.__runner = io.superviseChild;
++    // A prior invocation's stale records (a distinctive pgid 4242000) are present;
++    // no lock, so this is a clean acquisition.
++    io.fs.mkdirSync(DIR, { recursive: true });
++    io.fs.writeFileSync(
++      `${DIR}/children.ndjson`,
++      JSON.stringify({ childId: '001-plan', pid: 4242000, pgid: 4242000, startedAt: T0 }) + '\n' + JSON.stringify({ childId: '001-plan', endedAt: T0 }) + '\n',
++    );
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0);
++    const raw = io.files()[`${DIR}/children.ndjson`] ?? '';
++    assert.doesNotMatch(raw, /4242000/, "a prior invocation's records are truncated at acquisition — they cannot mask a current child");
++  });
++});
++
++// ===========================================================================
++// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused,
++// with the archive instruction; I4 — the refusal leaves no lock behind.
++describe('loop run — unstamped legacy state is refused (I3 + I4)', () => {
++  const DIR = `${loopPaths('/repo').dir}`;
++  it('RED (I3/I4): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns, no leaked lock', async () => {
++    const io = makeLoopRepo({ runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
++    io.__runner = io.superviseChild;
++    io.fs.mkdirSync(DIR, { recursive: true });
++    io.fs.writeFileSync(
++      `${DIR}/state.json`,
++      JSON.stringify({
++        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 1,
++        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
++        // NO flavor, NO specDigest — a pre-stamp/stripped legacy state.
++      }, null, 2) + '\n',
++    );
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 2, 'an unstamped state is a mismatch — refused, not grandfathered');
++    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
++    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
++    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the refusal leaves no supervisor.lock behind (I4)');
++  });
++});
++
++// ===========================================================================
++// I5 (B5) — the run lock passes startTime to processAlive: a recycled pid
++// (alive by pid alone but failing the pid+startTime pair) is reclaimed, not
++// refused as live.
++describe('loop run — lock reclaim uses pid+startTime (I5)', () => {
++  const DIR = `${loopPaths('/repo').dir}`;
++  it('RED (I5): a lock whose pid is alive by a 1-arg check but fails the (pid, startTime) pair is treated as DEAD and reclaimed', async () => {
++    const io = makeLoopRepo({ runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
++    io.__runner = io.superviseChild;
++    // pid 7777 reads as alive for ANY defined startTime EXCEPT the recorded 999
++    // (which is the reused-pid case → dead). A 1-arg check, or a wrong-but-defined
++    // second arg, would read live and wedge the lock. Only passing the RECORDED
++    // startTime (999) reclaims — so the fake is inverted vs. a "match one value"
++    // trap, and the calls are recorded to prove the pair is passed through.
++    const aliveCalls = [];
++    io.processAlive = (/** @type {number} */ pid, /** @type {number | undefined} */ startTime) => {
++      aliveCalls.push({ pid, startTime });
++      if (pid !== 7777) return false;
++      return startTime !== 999; // dead ONLY for the recorded (pid, startTime) pair
++    };
++    io.fs.mkdirSync(DIR, { recursive: true });
++    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 7777, startTime: 999, runId: 'recycled' }));
++
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0, `a reused-pid lock is reclaimed (not refused as live); stderr: ${io.stderrText()}`);
++    assert.ok(io.__runner.calls.length >= 1, 'the run proceeds after reclaiming the reused-pid lock');
++    assert.ok(
++      aliveCalls.some((c) => c.pid === 7777 && c.startTime === 999),
++      `the reclaim passes the RECORDED (pid, startTime) pair to processAlive; calls: ${JSON.stringify(aliveCalls)}`,
++    );
++  });
++});
+diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+index a8b94da..400335d 100644
+--- a/tests/commands/pipeline-run.test.mjs
++++ b/tests/commands/pipeline-run.test.mjs
+@@ -910,26 +910,126 @@ describe('pipeline — H5: state flavor + spec-digest binding', () => {
+ });
+ 
+ // ===========================================================================
+-// H7 (B7) — a crash between merge and PHASE_ADVANCE advances, not empty-park.
+-describe('pipeline — H7: an already-merged subtask advances on resume (no empty-branch park)', () => {
+-  it('RED (H7): a resumed subtask whose branch is already an ancestor of main ADVANCES (no writer, no empty-branch park)', async () => {
++// I1 (A1/B1) — auto-advance requires a supervisor-owned MERGE RECEIPT, not just
++// is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
++// must PARK, not silently skip the subtask.
++//
++// Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
++// one line per merged subtask `{ subtaskId, branch, mergedAt }`. Auto-advance on
++// resume requires is-ancestor(branch, main) AND a receipt for that subtask.
++describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
++  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
++  const seedReceipt = (io, subtaskId, branch) => {
++    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
++    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId, branch, mergedAt: T0 }) + '\n');
++  };
++  const receipts = (io) => {
++    const raw = io.files()[MERGES];
++    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++  };
++
++  it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
+     const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+-    // t1's branch is already merged: `merge-base --is-ancestor` exits 0 AND
+-    // `log main..t1` is empty; t2 is a normal, unmerged subtask.
++    // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
+     const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+     io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+     io.__runner = io.superviseChild;
+-    // A crash left the run at phaseIndex 0 (t1 merged but not advanced).
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
++    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1');
+ 
+     const code = await run(['pipeline', 'run'], io);
+-    assert.equal(code, 0, `an already-merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+-    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge/i, 'the already-merged subtask is NOT mistaken for an empty branch');
+-    // t1 (seat a) is skipped — the first writer is t2's, in wt-b.
++    assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
++    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+     const writers = writersOf(io.__runner);
+     assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+-    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as already merged and skipped');
++    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
++  });
++
++  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
++    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
++    // t1's branch is empty at main's tip: is-ancestor true, empty main..t1 — but
++    // NO merge receipt (the writer crashed before its first commit).
++    const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
++    io.__runner = io.superviseChild;
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
++    // No receipt seeded.
++
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
++    assert.match(io.stderrText() + io.stdoutText(), /stale/i, 'the park names the stale branch');
++    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
++  });
++
++  it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
++    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
++    // A receipt exists for t1, but the branch is NOT an ancestor of main (the
++    // merge did not actually land — e.g. main was rewound). A receipt-ONLY
++    // advance would skip t1; the required conjunction re-runs it.
++    const git = pipelineGit({ mergedBranches: [] }); // is-ancestor FALSE for every branch
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
++    io.__runner = io.superviseChild;
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
++    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
++
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the run completes by re-running t1; stderr: ${io.stderrText()}`);
++    const writers = writersOf(io.__runner);
++    assert.ok(writers.length >= 1, 'a writer ran');
++    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
++  });
++
++  it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++
++    // Ordering hook: at each phase-advance journal write, capture whether the t1
++    // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
++    const journalPath = `${loopPaths('/repo').dir}/journal.ndjson`;
++    const receiptAtAdvance = [];
++    const realAppend = io.fs.appendFileSync.bind(io.fs);
++    io.fs.appendFileSync = (/** @type {any} */ path, /** @type {any} */ data) => {
++      if (String(path) === journalPath && /"type":"phase-advance"/.test(String(data))) {
++        receiptAtAdvance.push(receipts(io).some((r) => r.subtaskId === 't1'));
++      }
++      return realAppend(path, data);
++    };
++
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0);
++    const rec = receipts(io).find((r) => r.subtaskId === 't1');
++    assert.ok(rec, 'a merge receipt is persisted after the subtask merges');
++    assert.equal(rec.branch, 'baton/wt-a/subtask-t1', 'the receipt names the merged branch');
++    assert.ok(typeof rec.mergedAt === 'string' && rec.mergedAt.length > 0, 'the receipt records mergedAt');
++    assert.ok(receiptAtAdvance.length >= 1 && receiptAtAdvance.every(Boolean), 'the receipt is durable on disk BEFORE the phase advance is journaled (crash-safe)');
++  });
++});
++
++// ===========================================================================
++// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
++// pipeline run, with the archive instruction, zero spawns.
++describe('pipeline — I3: unstamped legacy state is refused', () => {
++  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
++    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
++    io.__runner = io.superviseChild;
++    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
++    io.fs.writeFileSync(
++      loopPaths('/repo').state,
++      JSON.stringify({
++        schema: 'baton/loop-state@1', runId: 'legacy', goal: 'Ship the pipeline', phaseCount: 2, phaseIndex: 1,
++        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
++        // NO flavor, NO specDigest.
++      }, null, 2) + '\n',
++    );
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 2, 'an unstamped state is refused, not resumed');
++    assert.match(io.stderrText() + io.stdoutText(), /archive/i, 'the refusal tells the operator to archive the state');
++    assert.equal(io.__runner.calls.length, 0, 'no child spawned on an unstamped-state refusal');
+   });
+ });
+ 
+
+codex
+I don’t see a diff-level assertion weakening in the integration file. I’m going to run the command-level I3 pins and typecheck, since those are the executable checks allowed here and they directly cover the unstamped refusal contract.
+exec
+/bin/zsh -lc 'npm run typecheck' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+ succeeded in 124ms:
+▶ pipeline — CLI routing & flags
+  ✔ no subcommand -> usage error (exit 2) naming a subcommand, not "unknown command" (1.314625ms)
+  ✔ an unknown subcommand exits 2 naming it (0.169ms)
+  ✔ a stray positional / unknown flag exits 2 with zero spawns (0.195792ms)
+  ✔ BATON_SUPERVISED_CHILD does NOT suppress pipeline run (supervisor-side) (4.914209ms)
+✔ pipeline — CLI routing & flags (7.2515ms)
+▶ pipeline — preconditions
+  ✔ no loop.json -> exit 2 naming loop.json, zero spawns (0.681417ms)
+  ✔ missing / empty subtasks -> exit 2 naming subtasks, zero spawns (0.242833ms)
+  ✔ malformed subtask items exit 2 naming the offender, with zero spawns (0.3905ms)
+  ✔ setupWorktrees runs before subtask 1 (worktree adds recorded) and only once (1.337792ms)
+✔ pipeline — preconditions (2.880375ms)
+▶ pipeline — seat alternation (writer)
+  ✔ subtask 1 writes in wt-a on baton/wt-a/subtask-t1 (worker-a model); subtask 2 writes in wt-b on baton/wt-b/subtask-t2 (worker-b model) (1.050833ms)
+✔ pipeline — seat alternation (writer) (1.128375ms)
+▶ pipeline — reviewer seat (read-only, other seat)
+  ✔ both reviewers, in order: t1 = wb-model/WT_B/read-only, t2 = wa-model/WT_A/read-only, each under the subtask-reviewer role (1.203625ms)
+  ✔ RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>) (0.603709ms)
+✔ pipeline — reviewer seat (read-only, other seat) (1.875334ms)
+▶ pipeline — verdict flow
+  ✔ reviewer APPROVED -> the MERGER child runs (merger model); on its APPROVED the SUPERVISOR merges via mergeSubtask (0.784625ms)
+  ✔ reviewer BLOCKED -> the SAME writer seat re-runs with the findings in its prompt (0.63975ms)
+  ✔ review-gate cap exhaustion -> escalated, ESCALATION.md, exit 3, no 6th spawn (0.707833ms)
+  ✔ merger BLOCKED -> the writer retries (same gate-cap discipline) (0.688958ms)
+✔ pipeline — verdict flow (2.902375ms)
+▶ pipeline — merge failures park
+  ✔ a merge CONFLICT from mergeSubtask parks the run (exit 4) (0.527167ms)
+  ✔ an attribution violation (foreign committer) blocks the merge and parks — no merge git call lands (0.362292ms)
+✔ pipeline — merge failures park (0.935667ms)
+▶ pipeline — worktree guard composition (preflight/postflight)
+  ✔ (a) a DIRTY writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.310833ms)
+  ✔ (b) a WRONG-branch writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.303208ms)
+  ✔ (c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge (0.327125ms)
+✔ pipeline — worktree guard composition (preflight/postflight) (0.989084ms)
+▶ pipeline — completion
+  ✔ both subtasks merged -> state done, exit 0; loop state + journal persisted under .handoff/loop (1.235625ms)
+✔ pipeline — completion (1.276792ms)
+▶ pipeline — G1: a claude-code worker seat writer carries model + seat cwd
+  ✔ RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer (0.709584ms)
+✔ pipeline — G1: a claude-code worker seat writer carries model + seat cwd (0.750333ms)
+▶ pipeline — G2: cap validation / resume / run-lock / stale branch
+  ✔ RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant) (0.14675ms)
+  ✔ RED (G2): a LIVE supervisor.lock refuses pipeline run (exit 1), zero spawns (0.145792ms)
+  ✔ RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing (0.399833ms)
+  ✔ RED (G2): a second pipeline run RESUMES loadLoopState — cap counters survive re-invocation (no refund) (1.248875ms)
+✔ pipeline — G2: cap validation / resume / run-lock / stale branch (2.024916ms)
+▶ pipeline — G3: writer result handling
+  ✔ RED (G3): a writer BLOCKED retries the WRITER without spawning a reviewer for the failed attempt (0.529583ms)
+  ✔ RED (G3): a writer whose LOG carries the claude session-limit banner routes to failover (not a plain review) (4.55925ms)
+  ✔ RED (G3): a writer that commits NOTHING (empty branch) is refused/parked — an empty branch never merges (0.853208ms)
+✔ pipeline — G3: writer result handling (6.022041ms)
+▶ pipeline — G5: reviewer-seat preflight + self-heal
+  ✔ RED (G5): a DIRTY reviewer seat parks BEFORE the reviewer spawns (0.330375ms)
+  ✔ RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash (0.466958ms)
+✔ pipeline — G5: reviewer-seat preflight + self-heal (0.838375ms)
+▶ pipeline — H1: writer prompt carries the verdict-tail contract
+  ✔ RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable) (0.36475ms)
+✔ pipeline — H1: writer prompt carries the verdict-tail contract (0.3895ms)
+▶ pipeline — H2: bounded failover (avoid carries; exhaustion parks)
+  ✔ RED (H2a): always-model-unavailable on a two-entry codex chain never re-picks a rejected model; all rejected -> PARK (bounded) (0.908625ms)
+  ✔ RED (H2b): always-usage-limit across a cross-platform chain parks within a bounded child budget (no infinite loop) (3.783333ms)
+✔ pipeline — H2: bounded failover (avoid carries; exhaustion parks) (4.732166ms)
+▶ pipeline — H5: state flavor + spec-digest binding
+  ✔ RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns (0.229917ms)
+  ✔ RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex (0.173625ms)
+✔ pipeline — H5: state flavor + spec-digest binding (0.439625ms)
+▶ pipeline — I1: merge-receipt-gated auto-advance
+  ✔ RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park) (0.502833ms)
+  ✔ RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances (0.209834ms)
+  ✔ GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped (0.478792ms)
+  ✔ RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled (0.378208ms)
+✔ pipeline — I1: merge-receipt-gated auto-advance (1.622917ms)
+▶ pipeline — I3: unstamped legacy state is refused
+  ✔ RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns (0.155125ms)
+✔ pipeline — I3: unstamped legacy state is refused (0.177458ms)
+ℹ tests 72
+ℹ suites 35
+ℹ pass 72
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 111.639042
+
+ succeeded in 771ms:
+codex
+The command-level checks passed in this sandbox: both command test files were green, and `tsc --noEmit` completed. I’m doing one more implementation read around event application and lock release, because a fixture stamp would be risky if replay dropped stamps or if refusal paths could leak the supervisor lock.
+exec
+/bin/zsh -lc "awk 'NR>=1 && NR<=118 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/loop/state.mjs" in /Users/saksham/baton
+exec
+/bin/zsh -lc "awk 'NR>=130 && NR<=205 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/commands/loop.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  130:
+  131:  const tryExclusive = () => {
+  132:    // Fast-path an already-present lock (fakes without O_EXCL semantics rely
+  133:    // on this); the wx flag below is the REAL exclusivity on a POSIX fs — a
+  134:    // competitor that lands between the check and the write throws EEXIST
+  135:    // instead of being clobbered.
+  136:    if (io.fs.existsSync(lockPath)) return false;
+  137:    try {
+  138:      io.fs.writeFileSync(lockPath, payload, { flag: 'wx' });
+  139:      return true;
+  140:    } catch (err) {
+  141:      if (/** @type {any} */ (err)?.code === 'EEXIST') return false;
+  142:      throw err;
+  143:    }
+  144:  };
+  145:
+  146:  for (let attempt = 1; attempt <= 2; attempt += 1) {
+  147:    if (tryExclusive()) {
+  148:      // A fresh acquisition owns a fresh child registry: prior invocations'
+  149:      // start/retire records are truncated so a stale retire can never mask a
+  150:      // later in-flight child that reuses the same childId (I2).
+  151:      try {
+  152:        if (io.fs.existsSync(childrenPath)) io.fs.unlinkSync(childrenPath);
+  153:      } catch {
+  154:        // Best effort.
+  155:      }
+  156:      return {
+  157:        ok: true,
+  158:        release: () => {
+  159:          try {
+  160:            if (io.fs.existsSync(lockPath)) io.fs.unlinkSync(lockPath);
+  161:          } catch {
+  162:            // Best effort — a stale lock is recoverable via the dead path.
+  163:          }
+  164:        },
+  165:      };
+  166:    }
+  167:    const existing = safeReadJson(io.fs, lockPath);
+  168:    const other = existing.ok ? existing.value : null;
+  169:    // Liveness verifies the (pid, startTime) PAIR — a recycled pid without the
+  170:    // recorded start time is a dead owner, not a live supervisor (I5).
+  171:    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid, other.startTime) : true;
+  172:    const sameProcess = other && other.pid === io.pid && other.startTime === io.startTime;
+  173:    if (!sameProcess && (!other || other.host !== io.host || alive)) {
+  174:      io.stderr.write(`baton ${cmdLabel}: another supervisor (pid ${other?.pid ?? 'unknown'} on ${other?.host ?? 'unknown'}, run ${other?.runId ?? '?'}) holds the run lock — refusing a second supervisor\n`);
+  175:      return { ok: false, code: 1 };
+  176:    }
+  177:    // Provably dead (or our own stale lock): reap its recorded in-flight
+  178:    // child groups BEFORE anything else runs, then reclaim.
+  179:    if (io.fs.existsSync(childrenPath)) {
+  180:      const lines = String(io.fs.readFileSync(childrenPath, 'utf8')).split('\n').filter((l) => l.trim() !== '');
+  181:      // Match retires to starts IN ORDER per childId — a resumed invocation
+  182:      // reuses childIds, and a prior run's retire must never mask the newer
+  183:      // in-flight start of the same id (I2). Whatever start remains unmatched
+  184:      // is genuinely in-flight.
+  185:      /** @type {Map<string, any[]>} */
+  186:      const inflight = new Map();
+  187:      for (const line of lines) {
+  188:        try {
+  189:          const rec = JSON.parse(line);
+  190:          if (typeof rec?.endedAt === 'string') inflight.get(rec.childId)?.shift();
+  191:          else if (typeof rec?.pgid === 'number') {
+  192:            if (!inflight.has(rec.childId)) inflight.set(rec.childId, []);
+  193:            inflight.get(rec.childId)?.push(rec);
+  194:          }
+  195:        } catch {
+  196:          // A torn record is unreapable — skip it.
+  197:        }
+  198:      }
+  199:      // Kill ONLY genuinely in-flight children (start with no matching
+  200:      // retire): a retired child's pgid may have been recycled by an
+  201:      // unrelated live process — killing it would be a pid-reuse casualty (H3).
+  202:      for (const recs of inflight.values()) {
+  203:        for (const rec of recs) {
+  204:          if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+  205:            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+
+ succeeded in 0ms:
+    1:/**
+    2: * Loop run state — snapshot + journal + replay for the Layer-2 supervisor,
+    3: * mirroring the bundle store's crash-tolerance idioms (atomic tmp+rename
+    4: * snapshots, torn-tail-tolerant NDJSON, seq-dedup replay). Everything lives
+    5: * under <root>/.handoff/loop/; the supervisor is the sole writer. Plan:
+    6: * docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop",
+    7: * §"Smoke gate", §"Supervisor lifetime and recovery", §"Caps".
+    8: */
+    9:import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+   10:import { atomicWriteJson, safeReadJson, ensureDir } from '../util/fsx.mjs';
+   11:import { dedupeKey } from '../util/ids.mjs';
+   12:
+   13:export const LOOP_STATE_SCHEMA = 'baton/loop-state@1';
+   14:
+   15:/** The frozen status vocabulary. */
+   16:export const LOOP_STATUS = Object.freeze({
+   17:  RUNNING: 'running',
+   18:  AWAITING_SMOKE_APPROVAL: 'awaiting-smoke-approval',
+   19:  PARKED: 'parked',
+   20:  ESCALATED: 'escalated',
+   21:  DONE: 'done',
+   22:});
+   23:
+   24:/** The frozen journal event vocabulary. */
+   25:export const LOOP_EVENT = Object.freeze({
+   26:  PHASE_ADVANCE: 'phase-advance',
+   27:  GATE_ITERATION: 'gate-iteration',
+   28:  PARK: 'park',
+   29:  RESUME: 'resume',
+   30:  SMOKE_AWAIT: 'smoke-await',
+   31:  SMOKE_APPROVE: 'smoke-approve',
+   32:});
+   33:
+   34:// Every gate loops at most 5 times — a repo-wide hard invariant (AGENTS.md
+   35:// §Review gates); the reducer refuses a 6th and escalates instead.
+   36:const GATE_ITERATION_CAP = 5;
+   37:
+   38:/** @param {string} root */
+   39:export function loopPaths(root) {
+   40:  const dir = `${root}/.handoff/loop`;
+   41:  return { dir, state: `${dir}/state.json`, journal: `${dir}/journal.ndjson` };
+   42:}
+   43:
+   44:/**
+   45: * Fresh run state — pure and deterministic from the injected io (identity
+   46: * facts + clock only; no Date.now/Math.random, which would break replay).
+   47: * @param {any} spec a VALIDATED loop spec @param {any} io
+   48: */
+   49:export function initLoopState(spec, io) {
+   50:  const runId = `loop-${dedupeKey({ host: io.host, pid: io.pid, startTime: io.startTime, at: io.now() }).slice(0, 12)}`;
+   51:  /** @type {Record<string, number>} */
+   52:  const iterations = {};
+   53:  for (const p of spec.phases ?? []) {
+   54:    if (/gate/.test(String(p.id))) iterations[p.id] = 0;
+   55:  }
+   56:  return {
+   57:    schema: LOOP_STATE_SCHEMA,
+   58:    runId,
+   59:    goal: spec.goal,
+   60:    phaseCount: Array.isArray(spec.phases) ? spec.phases.length : 0,
+   61:    phaseIndex: 0,
+   62:    iterations,
+   63:    status: LOOP_STATUS.RUNNING,
+   64:    parkReason: null,
+   65:    escalation: null,
+   66:    smokeApproval: null,
+   67:    createdAt: io.now(),
+   68:    journalSeq: 0,
+   69:  };
+   70:}
+   71:
+   72:/**
+   73: * The pure transition reducer. Never mutates its input; unknown events and
+   74: * refused transitions return the input state unchanged (a new reference is
+   75: * only produced for a real transition).
+   76: * @param {any} state @param {any} ev
+   77: */
+   78:export function applyLoopEvent(state, ev) {
+   79:  switch (ev?.type) {
+   80:    case LOOP_EVENT.PHASE_ADVANCE: {
+   81:      const next = state.phaseIndex + 1;
+   82:      if (next >= state.phaseCount) return { ...state, phaseIndex: state.phaseCount, status: LOOP_STATUS.DONE };
+   83:      return { ...state, phaseIndex: next };
+   84:    }
+   85:    case LOOP_EVENT.GATE_ITERATION: {
+   86:      const gate = String(ev.gate);
+   87:      const current = state.iterations?.[gate] ?? 0;
+   88:      // The 6th attempt is REFUSED: the counter stays at the cap and the run
+   89:      // escalates with a record naming the gate — never a 6th run.
+   90:      if (current >= GATE_ITERATION_CAP) {
+   91:        return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: current } };
+   92:      }
+   93:      return { ...state, iterations: { ...state.iterations, [gate]: current + 1 } };
+   94:    }
+   95:    case LOOP_EVENT.PARK:
+   96:      return { ...state, status: LOOP_STATUS.PARKED, parkReason: ev.reason ?? null };
+   97:    case LOOP_EVENT.RESUME:
+   98:      // Only a PARK is resumable; an escalation is an operator decision.
+   99:      if (state.status !== LOOP_STATUS.PARKED) return state;
+  100:      return { ...state, status: LOOP_STATUS.RUNNING, parkReason: null };
+  101:    case LOOP_EVENT.SMOKE_AWAIT:
+  102:      return { ...state, status: LOOP_STATUS.AWAITING_SMOKE_APPROVAL };
+  103:    case LOOP_EVENT.SMOKE_APPROVE: {
+  104:      // Guarded transition: only meaningful while awaiting, and only with the
+  105:      // caller's verifySmokeToken result stamped verified === true. A missing
+  106:      // or false `verified` is unverified — it never resumes the run.
+  107:      if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) return state;
+  108:      if (ev.verified !== true) return state;
+  109:      return { ...state, status: LOOP_STATUS.RUNNING, smokeApproval: { token: ev.token, at: ev.ts ?? null } };
+  110:    }
+  111:    default:
+  112:      return state;
+  113:  }
+  114:}
+  115:
+  116:/**
+  117: * Atomic snapshot write (tmp + rename under .handoff/loop).
+  118: * @param {string} root @param {any} state @param {any} io
+
+exec
+/bin/zsh -lc "awk 'NR>=700 && NR<=742 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  700:// H5 (B4) vice-versa — a pipeline-flavored state is refused by `loop run`.
+  701:describe('loop run — state flavor binding (H5)', () => {
+  702:  const DIR = `${loopPaths('/repo').dir}`;
+  703:  it('RED (H5): a state.json created by `pipeline run` (flavor pipeline) is REFUSED by loop run (exit 2), zero spawns', async () => {
+  704:    const io = makeLoopRepo({ runner: undefined });
+  705:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+  706:    io.__runner = io.superviseChild;
+  707:    io.fs.mkdirSync(DIR, { recursive: true });
+  708:    io.fs.writeFileSync(
+  709:      `${DIR}/state.json`,
+  710:      JSON.stringify({
+  711:        schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 0,
+  712:        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+  713:        flavor: 'pipeline',
+  714:      }, null, 2) + '\n',
+  715:    );
+  716:    const code = await cmdLoop(['run'], io);
+  717:    assert.equal(code, 2, 'a pipeline-flavored state cannot be resumed as a loop');
+  718:    assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
+  719:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  720:    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the flavor-mismatch refusal leaves no supervisor.lock behind (I4)');
+  721:  });
+  722:
+  723:  it('RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns', async () => {
+  724:    // The current loop.json has plan -> gate-1; the seeded state was digested over
+  725:    // a different phase list, so resuming its phaseIndex would misalign.
+  726:    const io = makeLoopRepo({ runner: undefined });
+  727:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+  728:    io.__runner = io.superviseChild;
+  729:    const oldPhases = [{ id: 'plan', role: 'planner' }, { id: 'REMOVED', role: 'plan-reviewer' }, { id: 'gate-1', role: 'plan-reviewer' }];
+  730:    io.fs.mkdirSync(DIR, { recursive: true });
+  731:    io.fs.writeFileSync(
+  732:      `${DIR}/state.json`,
+  733:      JSON.stringify({
+  734:        schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 1,
+  735:        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+  736:        flavor: 'loop', specDigest: dedupeKey(oldPhases),
+  737:      }, null, 2) + '\n',
+  738:    );
+  739:    const code = await cmdLoop(['run'], io);
+  740:    assert.equal(code, 2, 'a resume against a changed phase list refuses rather than misaligning');
+  741:    assert.match(io.stderrText() + io.stdoutText(), /phase|spec|changed|digest/i, 'the refusal names the spec change');
+  742:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+
+exec
+/bin/zsh -lc "awk 'NR>=1036 && NR<=1088 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/pipeline-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+ 1036:function loopFile(io, name) {
+ 1037:  return io.files()[`${loopPaths('/repo').dir}/${name}`];
+ 1038:}
+
+exec
+/bin/zsh -lc "awk 'NR>=884 && NR<=910 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/pipeline-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  884:// H5 (B4) — state flavor + spec binding across loop/pipeline.
+  885:describe('pipeline — H5: state flavor + spec-digest binding', () => {
+  886:  it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+  887:    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+  888:    io.superviseChild = fakeRunner(io, cleanSubtask());
+  889:    io.__runner = io.superviseChild;
+  890:    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+  891:    const code = await run(['pipeline', 'run'], io);
+  892:    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+  893:    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+  894:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  895:  });
+  896:
+  897:  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+  898:    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+  899:    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  900:    io.__runner = io.superviseChild;
+  901:    // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+  902:    // the current subtasks, so resuming its phaseIndex would misalign.
+  903:    const oldSubtasks = [{ id: 't1', title: 'a' }, { id: 'REMOVED', title: 'gone' }, { id: 't2', title: 'b' }];
+  904:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+  905:    const code = await run(['pipeline', 'run'], io);
+  906:    assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+  907:    assert.match(io.stderrText() + io.stdoutText(), /subtask|spec|changed|digest/i, 'the refusal names the spec change');
+  908:    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+  909:  });
+  910:});
+
+exec
+/bin/zsh -lc "awk 'NR>=430 && NR<=455 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  430:      flavor: 'loop',
+  431:      specDigest: dedupeKey(spec.phases),
+  432:    };
+  433:    io.fs.writeFileSync(p.state, JSON.stringify(midState, null, 2) + '\n');
+  434:    io.fs.writeFileSync(p.journal, JSON.stringify({ seq: 1, ts: T0, type: 'phase-advance' }) + '\n');
+  435:    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'loop-prior' }));
+  436:
+  437:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]); // only gate-1 remains
+  438:    io.__runner = io.superviseChild;
+  439:
+  440:    const code = await cmdLoop(['run'], io);
+  441:    assert.equal(io.__runner.calls.length, 1, 'the completed plan phase is NOT re-run — only gate-1 spawns');
+  442:    assert.equal(io.__runner.calls[0].command, 'codex', 'the resumed child is the gate-1 reviewer (codex)');
+  443:    assert.equal(code, 0, 'resuming the remaining phase completes the run');
+  444:    const { state } = await loadLoopState('/repo', io);
+  445:    assert.equal(state.status, LOOP_STATUS.DONE);
+  446:  });
+  447:});
+  448:
+  449:// ===========================================================================
+  450:describe('loop run — strict flags & supervisor-side guard', () => {
+  451:  it('a stray positional exits 2', async () => {
+  452:    const io = makeLoopRepo();
+  453:    assert.equal(await cmdLoop(['run', 'stray'], io), 2);
+  454:  });
+  455:
+
+exec
+/bin/zsh -lc "awk 'NR>=25 && NR<=42 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/util/ids.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+   25:  }
+   26:  return JSON.stringify(value);
+   27:}
+   28:
+   29:/**
+   30: * sha256 hex over canonical JSON — the journal's idempotency key.
+   31: * @param {unknown} obj @returns {string}
+   32: */
+   33:export function dedupeKey(obj) {
+   34:  return createHash('sha256').update(canonicalJson(obj)).digest('hex');
+   35:}
+
+exec
+/bin/zsh -lc 'git diff --check -- tests/integration/loop-pipeline-e2e.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+exec
+/bin/zsh -lc 'git diff --numstat -- tests/integration/loop-pipeline-e2e.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+5	0	tests/integration/loop-pipeline-e2e.test.mjs
+
+exec
+/bin/zsh -lc "rg -n \"function makeRealIo|const makeRealIo|processAlive|processKill|initRepo\" tests/integration/loop-pipeline-e2e.test.mjs core/src/io core/src -g '*.mjs'" in /Users/saksham/baton
+ exited 2 in 0ms:
+rg: core/src/io: No such file or directory (os error 2)
+tests/integration/loop-pipeline-e2e.test.mjs:66:function initRepo(prefix, spec) {
+tests/integration/loop-pipeline-e2e.test.mjs:86:function makeRealIo(cwd, { superviseChild, now = NOW } = {}) {
+tests/integration/loop-pipeline-e2e.test.mjs:102:    processAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return /** @type {any} */ (e).code === 'EPERM'; } },
+tests/integration/loop-pipeline-e2e.test.mjs:144:    const cwd = initRepo(prefix, pipeSpec);
+tests/integration/loop-pipeline-e2e.test.mjs:199:    const cwd = initRepo('baton-e2e-attr-', spec);
+tests/integration/loop-pipeline-e2e.test.mjs:245:    const cwd = initRepo('baton-e2e-limitA-', loopSpec);
+tests/integration/loop-pipeline-e2e.test.mjs:269:    const cwd = initRepo('baton-e2e-limitAB A-'.replace(' ', ''), loopSpec);
+tests/integration/loop-pipeline-e2e.test.mjs:292:    const cwd = initRepo('baton-e2e-recover-', spec);
+tests/integration/loop-pipeline-e2e.test.mjs:344:    const cwd = initRepo('baton-e2e-residue-', spec);
+core/src/commands/loop.mjs:171:    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid, other.startTime) : true;
+core/src/commands/loop.mjs:204:          if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+core/src/commands/loop.mjs:205:            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+core/src/bundle/lock.mjs:59:  if (io.processAlive(owner.pid, owner.startTime)) return { state: 'live', owner };
+
+exec
+/bin/zsh -lc "awk 'NR>=20 && NR<=90 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/integration/loop-pipeline-e2e.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+   20:// loop-children-spawn). Children are in-process async fns injected via
+   21:// io.superviseChild — no real claude/codex needed; pipeline WRITERS do REAL git.
+   22://
+   23:// These are the real-fs/real-git acceptance pins for constraints 1–6.
+   24:// ---------------------------------------------------------------------------
+   25:
+   26:const SKIP_WIN = process.platform === 'win32';
+   27:const pexec = promisify(realExecFile);
+   28:const NAME = 'SakshamUboweja';
+   29:const EMAIL = 'ssakshamu@gmail.com';
+   30:const NOW = '2026-07-19T00:00:00.000Z';
+   31:const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+   32:const CODEX_LIMIT = "You've hit your usage limit"; //            codex usage-limit signature
+   33:
+   34:const tmpDirs = [];
+   35:after(() => { for (const d of tmpDirs) rmSync(d, { recursive: true, force: true }); });
+   36:function mkTmp(prefix) { const d = mkdtempSync(join(tmpdir(), prefix)); tmpDirs.push(d); return d; }
+   37:
+   38:function git(cwd, args, env) {
+   39:  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: env ? { ...process.env, ...env } : process.env });
+   40:  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr || r.stdout}`);
+   41:  return r.stdout;
+   42:}
+   43:
+   44:const CONFIG = {
+   45:  schema: 'baton/config@1',
+   46:  roles: {
+   47:    planner: ['codex/plan-m@xhigh'],
+   48:    // Two-platform chain so a limit failover can move claude-code -> codex (-> back).
+   49:    implementer: ['claude-code/cc-impl', 'codex/cx-impl@xhigh'],
+   50:    'test-author': ['codex/ta@xhigh'],
+   51:    'test-verifier': ['codex/tv@xhigh'],
+   52:    'plan-reviewer': ['codex/pr@xhigh'],
+   53:    'final-reviewer-a': ['codex/fra@xhigh'],
+   54:    'final-reviewer-b': ['codex/frb@xhigh'],
+   55:    // Pipeline seats — codex so worker/merger argv carry --model and merges FF.
+   56:    'worker-a': ['codex/wa@xhigh'],
+   57:    'worker-b': ['codex/wb@xhigh'],
+   58:    merger: ['codex/mg@xhigh'],
+   59:    'subtask-reviewer': ['codex/sr@xhigh'],
+   60:  },
+   61:  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+   62:  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+   63:};
+   64:
+   65:/** A real git repo, sole-author config, one initial commit, gitignore seeded. */
+   66:function initRepo(prefix, spec) {
+   67:  // Canonicalize: git resolves worktree paths to their realpath (on macOS the
+   68:  // tmpdir is a /var -> /private/var symlink), so the repo root must be the
+   69:  // realpath too or `git worktree list` paths won't match worktreePaths().
+   70:  const cwd = nodeFs.realpathSync(mkTmp(prefix));
+   71:  git(cwd, ['init', '-q', '-b', 'main']);
+   72:  git(cwd, ['config', 'user.name', NAME]);
+   73:  git(cwd, ['config', 'user.email', EMAIL]);
+   74:  git(cwd, ['config', 'commit.gpgsign', 'false']);
+   75:  // Pre-seed BOTH ignore lines so setupWorktrees is a no-op (constraint 5: the
+   76:  // only tracked change would be the .worktrees/ line — pre-seeding removes it).
+   77:  nodeFs.writeFileSync(join(cwd, '.gitignore'), '.handoff/\n.worktrees/\n');
+   78:  nodeFs.writeFileSync(join(cwd, 'baton.config.json'), JSON.stringify(CONFIG, null, 2));
+   79:  nodeFs.writeFileSync(join(cwd, 'README.md'), '# demo\n');
+   80:  if (spec) nodeFs.writeFileSync(join(cwd, 'loop.json'), JSON.stringify(spec, null, 2) + '\n');
+   81:  git(cwd, ['add', '.']);
+   82:  git(cwd, ['commit', '-q', '-m', 'initial']);
+   83:  return cwd;
+   84:}
+   85:
+   86:function makeRealIo(cwd, { superviseChild, now = NOW } = {}) {
+   87:  const out = [];
+   88:  const err = [];
+   89:  let tokenN = 0;
+   90:  return {
+
+exec
+/bin/zsh -lc "awk 'NR>=205 && NR<=235 {printf \"%5d:%s\\n\", NR, "'$0}'"' core/src/commands/loop.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+  205:            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+  206:          }
+  207:        }
+  208:      }
+  209:      try {
+  210:        io.fs.unlinkSync(childrenPath);
+  211:      } catch {
+  212:        // Best effort.
+  213:      }
+  214:    }
+  215:    io.stderr.write(`baton ${cmdLabel}: reclaimed the run lock from a provably-dead supervisor (pid ${other?.pid})\n`);
+  216:    try {
+  217:      io.fs.unlinkSync(lockPath);
+  218:    } catch {
+  219:      // Already gone.
+  220:    }
+  221:  }
+  222:  io.stderr.write(`baton ${cmdLabel}: could not acquire the run lock after reclaiming — another supervisor keeps winning\n`);
+  223:  return { ok: false, code: 1 };
+  224:}
+  225:
+  226:/**
+  227: * The supervisor state machine: drives the spec's phases through headless
+  228: * role children, records every transition in the journal-replayable loop
+  229: * state, enforces the 5-cap, pauses at the smoke gate, and hands limit
+  230: * deaths to the failover transaction. Children run via the injectable seam
+  231: * `io.superviseChild ?? superviseChild`.
+  232: * @param {Record<string, string | boolean>} flags @param {any} io
+  233: * @returns {Promise<number>}
+  234: */
+  235:async function runLoop(flags, io) {
+
+2026-07-19T16:34:30.172562Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The dead-lock part is covered by the real IO path: the fixture writes a never-existing PID, and the lock code’s dead-owner branch unlinks and reacquires before running. I’m done reading; I’ll give the scoped verdict with the limits separated from verified facts.
+exec
+/bin/zsh -lc "awk 'NR>=86 && NR<=110 {printf \"%5d:%s\\n\", NR, "'$0}'"' tests/integration/loop-pipeline-e2e.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+   86:function makeRealIo(cwd, { superviseChild, now = NOW } = {}) {
+   87:  const out = [];
+   88:  const err = [];
+   89:  let tokenN = 0;
+   90:  return {
+   91:    cwd,
+   92:    env: { ...process.env },
+   93:    stdin: '',
+   94:    stdout: { write: (s) => (out.push(String(s)), true) },
+   95:    stderr: { write: (s) => (err.push(String(s)), true) },
+   96:    fs: nodeFs,
+   97:    execFile: (cmd, args = [], opts = {}) => pexec(cmd, args, { ...opts, encoding: 'utf8' }),
+   98:    now: () => now,
+   99:    host: 'e2e-host',
+  100:    pid: process.pid,
+  101:    startTime: Math.round(performance.timeOrigin),
+  102:    processAlive: (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return /** @type {any} */ (e).code === 'EPERM'; } },
+  103:    platform: process.platform,
+  104:    newFencingToken: () => `tok-${(tokenN += 1)}`,
+  105:    superviseChild,
+  106:    stdoutText: () => out.join(''),
+  107:    stderrText: () => err.join(''),
+  108:  };
+  109:}
+  110:
+
+2026-07-19T16:34:34.874448Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+Header: test-verifier, codex/gpt-5.5@xhigh per task, harness Codex, date 2026-07-19, degraded: gpt-5.6-sol/5.6 unavailable.
+
+Verified facts:
+- The scoped diff is stamps-only: it adds the `dedupeKey` import and adds `flavor: 'loop'` plus `specDigest: dedupeKey(spec.phases)` to the seeded stale snapshot. No assertions changed. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:13), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:296)
+- The test still proves replay: snapshot starts at `phaseIndex: 0`/`journalSeq: 0`, journal has seq 1 `phase-advance`, then `loadLoopState()` must return `phaseIndex === 1`. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:296), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:316), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:325)
+- The test still proves only the remaining phase spawns: `cmdLoop(['run'])` must exit 0, runner calls must be exactly 1, and final state must be DONE. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:330)
+- The dead-lock setup remains present, and the run path can only proceed after the lock logic treats that owner as dead and reacquires. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:322), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:146), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:215)
+- Stamping this fixture does not undermine I3: the loop and pipeline I3 pins still seed states with no `flavor` and no `specDigest`, then assert exit 2, archive wording, and zero spawns. [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:847), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1013)
+- I found no implementation behavior hidden by this reconciliation: new loop/pipeline states are stamped at init, existing unstamped states are refused, and replay preserves extra stamp fields via state spreads. [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:263), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:273), [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:151), [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:163), [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:78)
+
+Hypothesis/limit: I did not run the integration file because this sandbox cannot create its real-fs `mkdtempSync(tmpdir())` repos. I did run the allowed command tests and typecheck; both exited 0.
+
+VERDICT: APPROVED
+FINDINGS:
+tokens used
+54,566
+Header: test-verifier, codex/gpt-5.5@xhigh per task, harness Codex, date 2026-07-19, degraded: gpt-5.6-sol/5.6 unavailable.
+
+Verified facts:
+- The scoped diff is stamps-only: it adds the `dedupeKey` import and adds `flavor: 'loop'` plus `specDigest: dedupeKey(spec.phases)` to the seeded stale snapshot. No assertions changed. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:13), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:296)
+- The test still proves replay: snapshot starts at `phaseIndex: 0`/`journalSeq: 0`, journal has seq 1 `phase-advance`, then `loadLoopState()` must return `phaseIndex === 1`. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:296), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:316), [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:325)
+- The test still proves only the remaining phase spawns: `cmdLoop(['run'])` must exit 0, runner calls must be exactly 1, and final state must be DONE. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:330)
+- The dead-lock setup remains present, and the run path can only proceed after the lock logic treats that owner as dead and reacquires. [loop-pipeline-e2e.test.mjs](/Users/saksham/baton/tests/integration/loop-pipeline-e2e.test.mjs:322), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:146), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:215)
+- Stamping this fixture does not undermine I3: the loop and pipeline I3 pins still seed states with no `flavor` and no `specDigest`, then assert exit 2, archive wording, and zero spawns. [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:847), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1013)
+- I found no implementation behavior hidden by this reconciliation: new loop/pipeline states are stamped at init, existing unstamped states are refused, and replay preserves extra stamp fields via state spreads. [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:263), [loop.mjs](/Users/saksham/baton/core/src/commands/loop.mjs:273), [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:151), [pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:163), [state.mjs](/Users/saksham/baton/core/src/loop/state.mjs:78)
+
+Hypothesis/limit: I did not run the integration file because this sandbox cannot create its real-fs `mkdtempSync(tmpdir())` repos. I did run the allowed command tests and typecheck; both exited 0.
+
+VERDICT: APPROVED
+FINDINGS:
