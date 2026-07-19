@@ -46,6 +46,41 @@ Park/resume/escalate behavior is explicit:
 
 A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
 
+## baton pipeline
+
+`baton pipeline run` is the dual-worktree preset over the loop engine. It takes a list of subtasks from `loop.json` and runs each one through a writer → reviewer → merger cycle across two isolated git worktrees, merging into `main` only after two independent read-only checks pass.
+
+Quickstart:
+
+```sh
+baton loop init "<goal>"
+# edit loop.json: add a subtasks array — [{"id": "auth", "title": "…"}, …]
+baton pipeline run
+```
+
+On first run baton creates two worktree seats, `.worktrees/wt-a` and `.worktrees/wt-b`, and gitignores `.worktrees/`. Subtasks alternate seats (first subtask → wt-a, second → wt-b, and so on), and each subtask flows through four steps:
+
+1. **Write** — the seat's worker gets branch `baton/wt-<seat>/subtask-<id>` checked out in its own worktree and commits its work there.
+2. **Review** — a read-only child runs under the `subtask-reviewer` role from the *other* seat, using that seat's worker model: fresh context, different model, diffing the branch against `main`.
+3. **Merge check** — a read-only `merger` child adversarially re-checks the branch.
+4. **Merge** — the supervisor itself (never a child) merges into `main` behind a merge lock and an attribution scan, then fast-forwards both seats. A merge conflict aborts and parks; baton never auto-resolves one.
+
+Every verdict is `APPROVED` / `APPROVED_WITH_NOTES` / `BLOCKED`. A BLOCKED verdict sends its findings back to the writer for another attempt; each subtask's review gate carries the same hard 5-iteration cap, and hitting it escalates. A child that dies (usage limit, crash) is never treated as a verdict — it routes through role failover, bounded by the role's chain length, and only a real verdict reaches the gate. An empty branch (no commits ahead of `main`) parks instead of merging.
+
+What it needs:
+
+- **`loop.json`** with a `goal` and a non-empty `subtasks` array of `{id, title}` objects. Ids must be unique — they name the branches. Optional: `budgets.iterationCap` (1–5) and `budgets.perRoleTimeoutMin`.
+- **Roles in `baton.config.json`:**
+
+| Role | Used for |
+|---|---|
+| `worker-a` | writer for seat wt-a (1st, 3rd, … subtask) |
+| `worker-b` | writer for seat wt-b (2nd, 4th, … subtask) |
+| `subtask-reviewer` | the role reviewer children run under (the model comes from the opposite seat's worker chain) |
+| `merger` | the read-only pre-merge adversarial check |
+
+Merges are crash-safe. Each merged subtask appends a receipt to `.handoff/loop/merges.ndjson` *before* the run's position advances, so a crash between merge and advance resumes into a receipt-backed skip instead of re-running merged work. `baton pipeline resume` continues a parked run; an escalated run stays with the operator (read `.handoff/loop/ESCALATION.md`). Resume refuses to misalign: editing the `subtasks` list mid-run, or resuming a `loop` run as a pipeline (and vice versa), is rejected — archive `.handoff/loop/` to start fresh. Exit codes match the `baton loop` table above.
+
 ## Install
 
 | Harness | Command |
