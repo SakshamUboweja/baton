@@ -82,6 +82,32 @@ EMPTY findings. New findings:
   findings are empty, include the last child's log tail (bounded) in
   ESCALATION.md.
 
+## Outcome — MILESTONE C CLOSED (2026-07-20)
+
+- **Attempt 3 (clone ~/baton-dogfood-3, post-D6-D8 fold eb5ac44): FULL PASS,
+  exit 0.** Both README subtasks merged with receipts and sole-author
+  commits; the doc-pipeline reviewer died once on sol and failed over live
+  to gpt-5.5 (children/006 → 007) — the D6 path proven in production.
+- **Loop dogfood (same clone): FULL PASS.** Dead-lock reclaim fired live
+  ("reclaimed the run lock from a provably-dead supervisor"); planner +
+  implementer ran; the implementer shipped a real `-v` alias with tests
+  (verified: `baton --version` → 0.2.0); the smoke gate stopped the run
+  with a faithful SMOKE-REVIEW.md; the bound token approved and the run
+  completed exit 0.
+- README docs authored BY the pipeline cherry-picked to the real repo
+  (66edc7b, b6b6f84); suite 1209/1209 green after.
+- **D9 (minor, deferred to v1.1):** after a smoke-approve resume completes
+  the final phase, the persisted status stays 'running' instead of 'done'
+  (the DONE flip from the pre-smoke PHASE_ADVANCE is overwritten by
+  SMOKE_AWAIT → SMOKE_APPROVE leaves RUNNING; the completion path prints
+  done and exits 0 without a final transition). Benign — re-runs print done
+  — but the artifact misdescribes a finished run.
+
+Eight findings (D1–D8) were found ONLY by live dogfooding — none surfaced
+in 1200+ tests or two Gate-2 reviews. Evidence clones: ~/baton-dogfood
+(attempt 1, parked), ~/baton-dogfood-2 (attempt 2, escalated),
+~/baton-dogfood-3 (attempt 3 + loop, both done).
+
 ## Process note
 
 Dogfood clone is left untouched (parked state preserved as evidence). After
