@@ -1,0 +1,328 @@
+role: final-reviewer-b
+model: claude-code/claude-fable-5 (fresh context)
+date: 2026-07-19
+
+# Gate 2 (independent, fresh context) — Milestone B: Layers 2+3 (goal loop + dual-worktree pipeline)
+
+Scope reviewed: commits 851d803..3cbe198 (11 commits) against the Gate-1-approved
+plan docs/plans/2026-07-18-goal-loop-worktree-pipeline.md and AGENTS.md. All
+claims below are from code/tests read and commands run in THIS session;
+hypotheses are labeled as such.
+
+## Validation actually run (verified facts)
+
+- `npm test` — 1138 tests, 344 suites, 0 fail, 0 skipped (constraint 6's "878
+  stay green" is subsumed: the full suite is green with ~260 new tests).
+- `npm run typecheck` — clean.
+- Spot-runs: tests/unit/loop-{spec,state,children,failover,worktrees,smoke-token}.test.mjs
+  + resolver-avoid-entries + supervised-child-guard + checkpoint-session-flag
+  (187/187 pass); tests/commands/loop-init,loop-run,pipeline-run +
+  tests/integration/loop-children-spawn,loop-pipeline-e2e (59/59 pass).
+- Live repro (scratchpad fixture repo, real git, no model spend): `baton
+  pipeline run` against a pre-existing `baton/wt-a/subtask-t1` branch crashes
+  with an unhandled rejection and raw stack trace ("fatal: a branch named
+  'baton/wt-a/subtask-t1' already exists") — see finding 3.
+- Installed-CLI check: `claude --help` documents `--output-format` default
+  "text" (only works with --print) — the ground for finding 1.
+- `git log 851d803..3cbe198 --format='%an|%ae|%cn|%ce'` → sole author/committer
+  SakshamUboweja <ssakshamu@gmail.com>; `%B` grep for co-authored/generated/🤖
+  → clean. `git ls-files`/`git log --all -- .handoff/ .worktrees/` → nothing
+  tracked, ever.
+
+## Acceptance constraints 1–6 — genuine vs nominal
+
+1. Loop e2e (fixture, live hooks, zero bundle reads/writes by children):
+   SUBSTANTIALLY satisfied at the fixture level. Real-fs e2e drives phases with
+   injected children (tests/integration/loop-pipeline-e2e.test.mjs:340-352
+   residue half; tests/commands/loop-run.test.mjs:199-357 phase driving + smoke
+   gate + approve/drift). The supervised-child guard is asserted per platform
+   with fs no-touch spies for checkpoint AND session-start, including
+   guard-before-flag-parsing and empty-string negatives
+   (tests/unit/supervised-child-guard.test.mjs:184-345), and the hook
+   entrypoint fast-paths out (adapters/claude-code/scripts/hook.mjs:153-154).
+   NOMINAL gaps: (a) "review artifacts under reviews/ in the fixture" — no
+   mechanism or assertion anywhere produces reviews/ artifacts (no reference in
+   core/src/commands/loop.mjs, pipeline.mjs, or their tests); (b) "order
+   asserted from the journal" for the smoke TDD mini-cycle — journal
+   PHASE_ADVANCE events carry no phase id (core/src/loop/state.mjs:80-84 via
+   the transition at commands/loop.mjs:336), so order is enforced by spec
+   sequence + spawn counts, not journal content. See finding 10.
+2. Limit death mid-subtask, chained A→B→A, model-unavailable next-entry:
+   GENUINELY satisfied for `baton loop` on real fs/git — single A→B
+   (loop-pipeline-e2e.test.mjs:246-268: sealed usage-limit freeze, generation
+   bump, relaunch argv on codex), chained A→B→A (270-288: generation ≥3, back
+   on claude), model-unavailable same-platform-next-entry
+   (tests/unit/loop-failover.test.mjs:236-272, resolver avoidEntries at
+   core/src/roles/resolve.mjs:58-62 with baseModel identity matching). Platform
+   avoidance is deliberately per-death, entry avoidance cumulative
+   (commands/loop.mjs:320-328) — correct for the chain. NOT satisfied for
+   `baton pipeline` (finding 4).
+3. Pipeline 2 subtasks, alternating seats, attribution range scan, read-only
+   reviewers: satisfied on real git including the negative (foreign-author
+   commit blocks the merge and parks, loop-pipeline-e2e.test.mjs:198-222;
+   alternation + read-only sandbox pinned in
+   tests/commands/pipeline-run.test.mjs:283-327). But reviewer CAPABILITY on
+   claude-code is broken by construction (finding 5), and the writer's result
+   is discarded (finding 4).
+4. 5-cap + supervisor-death recovery: the cap is airtight WITHIN a loop run —
+   spawn is gated before the child starts (commands/loop.mjs:239-247), the
+   reducer refuses the 6th and escalates (state.mjs:85-94), replay dedupes by
+   seq/dedupeKey so recovery never re-runs a completed iteration
+   (state.mjs:165-195); forced-exhaustion tests exist for loop
+   (loop-run.test.mjs:236-268) and pipeline (pipeline-run.test.mjs:378-401);
+   supervisor-death journal replay on real fs with a torn tail + dead lock
+   works (loop-pipeline-e2e.test.mjs:292-337); group reap incl. zombie
+   grandchild is integration-tested (loop-children-spawn.test.mjs:71-110).
+   HOWEVER the pipeline command re-initializes state on every invocation,
+   which refunds the cap across re-runs — a path to a 6th run of the same gate
+   across invocations (finding 3).
+5. No residue: genuinely satisfied on real git for both halves
+   (loop-pipeline-e2e.test.mjs:184-196, 340-352); teardown deletes only
+   namespaced branches (worktrees.mjs:234-262), branch jail refuses
+   out-of-namespace deletion (worktrees.mjs:270-276, tested).
+6. Suite green: verified above.
+
+## Hard invariants
+
+- Zero AI attribution: enforced at three layers and verified — child env
+  identity (children.mjs:22-27, pinned in loop-children.test.mjs:100-118),
+  full-range merge-gate scan main..branch with author+committer+trailer checks
+  and no windowing (worktrees.mjs:140-156; patterns mirror doctor.mjs:187-189
+  exactly), doctor 50-commit backstop unchanged. Record-separator injection in
+  a commit body fails CLOSED (a split pseudo-record fails the author check);
+  NUL cannot appear in git commit messages, so the %x00 field format is safe.
+  Milestone commits themselves: sole-author, clean (verified).
+- Never commit .handoff/: .gitignore has it; git history has zero .handoff/
+  or .worktrees/ paths (verified); all loop state/locks/logs live under
+  .handoff/loop/.
+- 5-iteration cap: no 6th run within a run (verified above); pipeline re-run
+  cap refund is finding 3.
+- Roles from baton.config.json: the four new roles exist in baton.config.json
+  AND templates/baton.config.json.tpl (lines 11-14 of each); spec validation
+  fails on unknown roles before any spawn (spec.mjs:80-88,
+  loop-run.test.mjs:155). No model names in loop code or prompts — BUT the
+  claude-code spawn seam silently discards the resolved model (finding 2), and
+  `to: 'claude-code'` is hardcoded in the resolveRoles calls
+  (commands/loop.mjs:257, pipeline.mjs:101 — affects only the native/delegated
+  mode label, not selection; minor, finding 15).
+- Supervised children never read/write any bundle: guard in cmdCheckpoint
+  (checkpoint.mjs:164), cmdSessionStart (session-start.mjs:29), hook.mjs
+  (:153-154), checked BEFORE flag parsing, any non-empty value, empty-string
+  negative — all fs-spied per platform. Solid.
+
+## Cross-module contracts under crash/replay
+
+- Journal seq: appendLoopEvent allocates past max(snapshot seq, journal tail)
+  (state.mjs:132-156); loadLoopState skips ≤ snapshot seq, dedupes by
+  key and seq, folds maxSeq back (state.mjs:165-195). Crash between journal
+  append and snapshot write replays exactly once. Verified by unit + real-fs
+  torn-tail test. Sound.
+- Supervisor lock released on every exit path via finally
+  (commands/loop.mjs:392-400); merge lock released on every path after
+  acquisition incl. conflict-abort, non-ff, attribution block
+  (worktrees.mjs:202-208; loop-worktrees.test.mjs:431,459,472,483). But lock
+  ACQUISITION is check-then-write, not atomic (finding 8), and pipeline takes
+  no run lock at all (finding 3).
+- Receive no-write window: failover writes nothing under .handoff/loop
+  (fs-spy test loop-failover.test.mjs:358-367), prepare/commit back-to-back
+  with identical intake, exactly one re-prepare retry then park (drift tests
+  count HEAD reads: exactly 4). Degraded-open path skips the seal and lands a
+  degraded receive. Checkpoint-before-seal carries the loop position
+  (failover.mjs:73-92). Matches the plan's 8-step transaction.
+- Pipeline main-merger-only: merger child is read-only (children.mjs:19), the
+  supervisor merges under the merge lock gated on the attribution scan
+  (worktrees.mjs:168-209), postflight parks if main moved under a child
+  (worktrees.mjs:120-131). Discipline holds — but see findings 3/4 for what
+  the unit fakes miss (stale branches, discarded writer results, no
+  classification).
+
+## Security
+
+- Verdict parse: region-bounded, no whole-transcript fallback, last-tail-wins,
+  unparseable→BLOCKED (children.mjs:61-109); prompt-echo, earlier-marker, and
+  truncation cases all pinned (loop-children.test.mjs:122-211). The residual
+  (plan-accepted) exposure is untrusted content quoted at the END of a
+  reviewer's final message overriding an earlier genuine verdict (last-wins).
+- Branch jail + namespaced teardown: tested, refusals issue no destructive git.
+- Child logs: capped head/tail with the verdict tail preserved, but written
+  without redactSecrets (finding 14) and buffered unbounded in memory
+  (finding 13).
+- Findings text from a BLOCKED child is interpolated raw into the next child's
+  prompt (commands/loop.mjs:271-272) and into ESCALATION.md/SMOKE-REVIEW.md —
+  inherent to the review-feedback design; note only.
+
+## FINDINGS (detail)
+
+1. BLOCKING — claude-code children can never produce a parseable verdict in
+   production. buildChildArgv's claude-code branch (children.mjs:44-51) passes
+   `-p --permission-mode … --allowedTools …` with NO `--output-format json`,
+   while parseVerdict('claude-code') requires structured JSON and reads the
+   `result` field (children.mjs:86-95). The installed CLI's help confirms
+   `--output-format` defaults to "text" (verified this session). So every real
+   claude-code child returns plain text → JSON.parse fails → BLOCKED
+   'unparseable' → any phase resolving to claude-code burns its full 5-cap and
+   escalates, unconditionally. The plan's Child supervision contract states
+   "claude-code children run with a structured output format" — the flag was
+   never wired, and no test pins it (fixture runners emit JSON, masking it;
+   grep for "output-format" across core/tests/adapters: zero hits).
+   Fix: append `--output-format json` in the claude-code branch of
+   buildChildArgv and add a unit pin asserting the flag is present for both
+   reviewer and writer roles.
+
+2. MAJOR — the resolved model is silently discarded for claude-code children:
+   the claude branch of buildChildArgv never passes `--model`
+   (children.mjs:44-51; codex gets `--model` at :55). Every claude-code child
+   runs on the user's default model regardless of the matrix chain, which
+   materially breaks "roles resolved via baton.config.json" at the spawn seam
+   and makes entry-level avoidance meaningless on claude-code (avoiding a
+   model the child never selects). Fix: pass `--model ${assignment.model}` and
+   pin it in loop-children.test.mjs.
+
+3. MAJOR — `baton pipeline run` has no crash/replay or concurrency story, and
+   re-runs refund the 5-cap. runPipeline unconditionally builds fresh state
+   (`initLoopState` at pipeline.mjs:113 — never loadLoopState), so a re-run
+   after a crash or escalation resets iterations to zero: the same
+   subtask-review gate gets 5 fresh iterations per invocation — a path to a
+   6th+ run of a gate across invocations, against the hard invariant. No
+   supervisor.lock is taken (loop.mjs has one at :141-162; pipeline has none),
+   so concurrent pipeline runs race on state.json, the journal, and the seats.
+   And a stale subtask branch from a previous run — explicitly on the plan's
+   adversarial list — crashes unhandled at `git checkout -b`
+   (pipeline.mjs:157): VERIFIED live, raw stack trace "fatal: a branch named
+   'baton/wt-a/subtask-t1' already exists" (cli.mjs/bin have no catch around
+   command dispatch). Fix: load-or-init state exactly as loop.mjs does; take
+   the same run lock; treat an existing subtask branch as a preflight refusal
+   (park) or a resume point.
+
+4. MAJOR — pipeline discards the writer child's result and never classifies
+   any child, so it has no limit failover at all. pipeline.mjs:184 awaits the
+   writer spawn and ignores the returned {timedOut, exitCode, verdict}; no
+   pipeline child's log is run through classify/runFailover (contrast
+   loop.mjs:294-332). A writer that times out or dies on a usage limit leaves
+   an empty branch that flows to review → merge as a silent no-op subtask;
+   the plan positions pipeline as "loop run with the dual-worktree subtask
+   cycle", inheriting the failover machinery — it doesn't. Fix: classify each
+   child's transcript as loop.mjs does, route usage-limit/model-unavailable
+   to runFailover, and refuse to enter review when the writer produced no
+   commits on the branch.
+
+5. MAJOR — read-only claude-code review children cannot examine what they
+   review. The reviewer allowlist is exactly 'Read,Grep,Glob'
+   (children.mjs:47): no scoped Bash means no `git diff`/`git log`, so a
+   claude-code plan-reviewer/subtask-reviewer/final-reviewer cannot inspect a
+   range at all. In pipeline, the reviewer additionally runs with cwd = the
+   OTHER seat (pipeline.mjs:195) whose checkout does NOT contain the subject
+   branch — the prompt says "review the diff of <branch> against main" from a
+   worktree where that diff is not materialized. Verdicts would be produced
+   blind (and unparseable per finding 1). Fix: grant a scoped read-only git
+   allowlist (e.g. `Bash(git diff:*),Bash(git log:*),Bash(git show:*)`), and
+   materialize the branch for the reviewer (fresh checkout in the reviewing
+   seat is what the plan promises) or run the reviewer at the main root.
+
+6. MAJOR — parked/escalated runs are dead ends: nothing ever emits
+   LOOP_EVENT.RESUME (grep: only state.mjs:29,97 and unit tests). `loop run`
+   on PARKED prints and exits 4, on ESCALATED exits 3 (loop.mjs:211-217) —
+   yet ESCALATION.md instructs "Resolve the findings, then resume with baton
+   loop run" (loop.mjs:244) and the stale-smoke park promises "parks for a
+   fresh smoke run": both are unreachable without hand-editing
+   .handoff/loop/state.json. Fix: add `baton loop resume` (or --unpark)
+   emitting RESUME for parks — keeping escalation operator-only per the
+   reducer's design — and make ESCALATION.md describe the real remediation.
+
+7. MAJOR — the smoke gate binds to the literal phase id 'smoke-build'
+   (loop.mjs:340). A spec with smoke.cmd set but a renamed or absent
+   'smoke-build' phase silently never pauses: full-run budget spends with no
+   human approval — a silent bypass of the plan's staged gate. validateLoopSpec
+   never couples smoke.cmd to the phase list (spec.mjs:108-116). Fix: reject a
+   spec at validation when smoke.cmd is set and no 'smoke-build' phase exists
+   (or bind the gate to a declared phase attribute instead of a magic id).
+
+8. MAJOR — supervisor run-lock acquisition is check-then-write, not atomic:
+   safeReadJson at loop.mjs:142, atomicWriteJson at :162, with the full state
+   load between them. Two simultaneous `loop run` invocations can both pass
+   the liveness check and run concurrently — unlike the Layer-1 bundle lock's
+   mkdir/EEXIST acquisition (core/src/bundle/lock.mjs:6-10) whose "same
+   provably-dead machinery" the plan claims. The provably-dead takeover logic
+   is faithfully mirrored; the mutual exclusion is not. Fix: acquire via
+   atomic mkdir (or reuse withLock) before loading state, then stamp owner
+   facts.
+
+9. minor — plan-deferred items absent, as expected: no `--detach`/setsid
+   supervisor relaunch (grep: zero hits), probes never refreshed (probes: null
+   at loop.mjs:258/308 and in failover input), and no pipeline smoke gate.
+   These match the deferral list; record them in the plan or README so the
+   "survives the operator's session ending" claim isn't read as implemented.
+
+10. minor — constraint-1 clauses satisfied only nominally (see above): no
+    reviews/ artifacts are produced or asserted in the fixture flow, and the
+    TDD mini-cycle order is not assertable "from the journal" because journal
+    events carry no phase id. Fix: include the phase id in PHASE_ADVANCE
+    events (cheap, improves recovery observability too) and either prompt
+    review children to write under reviews/ or drop the clause consciously.
+
+11. minor — budgets.maxChildrenPerPhase is enforced as a global product
+    (`childSeq >= maxChildrenPerPhase * phases.length`, loop.mjs:249), not per
+    phase: one pathological phase can consume the entire run's child budget.
+    Fix: count children per phase id.
+
+12. minor — the codex 'tokens used' marker placement is pinned only by
+    hand-written fixtures (loop-children.test.mjs:122-187); no fixture captured
+    from a live `codex exec` run exists in the repo. HYPOTHESIS: if the
+    installed CLI prints its final message BEFORE the trailing tokens-used
+    summary, the trusted region after the LAST marker is empty and every real
+    codex child parses BLOCKED (the same failure class as finding 1 on the
+    other platform). Fix: capture one real transcript as a fixture (or switch
+    to `codex exec --json` and parse the structured last message).
+
+13. minor — superviseChild buffers the entire child output unbounded in memory
+    before capping at write time (children.mjs:168-177, cap applied at :196),
+    and loop-side classification reads the CAPPED log (loop.mjs:294) so a
+    limit banner falling in the truncated middle window is unclassifiable.
+    Fix: cap incrementally while streaming; classify from the in-memory tail
+    + head, not the truncated file.
+
+14. minor — child logs are written without redactSecrets (children.mjs:196),
+    unlike Layer-1 transcript tails (checkpoint.mjs:82): secrets echoed in a
+    child transcript persist in .handoff/loop/children/*.log and ride no purge
+    path. Fix: pass the log text through redactSecrets before writeFileSync.
+
+15. minor — assorted hardcodes/hygiene: trunk branch 'main' assumed
+    (worktrees.mjs:126,141,195; pipeline.mjs:160 — a master-trunk repo parks
+    or errors); `to: 'claude-code'` hardcoded in resolveRoles calls
+    (loop.mjs:257, pipeline.mjs:101 — label-only effect); smoke.cmd split on
+    whitespace with no quoting support (loop.mjs:341); stale "expected RED"
+    comments describing the now-passing chained A→B→A test
+    (loop-pipeline-e2e.test.mjs:22-26,280-283).
+
+## What is genuinely good (verified)
+
+The state machine + journal replay is careful and honest (seq/dedupe replay,
+torn-tail tolerance, real-fs recovery proof); the failover transaction matches
+the plan's 8 steps with the no-write window actually fs-spied; entry-level
+avoidance is identity-matched and platform-scoped with the named
+same-platform-next-entry test; the attribution gate has real teeth on real git
+including the negative case and fails closed under record-separator injection;
+the supervised-child guard is airtight across all three platforms and runs
+before flag parsing; the 5-cap is spawn-gated with a reducer that refuses the
+6th; the smoke token is a structured six-field digest that names drifted
+inputs; and constraint 5 (no residue) is proven on a real repo. The blocking
+issue is confined to one argv seam — but it is the seam every real claude-code
+child passes through.
+
+VERDICT: BLOCKED
+FINDINGS:
+1. [blocking] claude-code children spawn without --output-format json while parseVerdict requires the structured JSON result field (children.mjs:44-51 vs 86-95; CLI default is text, verified) — every real claude-code child is auto-BLOCKED and gates escalate at the cap — Fix: add --output-format json to the claude-code branch of buildChildArgv and pin the flag in loop-children.test.mjs.
+2. [major] The resolved model is never passed to claude-code children (no --model in children.mjs:44-51), silently ignoring the role matrix and voiding entry-level avoidance on that platform — Fix: pass --model ${assignment.model} and pin it.
+3. [major] pipeline run re-inits state every invocation (pipeline.mjs:113), takes no supervisor lock, and crashes unhandled on a stale subtask branch (pipeline.mjs:157; reproduced live) — cap refunds across re-runs are a path past the 5-iteration invariant — Fix: loadLoopState-or-init + the loop.mjs run-lock discipline; treat an existing subtask branch as a preflight park/resume.
+4. [major] pipeline discards the writer child's result (pipeline.mjs:184) and never classifies any child — limit deaths and timeouts become silent empty-branch subtasks and pipeline has no failover — Fix: classify each child log as loop.mjs:294-332 does, route limit classes to runFailover, refuse review on an empty branch.
+5. [major] read-only claude-code reviewers get only Read,Grep,Glob (children.mjs:47) — no git diff — and pipeline reviewers run in the other seat where the subject branch is not checked out (pipeline.mjs:195): blind reviews — Fix: scoped read-only git Bash allowlist + materialize the branch for the reviewer (fresh checkout) or review from the main root.
+6. [major] no CLI path emits LOOP_EVENT.RESUME: parked/escalated runs are terminal (loop.mjs:211-217) while ESCALATION.md and the stale-smoke park instruct resuming — Fix: add baton loop resume/--unpark for PARKED (escalation stays operator-only) and correct the ESCALATION.md instructions.
+7. [major] the smoke gate fires only on the literal phase id 'smoke-build' (loop.mjs:340); a renamed id with smoke.cmd set silently skips the human gate — Fix: validateLoopSpec rejects smoke.cmd without a 'smoke-build' phase, or bind the gate to a phase attribute.
+8. [major] supervisor.lock acquisition is check-then-write (loop.mjs:142-162), not the atomic mkdir/EEXIST discipline of the Layer-1 lock the plan claims to reuse — two simultaneous runs can both acquire — Fix: acquire via atomic mkdir/withLock before state load.
+9. [minor] plan-deferred gaps (--detach, probe refresh, pipeline smoke gate) are absent as expected — Fix: record the deferrals in the plan/README so the supervisor-lifetime claim is not read as implemented.
+10. [minor] constraint-1 clauses only nominal: no reviews/ artifacts produced or asserted; journal events carry no phase id so TDD order is not "asserted from the journal" — Fix: add the phase id to PHASE_ADVANCE events; either wire reviews/ artifact prompts or consciously drop the clause.
+11. [minor] maxChildrenPerPhase enforced as a global product (loop.mjs:249), not per phase — Fix: count children per phase id.
+12. [minor] codex 'tokens used' marker placement unverified against a live transcript (hypothesis: an end-of-run summary would empty the trusted region and BLOCK every codex child) — Fix: capture a real codex exec fixture or parse codex --json.
+13. [minor] superviseChild buffers full output unbounded in memory (children.mjs:168-177) and classification reads the capped log (loop.mjs:294) — Fix: incremental cap while streaming; classify from head+tail buffers, not the truncated file.
+14. [minor] child logs written without redactSecrets (children.mjs:196) and outside any purge path — Fix: redact before writeFileSync and include .handoff/loop/children in purge-transcript's walk.
+15. [minor] hardcodes/hygiene: trunk 'main' assumed (worktrees.mjs:126,141,195; pipeline.mjs:160); to:'claude-code' in resolveRoles calls (loop.mjs:257, pipeline.mjs:101); smoke.cmd naive whitespace split (loop.mjs:341); stale "expected RED" comments in loop-pipeline-e2e.test.mjs:22-26,280-283 — Fix: derive the trunk once (rev-parse), pass the supervisor's real platform, shell-split or array-form smoke.cmd, delete the stale comments.
