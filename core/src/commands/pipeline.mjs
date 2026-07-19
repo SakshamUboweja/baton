@@ -153,6 +153,11 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
   /** @type {any} */
   let state = (await loadLoopState(root, io)).state;
   if (state === null) {
+    // A resume with nothing persisted is a wrong-directory mistake, not a
+    // fresh run — refusing beats silently initializing and running (N2).
+    if (flags.__resume === true) {
+      return usageError(io, flags, 'pipeline', 'nothing to resume — no run state exists here; start with: baton pipeline run');
+    }
     state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
     await writeLoopState(root, state, io);
   } else {
@@ -293,7 +298,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         continue;
       }
       return park(
-        `subtask '${st.id}' has a stale branch '${branch}' at main's tip with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
+        `subtask '${st.id}' has a stale branch '${branch}' whose tip is already contained in main, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
       );
     }
 

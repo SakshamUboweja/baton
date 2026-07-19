@@ -1125,6 +1125,25 @@ describe('pipeline — J1: pipeline resume', () => {
     assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
     assert.equal(io.__runner.calls.length, 0, 'no child spawned across the flavor boundary');
   });
+
+  it('RED (J1e): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run', async () => {
+    // A repo with a spec (loop.json) but NO persisted .handoff/loop/state.json —
+    // e.g. `resume` run in the wrong directory. Resuming must refuse, NOT quietly
+    // init a new state and launch a full pipeline from scratch.
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    assert.equal(io.fs.existsSync(loopPaths('/repo').state), false, 'precondition: no persisted run state exists');
+
+    const code = await run(['pipeline', 'resume'], io);
+    assert.equal(code, 2, 'nothing to resume is a usage error, not a silent fresh run');
+    const out = io.stderrText() + io.stdoutText();
+    assert.match(out, /nothing to resume/i, 'the refusal states there is nothing to resume');
+    assert.match(out, /baton pipeline run/, 'the refusal points at `baton pipeline run` to start a fresh run');
+    assert.equal(io.__runner.calls.length, 0, 'a nothing-to-resume refusal spawns no children');
+    // The teeth: a wrong-directory resume must not initialize and start over.
+    assert.equal(io.fs.existsSync(loopPaths('/repo').state), false, 'refusing to resume never creates a state.json');
+  });
 });
 
 function loopFile(io, name) {

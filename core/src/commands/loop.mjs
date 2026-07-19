@@ -263,6 +263,12 @@ async function runLoop(flags, io) {
   const specDigest = dedupeKey(spec.phases);
   let { state } = await loadLoopState(root, io);
   if (state === null) {
+    // A resume with nothing persisted is a wrong-directory mistake, not a
+    // fresh run — refusing beats silently initializing and running (N2).
+    if (flags.__resume === true) {
+      lock.release();
+      return usageError(io, flags, 'loop', 'nothing to resume — no run state exists here; start with: baton loop run');
+    }
     state = { ...initLoopState(spec, io), flavor: 'loop', specDigest };
     await writeLoopState(root, state, io);
   } else {
@@ -347,7 +353,7 @@ async function runLoop(flags, io) {
       return EXIT_ESCALATED;
     }
     if (state.status === LOOP_STATUS.PARKED) {
-      io.stderr.write(`baton loop run: the run is parked — ${state.parkReason ?? 'no reason recorded'}\n`);
+      io.stderr.write(`baton loop run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton loop resume)\n`);
       return EXIT_PARKED;
     }
     if (state.status === LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {

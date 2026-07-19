@@ -1,0 +1,118 @@
+role: final-reviewer-b
+model: claude-code/claude-fable-5 (fresh context)
+date: 2026-07-19
+iteration: 5 of 5 (FINAL)
+
+# Gate 2, iteration 5 — Milestone B re-review after the J1–J2 fold (4f53439)
+
+Scope: git diff 1bb36d4..4f53439 (production surface: core/src/commands/
+pipeline.mjs only, +45/-16; tests/commands/pipeline-run.test.mjs additive;
+test-verifier i-series iteration-04/05 artifacts). Re-read fresh:
+core/src/commands/pipeline.mjs (whole file), core/src/commands/loop.mjs
+(resume block, flavor guards, acquireSupervisorLock), core/src/loop/state.mjs
+(RESUME reducer, replay), core/src/commands/shared.mjs (parseFlagsStrict,
+usageError), and the new J-pin hunks. This is the raising reviewer's
+re-review (my predecessor instance raised J1–J2 at iteration 4) — the last
+iteration under the 5-cap.
+
+## Validation run (verified facts)
+
+- `npm test` — 1187 tests, 365 suites, 0 fail, 0 skipped, 0 cancelled.
+- `npm run typecheck` — clean (tsc --noEmit, no output).
+- Attribution: last 8 commits (through 4f53439) — author AND committer both
+  SakshamUboweja <ssakshamu@gmail.com> on every one; full %B grepped for
+  Co-Authored-By / "Generated with" / anthropic-noreply — zero hits.
+- Fold diff touches nothing outside pipeline.mjs, its test file, and review
+  artifacts — loop.mjs, state.mjs, worktrees.mjs, children.mjs untouched.
+
+## Disposition audit — J1, J2 (verified in code + pins)
+
+- J1: GENUINE. cmdPipeline accepts 'resume' (pipeline.mjs:69) and marks it
+  via an internal flags.__resume (71) — parseFlagsStrict rejects unknown
+  flags, so `--__resume` from the CLI is "unknown flag" exit 2; the
+  back-channel is not injectable. drivePipeline handles resume AFTER the
+  flavor/stamp/digest guards (159–169) and BEFORE the status refusals:
+  ESCALATED → operator-only refusal, exit 3, before any spawn or worktree
+  setup (188–191); PARKED → a journaled RESUME transition then normal
+  continuation (192–195). State is loadLoopState-or-init (154–157) — an
+  existing state is never re-inited, so gate cap counters survive resume
+  with no refund; the RESUME reducer (state.mjs:97–100) touches only
+  status/parkReason and is PARKED-guarded, so the journaled event is legal
+  and replay-safe. The non-resume PARKED refusal now names `baton pipeline
+  resume` (203). Pins: J1a (parked mid-t1 with the gate at 3 → resume →
+  the SAME subtask's writer respawns in wt-a, counter still >= 3, exit 0,
+  DONE, and the journal's RESUME precedes the completing PHASE_ADVANCE),
+  J1b (escalated → exit 3, zero spawns, stays ESCALATED), J1c
+  (loop-flavored state → exit 2, zero spawns), J1d (loop resume still
+  refuses a pipeline-flavored state — the boundary holds both ways). All
+  four run green in the live suite. The park → delete branch → resume →
+  re-run flow is now real end-to-end; an operator who resumes WITHOUT
+  deleting the branch re-parks loudly with the same message — safe.
+- J2: GENUINE. The ancestor-without-receipt park (295–297) now hedges both
+  causes ("either its writer crashed before committing, or the branch was
+  merged without a receipt being recorded"), points at `git log
+  main..<branch>` to disambiguate, tells the operator the branch may still
+  be checked out in its writer seat worktree (checkout the seat's base
+  branch first), and ends with `baton pipeline resume`. The pin asserts
+  each cause with a SEPARATE assertion (no single-cause misdiagnosis can
+  pass), plus the git-log pointer and the seat-checkout hedge.
+
+## Fresh-eyes pass — the new resume code
+
+Probed specifically: resume vs the H5/I3 stamp guards (resume sits after
+them — a loop-flavored, unstamped, or digest-drifted state refuses exit 2
+before RESUME can fire); reducer legality (RESUME is only emitted when
+status === PARKED; from any other status the reducer is an identity, and
+replay applies the journaled event deterministically); a crash between the
+RESUME journal append and the snapshot write (replay folds RESUME in —
+consistent); double-resume (second resume finds RUNNING, no spurious event,
+behaves as run); resume under the supervisor lock (runPipeline acquires it
+before drivePipeline; the escalated return is inside the try/finally, so
+the lock releases — the I4 class does not recur); resume on DONE (falls
+through, loop body skipped, exits 0). No blocking defect found. Three
+note-level observations (findings 1–3 below): the park message's "at
+main's tip" wording is imprecise once main advances past the stale tip
+(is-ancestor matches any ancestor); `pipeline resume` with NO persisted
+state silently initializes and starts a fresh run (mirrors G6's approved
+loop-resume shape, but "resume" acting as "run" in a wrong directory is a
+surprise worth refusing); and the loop-side non-resume PARKED refusal
+(loop.mjs:350) still does not name `baton loop resume` while pipeline's
+now does.
+
+## Regression check — I1–I5, H1–H8, G1–G7 on the changed surface
+
+- I1: the receipt-gated conjunction is untouched (289–298); the receipt
+  still lands before PHASE_ADVANCE (455–458); torn receipts still
+  fail-toward-park (222–229). The strengthened I1a pin (now also carrying
+  the J2 assertions) still asserts exit 4 + nothing merged.
+- I2/I4/I5: loop.mjs is byte-identical across the fold range — truncation
+  on acquisition, in-order retire matching, lock-releasing refusals, and
+  the (pid, startTime) liveness pair all intact.
+- I3/H5: the stamp guards run before the resume block in both commands;
+  J1c/J1d extend the pin coverage to the resume subcommands (additive).
+- H1 (writer verdict-tail, 347), H2 (bounded failover + avoidEntries
+  carry, 360–390), H3 (retire-on-resolution, 250), G2 (cap validation
+  111–114; load-not-reinit), G3 (writer classification + empty-branch
+  refusal, 356–408), G5 (seat healing + reviewer preflight, 256–264,
+  412–418), G6 (loop resume unchanged): all present and unmodified. No
+  test was weakened or deleted — the test diff is additive plus the two
+  J2 assertions inside the existing I1a case.
+
+## Judgement for the v1 milestone gate
+
+Both J-dispositions are genuine and honestly pinned (J1a pins successful
+continuation and journal ordering, not just "a writer spawned"; J2 pins
+each cause separately). The recovery story that iteration 4 blocked on is
+now closed: every pipeline park is resumable, escalation stays
+operator-only, the flavor boundary holds in both directions, and no resume
+path refunds a cap. Suite green, types clean, attribution spotless. The
+three residual items are wording/ergonomics hardening — none makes the v1
+milestone unshippable, none loses work or spawns silently, and all belong
+in the v1.1 notes ledger alongside G9–G13. This is the final iteration;
+nothing here warrants escalating to the operator as a block.
+
+VERDICT: APPROVED_WITH_NOTES
+FINDINGS:
+1. [minor] The stale-branch park message says the branch sits "at main's tip", but the guard is `merge-base --is-ancestor` — once main advances past a pre-commit-crash branch, the message misdescribes the geometry (pipeline.mjs:296) — Fix: reword to "whose tip is already contained in main" (keep both causes, the git-log pointer, and the seat-checkout step as pinned).
+2. [minor] `baton pipeline resume` with no persisted state silently initializes a fresh run and starts the full pipeline (drivePipeline init path, pipeline.mjs:154-157 — `loop resume` shares the shape); a resume typed in the wrong directory acts as `run` — Fix: when flags.__resume is set and loadLoopState returns null, refuse exit 2 with "nothing to resume — start with: baton pipeline run" (same for loop resume).
+3. [minor] The loop-side non-resume PARKED refusal (loop.mjs:350) still omits the resume pointer that pipeline's equivalent now carries (pipeline.mjs:203) — asymmetric operator guidance — Fix: append "(resume with: baton loop resume)" to the loop message.

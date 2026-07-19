@@ -634,6 +634,41 @@ describe('loop run — resume (G6)', () => {
     assert.equal(io.__runner.calls.length, 0, 'resume never spawns on an escalated run');
     assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.ESCALATED, 'the run stays escalated');
   });
+
+  it('RED (G6): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run', async () => {
+    // A loop repo with loop.json but NO persisted state.json — e.g. `resume` run
+    // in the wrong directory. It must refuse, not init a fresh run from phase 0.
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    assert.equal(io.fs.existsSync(`${DIR}/state.json`), false, 'precondition: no persisted run state exists');
+
+    const code = await cmdLoop(['resume'], io);
+    assert.equal(code, 2, 'nothing to resume is a usage error, not a silent fresh run');
+    const out = io.stderrText() + io.stdoutText();
+    assert.match(out, /nothing to resume/i, 'the refusal states there is nothing to resume');
+    assert.match(out, /baton loop run/, 'the refusal points at `baton loop run` to start a fresh run');
+    assert.equal(io.__runner.calls.length, 0, 'a nothing-to-resume refusal spawns no children');
+    // The teeth: a wrong-directory resume must not initialize and start over.
+    assert.equal(io.fs.existsSync(`${DIR}/state.json`), false, 'refusing to resume never creates a state.json');
+    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'the nothing-to-resume refusal leaves no supervisor.lock behind (I4)');
+  });
+
+  it('RED (G6): `baton loop run` on a PARKED run refuses (exit 4) AND points at `resume with: baton loop resume` (symmetry with pipeline)', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/state.json`, JSON.stringify(seedState({ status: 'parked', parkReason: 'operator paused' }), null, 2) + '\n');
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 4, 'a plain `run` on a parked state refuses with the parked exit code');
+    const out = io.stderrText() + io.stdoutText();
+    assert.match(out, /parked/i, 'the refusal says the run is parked');
+    assert.match(out, /resume with: baton loop resume/, 'the refusal points at the resume command (pipeline already carries this pointer — pin the symmetry)');
+    assert.equal(io.__runner.calls.length, 0, 'a `run` on a parked state spawns nothing');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.PARKED, 'the run stays parked (run never resumes it)');
+  });
 });
 
 // ===========================================================================
