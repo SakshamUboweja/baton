@@ -87,3 +87,38 @@ implementation); record G8 deferrals in the plan; fold the cheap parts of
 G14 (stale comments); carry G9–G13 as documented v1.1 hardening items
 unless a reviewer re-raises them as gate-blocking. Re-review by both
 reviewers after the fold (iteration 2; cap 5 per reviewer).
+
+# Iteration 2 (post-fold f7960e3) — both reviewers BLOCKED again
+
+Reviewer-a: 2 blocking. Reviewer-b: 1 blocking, 3 major, 4 minor.
+Deduplicated:
+
+## Blocking
+- **H1 (B1)** — the pipeline WRITER prompt omits the verdict-tail contract
+  while the flow requires an APPROVED writer verdict: every real writer
+  parses BLOCKED-unparseable and escalates at the cap. Fix: verdict-tail
+  block in the writer prompt + a prompt-contract pin.
+- **H2 (A1 + B2)** — pipeline failover is unbounded: avoid/avoidEntries
+  always [], decision.avoidEntries discarded, and no total child budget —
+  dead-model ping-pong loops forever. Fix: per-subtask avoidEntries carry +
+  a child-budget guard that parks on exhaustion; always-limit runner pin.
+- **H3 (A2 + B5)** — children.ndjson is append-only: completed children are
+  never retired, so a dead-lock reclaim kills any live (possibly
+  OS-recycled) recorded pgid. Fix: completion records retiring entries when
+  a child resolves; reclaim kills only still-active records.
+
+## Major
+- **H4 (B3)** — core/bin/baton.mjs never defines io.processKill, so a real
+  reclaim skips every kill and then DELETES children.ndjson. Fix:
+  process.kill-backed processKill in the bin io; only clear the registry
+  after a kill pass with a real killer.
+- **H5 (B4)** — loop and pipeline share state.json with no flavor/spec
+  binding: cross-flavor resume skips subtasks or reports a false done. Fix:
+  stamp {flavor, specDigest} at init; refuse/archive-and-reinit on mismatch.
+
+## Minor (folded where cheap)
+- H6 (B6): ESCALATION.md wording still says "resume with baton loop run".
+- H7 (B7): a crash between merge and PHASE_ADVANCE resumes into a
+  misleading empty-branch park — an already-merged branch should advance.
+- H8 (B8b): the lock runId (`sup-<pid>`) is uncorrelated with the state
+  runId — cosmetic.
