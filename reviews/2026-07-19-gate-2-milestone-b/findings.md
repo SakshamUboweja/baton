@@ -207,3 +207,24 @@ Fold both now (J1 via TDD pins; J2 rides along as message/remediation
 wording pinned in the same pass). Then reviewer-b iteration 5 — FINAL: any
 iteration-5 BLOCK hard-stops the gate and escalates the outstanding
 findings to Saksham per the 5-cap rule.
+
+# Iteration 5 (post-fold 4f53439) — GATE PASSED
+
+Reviewer-a: APPROVED at iteration 4 (zero findings; did not re-run).
+Reviewer-b (raising reviewer, fresh context): APPROVED_WITH_NOTES at
+iteration 5 — both J-dispositions verified genuine; three minor notes:
+
+- **N1** — the stale-park message said "at main's tip" while the guard is
+  merge-base --is-ancestor; reworded to "whose tip is already contained in
+  main" (pinned phrases untouched).
+- **N2** — `resume` with no persisted state silently initialized and ran a
+  fresh pipeline/loop; now refuses exit 2 ("nothing to resume — start
+  with: baton <cmd> run"), no state created, no lock leaked (pinned in
+  both suites).
+- **N3** — the loop-side parked refusal lacked the resume pointer its
+  pipeline twin carries; now appends "(resume with: baton loop resume)"
+  (pinned).
+
+All three folded at 9fb7b21 through the TDD flow (n-series verifier
+APPROVED at iteration 2). Final state: suite 1190/1190 green, typecheck
+clean. Gate 2 is PASSED — see GATE-STATUS.md.
