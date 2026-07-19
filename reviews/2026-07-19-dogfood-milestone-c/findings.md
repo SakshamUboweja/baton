@@ -51,6 +51,37 @@ state.json) and the supervisor stdout.
   'loop-<hex>'; loop.mjs and pipeline.mjs both build sessionHint as
   `loop-${runId}` → 'loop-loop-<hex>'. Use the runId itself.
 
+## Attempt 2 (post-D-fold 728020d, clone ~/baton-dogfood-2) — exit 3
+
+PROOF: subtask doc-loop completed the ENTIRE live cycle — sol death →
+gpt-5.5 failover → committed writer work (D2 grant held) → substantive
+Fable review (verified README claims against the code, APPROVED_WITH_NOTES)
+→ Fable merge-check → supervisor merge with receipt → sole-author commit
+9c05a8b on the clone's main. Subtask doc-pipeline escalated at the cap with
+EMPTY findings. New findings:
+
+- **D6 (major) — reviewer/merger children get no classification or
+  failover.** The subtask-reviewer inherits the other seat's worker chain;
+  for doc-pipeline that head is sol → the reviewer died on the account
+  rejection three times (children/006/008/010), each unparseable death
+  counted as a BLOCKED review, burning the whole gate cap. Only writers got
+  the G3 classify→failover path. Fix: classify reviewer and merger logs
+  (tail) exactly like writers; a failure-class death re-resolves the role
+  with the subtask's avoidEntries (model-unavailable → entry-avoid) instead
+  of consuming a gate iteration; park on chain exhaustion.
+- **D7 (major) — the pipeline's escalation is not persisted.** The
+  synthesized state spec omits budgets, so the reducer escalates at its
+  default cap (5) while drivePipeline enforces the spec cap (3) up top —
+  the run exited 3 with state.json still status 'running', escalation null,
+  counter at 4 (live artifact). A later resume would see a running state.
+  Fix: carry the effective iterationCap into initLoopState's spec so the
+  reducer's escalation threshold equals the enforced cap and the escalated
+  status persists.
+- **D8 (minor) — ESCALATION.md can be empty.** Unparseable child deaths
+  leave findings '' and the operator gets a blank escalation. Fix: when
+  findings are empty, include the last child's log tail (bounded) in
+  ESCALATION.md.
+
 ## Process note
 
 Dogfood clone is left untouched (parked state preserved as evidence). After
