@@ -122,3 +122,54 @@ Deduplicated:
   misleading empty-branch park — an already-merged branch should advance.
 - H8 (B8b): the lock runId (`sup-<pid>`) is uncorrelated with the state
   runId — cosmetic.
+
+# Iteration 3 (post-fold 64e6cb5) — both reviewers BLOCKED
+
+Reviewer-a: 1 blocking, 1 major, 1 minor. Reviewer-b: 2 major, 3 minor.
+All eight H-dispositions audited GENUINE by both. Deduplicated (dual-raised
+findings take the higher severity):
+
+## Blocking
+- **I1 (A1 + B1)** — the H7 already-merged recognizer false-positives on a
+  stale EMPTY branch: `merge-base --is-ancestor` succeeds for a branch
+  created by `checkout -b` whose writer never committed (its tip IS an old
+  main HEAD), so a crash anywhere in the writer's pre-first-commit window
+  makes the resume silently skip the subtask and report it done. Fix:
+  auto-advance only on a supervisor-owned merge receipt — journal/persist a
+  per-subtask merged record immediately after mergeSubtask succeeds and
+  require receipt + is-ancestor; anything else parks as a stale branch. Pin
+  the negative: a pre-existing empty branch at main's tip must NOT advance.
+
+## Major
+- **I2 (B2)** — retire records mask in-flight children across invocations:
+  childSeq resets per run and children.ndjson survives normal acquisitions,
+  so a resumed run reuses childIds a prior invocation already retired —
+  reclaim's childId-keyed retired set then SKIPS killing the crashed resume
+  run's live child (the G4 orphan escape returns in resume-then-crash). Fix:
+  truncate children.ndjson on every successful lock acquisition (clean prior
+  exit leaves only retired records; a dead owner's records were just
+  processed by the reclaim pass). Pin: retire in run 1, same childId
+  in-flight in run 2, dead lock → reclaim MUST kill.
+- **I3 (A2 + B4)** — unstamped state bypasses the H5 binding: the
+  typeof-string guards accept state.json with no flavor/specDigest, so
+  pre-stamp (or stripped) state resumes under either command with exactly
+  the misalignment H5 prevents. Fix: missing stamp on an EXISTING state =
+  mismatch — refuse exit 2 with the archive instruction (no legacy
+  population worth grandfathering); reconcile older recovery fixtures that
+  seed unstamped states.
+
+## Minor
+- **I4 (A3 + B3)** — the loop-side H5 refusals return after
+  acquireSupervisorLock but before the releasing try/finally, leaking
+  supervisor.lock (pipeline's equivalents are correctly inside its finally).
+  Fix: run the flavor/specDigest checks inside the released region (or
+  before acquiring).
+- **I5 (B5)** — acquireSupervisorLock calls io.processAlive(other.pid)
+  without the recorded startTime, so a recycled pid reads as a live
+  supervisor and wedges the lock until hand-deleted. Fix: pass
+  other.startTime so pid-reuse verification engages.
+
+## Disposition plan
+Fold all five now (I4/I5 are one-line-cheap; I1–I3 sit on the crash/recovery
+acceptance constraint). TDD flow: test-author pins → verifier → implement →
+Gate-2 iteration 4 (cap 5, both reviewers at 3).

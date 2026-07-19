@@ -1,0 +1,146 @@
+role: final-reviewer-b
+model: claude-code/claude-fable-5 (fresh context)
+date: 2026-07-19
+
+# Gate 2, iteration 3 — Milestone B re-review after the H1–H8 fold (64e6cb5)
+
+Scope: commit 64e6cb5 against my iteration-2 findings (B1–B8, collated as
+H1–H8), re-read fresh: core/src/commands/loop.mjs,
+core/src/commands/pipeline.mjs, core/src/loop/children.mjs,
+core/bin/baton.mjs, and the four test files (loop-children, bin-io-shape,
+loop-run, pipeline-run). Note: I reviewed independently; where a finding
+converges with reviewer-a's iteration 3, I verified it myself in code before
+counting it.
+
+## Validation run (verified facts)
+
+- `npm test` — 1175 tests, 360 suites, 0 fail, 0 skipped.
+- `npm run typecheck` — clean.
+- Fold commit 64e6cb5: sole author/committer SakshamUboweja
+  <ssakshamu@gmail.com>, zero attribution trailers (checked %B).
+
+## Disposition audit — my iteration-2 findings (all verified in code + pins)
+
+- B1 → H1: GENUINE. The writer prompt now carries the verdict-tail contract
+  (pipeline.mjs:297), pinned (pipeline-run "H1: writer prompt contains 'End
+  with exactly' and 'VERDICT:'").
+- B2 → H2: GENUINE. Per-subtask avoidEntries are carried into and back from
+  runFailover (pipeline.mjs:275, 329, 337) — a rejected model is never
+  re-picked (pinned H2a: two-entry chain rejects both then parks); failover
+  is budgeted at the seat's chain length (pipeline.mjs:310-317), and an
+  always-usage-limit cross-platform run parks bounded (pinned H2b). The
+  bound gates BEFORE runFailover, so no seal/receive spend past the budget.
+- B3 → H4: GENUINE. core/bin/baton.mjs now defines a process.kill-backed
+  processKill (bin diff, +10 lines), pinned by the new
+  tests/unit/bin-io-shape.test.mjs so the production io shape can't silently
+  regress. Good test idea — it closes the "fixture-only seam" class
+  structurally.
+- B4 → H5: GENUINE as far as it goes. State is stamped {flavor, specDigest}
+  at init in both commands (loop.mjs:243-255; pipeline.mjs:151-163);
+  cross-flavor and changed-spec resumes refuse exit 2 pre-spawn, pinned in
+  both suites. Two residual gaps: findings 3 (lock leak on the loop-side
+  refusal) and 4 (unstamped legacy state bypasses the check).
+- B5 → H3: GENUINE mechanism — {childId, endedAt} retire records on
+  resolution (loop.mjs:~407; pipeline.mjs:210), and reclaim skips retired
+  children even when processAlive claims the recycled pgid is alive
+  (loop.mjs starts/retired two-pass; pinned H3b). BUT the childId keying
+  re-opens an orphan escape across invocations: finding 2.
+- B6 → H6: GENUINE. ESCALATION.md reworded to operator-only remediation
+  (loop.mjs:353), pinned with doesNotMatch 'baton loop run'.
+- B7 → H7: the merge-recognition mechanism landed (merge-base --is-ancestor,
+  pipeline.mjs:237-248) and the genuine already-merged resume advances
+  (pinned), with the plain empty-branch park untouched. BUT the check as
+  written has a false positive that silently SKIPS unstarted subtasks:
+  finding 1.
+- B8 → H8: GENUINE. The lock payload's runId is synced to state.runId after
+  state load (loop.mjs:258-259), pinned at spawn time.
+
+## NEW findings (fresh-eyes pass on the fold's own code)
+
+1. MAJOR — the H7 auto-advance treats a stale EMPTY branch as already
+   merged and silently skips the subtask. `git merge-base --is-ancestor
+   <branch> main` (pipeline.mjs:239) succeeds whenever the branch tip is any
+   ancestor of main — including a branch created by `checkout -b` whose
+   writer never committed: its tip IS main's old HEAD. The vulnerable window
+   is the entire pre-first-commit lifetime of a writer child (minutes, not
+   milliseconds): supervisor dies after checkout but before the writer's
+   first commit → resume prints "subtask '<id>' is already merged into main
+   — advancing" (pipeline.mjs:245), no writer ever runs, and the pipeline
+   completes reporting the subtask done. This replaces what was previously a
+   correct natural resume (the seat is still on the branch, so the
+   alreadyOnBranch path at pipeline.mjs:261-263 would have re-run the
+   writer). Silent work loss in the recovery flow the fold was fixing.
+   Fix: advance only when the branch actually contains subtask work — e.g.
+   `git rev-list --count <seat-base>..<branch>` > 0 (tip differs from the
+   seat's fork point) in addition to is-ancestor; or journal a
+   subtask-merged event immediately after mergeSubtask succeeds and use the
+   journal, not git inference, as the resume marker. Pin the negative: a
+   pre-existing branch at main's tip with zero commits must NOT advance.
+
+2. MAJOR — retire records mask genuinely in-flight children across
+   invocations, re-opening the G4 orphan escape. childSeq resets to 0 every
+   invocation and children.ndjson is never truncated on a normal (non-
+   reclaim) lock acquisition, so a resumed run reuses childIds
+   ('001-t1-writer', '001-plan') that a PREVIOUS invocation already retired.
+   Reclaim matches starts to retires by childId alone (loop.mjs two-pass
+   starts Map / retired Set): invocation 1 runs and retires 001-t1-writer;
+   invocation 2 (resume after a park) starts 001-t1-writer again and the
+   supervisor dies mid-child; invocation 3's reclaim finds childId
+   001-t1-writer in the retired set and SKIPS the kill — the orphan writer
+   survives, still mutating its seat worktree, while the new run spawns a
+   second writer into the same seat. Resume-then-crash is exactly the
+   scenario reclaim exists for.
+   Fix: truncate children.ndjson on every successful lock acquisition (safe:
+   a clean prior exit leaves only retired records; a dead prior owner's
+   records were just processed by the reclaim pass) — or make childIds
+   run-unique (runId + invocation nonce) and match retires per invocation.
+   Pin: retire in run 1, same childId in-flight in run 2, dead lock →
+   reclaim MUST kill.
+
+3. minor — the loop-side H5 refusals leak the supervisor lock. In runLoop
+   the flavor/specDigest mismatches `return usageError(...)`
+   (loop.mjs:249-254) AFTER acquireSupervisorLock succeeded but BEFORE the
+   try/finally that calls lock.release() — supervisor.lock stays behind.
+   Self-heals via the dead-owner reclaim on the next run (noisy, and it
+   needlessly runs the orphan pass), but with finding 5's 1-arg liveness
+   check a recycled pid can wedge it into a permanent live-lock refusal.
+   Pipeline is correct: its H5 refusals are inside runPipeline's try/finally
+   (pipeline.mjs:118-124).
+   Fix: perform the flavor/digest checks before acquiring the lock (they are
+   read-only), or move them inside the released region.
+
+4. minor — unstamped state bypasses the H5 binding entirely:
+   `typeof state.flavor === 'string' && state.flavor !== …`
+   (loop.mjs:249; pipeline.mjs:158) accepts any state.json with no flavor
+   field, so state written by any pre-64e6cb5 run (or with the stamp
+   stripped) still resumes under either command with the exact misalignment
+   H5 exists to prevent.
+   Fix: treat a missing stamp as a mismatch — refuse with the same archive
+   instruction (v1 has no legacy-state population worth grandfathering).
+
+5. minor — acquireSupervisorLock's liveness check calls
+   `io.processAlive(other.pid)` with one argument (loop.mjs:161) even though
+   the lock payload records startTime and bin's processAlive implements
+   pid-reuse verification when given it — a recycled pid reads as a LIVE
+   supervisor and refuses forever until the lock is hand-deleted.
+   Fix: pass `other.startTime` as the second argument.
+
+## Judgement for the v1 milestone gate
+
+All eight iteration-2 dispositions are genuinely implemented and honestly
+pinned — the fold quality is high, and the bin-io-shape pin is a
+structurally good idea. But the two majors are not hygiene: both sit in the
+crash/recovery path that acceptance constraint 4 promises ("recovers via the
+journal and continues or parks, with no orphaned children"), and both were
+introduced BY this fold — H7's recognizer silently skips unstarted subtasks
+across a wide crash window, and H3's retire matching un-fixes G4's orphan
+guarantee in the ordinary resume-then-crash sequence. Both fixes are small
+and cheaply pinnable. Minors 3–5 can ride along in the same pass.
+
+VERDICT: BLOCKED
+FINDINGS:
+1. [major] H7's already-merged recognizer (merge-base --is-ancestor, pipeline.mjs:237-248) false-positives on a stale EMPTY branch whose tip sits at an old main HEAD — a supervisor crash anywhere in the writer's pre-first-commit window makes the resume silently skip the subtask and report it done — Fix: require real work on the branch (rev-list --count <seat-base>..branch > 0) alongside is-ancestor, or journal a subtask-merged event after mergeSubtask and resume from the journal; pin the empty-branch-at-main negative.
+2. [major] Retire records mask in-flight children across invocations: childSeq resets per run and children.ndjson is never truncated on normal acquisition, so reclaim's childId-keyed retired set (loop.mjs) skips killing a crashed resume-run's live child that shares an id with a prior invocation's retired child — the G4 orphan escape returns in the resume-then-crash path — Fix: truncate children.ndjson on every successful lock acquisition (or make childIds run-unique); pin retire-in-run-1 / in-flight-in-run-2 / reclaim-must-kill.
+3. [minor] The loop-side H5 refusals return after lock acquisition but before the releasing try/finally (loop.mjs:249-254), leaking supervisor.lock (pipeline's equivalent is correctly inside its finally) — Fix: run the flavor/specDigest checks before acquiring the lock or inside the released region.
+4. [minor] Unstamped state bypasses H5: the typeof-string guard (loop.mjs:249; pipeline.mjs:158) accepts state with no flavor/specDigest, resuming with exactly the misalignment H5 prevents — Fix: treat a missing stamp as a mismatch and refuse with the archive instruction.
+5. [minor] acquireSupervisorLock calls io.processAlive(other.pid) without the recorded startTime (loop.mjs:161), so a recycled pid reads as a live supervisor and wedges the lock — Fix: pass other.startTime so bin's pid-reuse verification engages.
