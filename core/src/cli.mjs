@@ -13,6 +13,7 @@ import { cmdSessionStart } from './commands/session-start.mjs';
 import { cmdRecover } from './commands/recover.mjs';
 import { cmdStatus } from './commands/status.mjs';
 import { cmdLoop } from './commands/loop.mjs';
+import { cmdPipeline } from './commands/pipeline.mjs';
 
 // The ten user-facing commands are the frozen v1 contract; session-start is an
 // adapter-facing addition prescribed by gate-2 finding 8 (the cheap
@@ -29,8 +30,10 @@ const COMMANDS = [
   'purge-transcript',
   'recover',
   'session-start',
-  // Layer 2 (goal loop) — added by the Gate-1-approved milestone-B plan.
+  // Layers 2+3 (goal loop + dual-worktree pipeline) — the Gate-1-approved
+  // milestone-B plan.
   'loop',
+  'pipeline',
 ];
 
 function version() {
@@ -129,6 +132,7 @@ export function run(argv, io) {
   if (cmd === 'session-start') return cmdSessionStart(rest, io);
   if (cmd === 'recover') return cmdRecover(rest, io);
   if (cmd === 'loop') return cmdLoop(rest, io);
+  if (cmd === 'pipeline') return cmdPipeline(rest, io);
 
   const error = { code: 'not-implemented', msg: `baton ${cmd}: not implemented yet` };
   if (rest.includes('--json')) {

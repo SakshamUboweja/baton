@@ -12,8 +12,11 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { classify } from '../detect/classifier.mjs';
 
-// Every review seat is read-only — writers are the implementer-side roles only.
-const REVIEWER_ROLES = new Set(['plan-reviewer', 'test-verifier', 'subtask-reviewer', 'final-reviewer-a', 'final-reviewer-b']);
+// Every review seat is read-only — writers are the implementer-side roles
+// only. The merger CHILD is read-only too: it adversarially re-checks, but
+// the SUPERVISOR performs the actual merge via worktrees.mergeSubtask
+// (pipeline contract — the merger child never issues git).
+const REVIEWER_ROLES = new Set(['plan-reviewer', 'test-verifier', 'subtask-reviewer', 'final-reviewer-a', 'final-reviewer-b', 'merger']);
 
 // AGENTS.md §9: children commit solely as the repo owner, zero AI attribution.
 const GIT_IDENTITY = Object.freeze({
