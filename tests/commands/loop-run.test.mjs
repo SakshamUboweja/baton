@@ -473,3 +473,158 @@ describe('loop run — strict flags & supervisor-side guard', () => {
     assert.ok(io.__runner.calls.length >= 1, 'children were spawned under the guard env');
   });
 });
+
+// ===========================================================================
+// B8 (G2) — the run-lock acquisition must be ATOMIC, not check-then-write.
+describe('loop run — atomic run-lock acquisition (B8)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  const LOCK = `${DIR}/supervisor.lock`;
+
+  it('RED (B8): implementation-neutral — the competitor materializes AT the exclusive-create; wx/mkdir-first refuses, check-then-write clobbers (RED)', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.processAlive = (p) => p === 55555; // the competitor supervisor is LIVE
+
+    const realWrite = io.fs.writeFileSync.bind(io.fs);
+    const realMkdir = io.fs.mkdirSync.bind(io.fs);
+    const realRename = io.fs.renameSync.bind(io.fs);
+    const COMPETITOR = JSON.stringify({ host: 'loop-host', pid: 55555, startTime: 222, runId: 'competitor' });
+
+    // The competitor wins the lock the INSTANT before the supervisor's own write
+    // to LOCK lands — injected at whichever primitive the acquire uses to create
+    // it. NO readFileSync hook, so a wx/mkdir-FIRST acquire (which never reads
+    // before creating) cannot dodge the race.
+    let injected = false;
+    const injectBefore = (/** @type {any} */ target) => {
+      if (injected || String(target) !== LOCK) return;
+      injected = true;
+      realMkdir(DIR, { recursive: true });
+      realWrite(LOCK, COMPETITOR);
+    };
+
+    // Exclusive create (flag wx/ax) enforces the O_EXCL semantics memfs lacks:
+    // once the competitor exists, an exclusive write throws EEXIST.
+    io.fs.writeFileSync = (/** @type {any} */ p, /** @type {any} */ data, /** @type {any} */ opts) => {
+      const flag = typeof opts === 'string' ? undefined : opts?.flag;
+      const exclusive = flag === 'wx' || flag === 'ax' || flag === 'wx+' || flag === 'ax+';
+      injectBefore(p);
+      if (exclusive && String(p) === LOCK && io.fs.existsSync(p)) throw Object.assign(new Error(`EEXIST: file already exists, open '${p}'`), { code: 'EEXIST' });
+      return realWrite(p, data, opts); // a PLAIN write to LOCK clobbers the competitor
+    };
+    // mkdirSync(LOCK) as an exclusive lock dir: memfs already throws EEXIST when a
+    // node exists at the path (the injected competitor file).
+    io.fs.mkdirSync = (/** @type {any} */ p, /** @type {any} */ opts) => { injectBefore(p); return realMkdir(p, opts); };
+    // A tmp+rename publish (atomicWriteJson) clobbers the competitor on rename.
+    io.fs.renameSync = (/** @type {any} */ from, /** @type {any} */ to) => { injectBefore(to); return realRename(from, to); };
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 1, 'a wx/mkdir-first exclusive acquire observes EEXIST and refuses the run');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned when the lock was lost to the competitor');
+    assert.match(JSON.parse(io.files()[LOCK]).runId, /competitor/, "the competitor's lock is not clobbered (a check-then-write path fails here)");
+  });
+});
+
+// ===========================================================================
+// G4 (A4) — record in-flight child groups; kill recorded orphans on reclaim.
+describe('loop run — child-group recording + kill-on-reclaim (G4)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+
+  const readChildren = (io) => {
+    const raw = io.files()[`${DIR}/children.ndjson`];
+    if (typeof raw !== 'string') return [];
+    return raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+  };
+
+  it('RED (G4): a child-start record {childId, pid, pgid, startedAt} exists on disk WHILE the child is in flight (before completion)', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    let n = 0;
+    const inflightOk = [];
+    // The runner reports the child's group via opts.onStart (spawn time); the
+    // supervisor must persist the record synchronously in that handler — BEFORE
+    // the child completes — so a mid-run crash leaves the orphan reap-able.
+    io.superviseChild = (/** @type {any} */ _spec, /** @type {any} */ opts) => {
+      n += 1;
+      const info = { pid: 8000 + n, pgid: 9000 + n };
+      if (typeof opts.onStart === 'function') opts.onStart(info);
+      const rec = readChildren(io).find((r) => r.pgid === info.pgid);
+      inflightOk.push(
+        !!rec && typeof rec.childId === 'string' && rec.childId.length > 0 && rec.pid === info.pid && typeof rec.startedAt === 'string' && rec.startedAt.length > 0,
+      );
+      return Promise.resolve({ timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '', logPath: opts.logPath, ...info });
+    };
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0);
+    assert.ok(inflightOk.length >= 1, 'at least one child ran');
+    assert.ok(inflightOk.every(Boolean), 'each child-start record ({childId,pid,pgid,startedAt}) existed on disk while its child was in flight');
+  });
+
+  it('RED (G5/G4): on dead-lock reclaim, a still-alive recorded orphan group is KILLED (io.processKill) BEFORE the first new spawn', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    const events = []; // ordered: kills and spawns interleaved
+    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { events.push({ kind: 'kill', pid, sig }); return true; };
+    const baseRunner = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.superviseChild = (/** @type {any} */ spec, /** @type {any} */ opts) => { events.push({ kind: 'spawn' }); return baseRunner(spec, opts); };
+    io.__runner = baseRunner;
+    // The dead supervisor's orphan group (pgid 9001) is still alive; its lock is dead.
+    io.processAlive = (/** @type {number} */ p) => p === 9001;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'crashed' }));
+    io.fs.writeFileSync(`${DIR}/children.ndjson`, JSON.stringify({ childId: '001-plan', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n');
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the reclaiming run completes after reaping orphans; stderr: ${io.stderrText()}`);
+    const firstSpawn = events.findIndex((e) => e.kind === 'spawn');
+    const killIdx = events.findIndex((e) => e.kind === 'kill' && Math.abs(e.pid) === 9001);
+    assert.ok(killIdx >= 0, `the orphan group 9001 was killed on reclaim; events: ${JSON.stringify(events)}`);
+    assert.ok(firstSpawn === -1 || killIdx < firstSpawn, 'the orphan group was killed BEFORE the first new child spawned');
+  });
+});
+
+// ===========================================================================
+// G6 (B6) — `baton loop resume`: PARKED -> running; ESCALATED refused.
+describe('loop run — resume (G6)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  const seedState = (over) => ({
+    schema: 'baton/loop-state@1',
+    runId: 'loop-r',
+    goal: 'Ship the loop',
+    phaseCount: 2,
+    phaseIndex: 0,
+    iterations: {},
+    status: 'running',
+    parkReason: null,
+    escalation: null,
+    smokeApproval: null,
+    createdAt: T0,
+    journalSeq: 0,
+    ...over,
+  });
+
+  it('RED (G6): `baton loop resume` transitions a PARKED run back to running and continues (spawns the pending phase)', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/state.json`, JSON.stringify(seedState({ status: 'parked', parkReason: 'operator paused' }), null, 2) + '\n');
+
+    const code = await cmdLoop(['resume'], io);
+    assert.equal(code, 0, `resume continues a parked run; stderr: ${io.stderrText()}`);
+    assert.ok(io.__runner.calls.length >= 1, 'resume spawned the pending phase');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed run completes');
+  });
+
+  it('RED (G6): resume on an ESCALATED run is REFUSED (escalation stays operator-only, no spawn)', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/state.json`, JSON.stringify(seedState({ status: 'escalated', escalation: { gate: 'gate-1', iteration: 5 } }), null, 2) + '\n');
+
+    const code = await cmdLoop(['resume'], io);
+    assert.notEqual(code, 0, 'an escalated run cannot be resumed');
+    assert.match(io.stderrText() + io.stdoutText(), /escalat|operator/i, 'the refusal explains escalation is operator-only');
+    assert.equal(io.__runner.calls.length, 0, 'resume never spawns on an escalated run');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.ESCALATED, 'the run stays escalated');
+  });
+});

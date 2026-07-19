@@ -18,11 +18,21 @@ import {
   LOOP_STATUS,
 } from '../loop/state.mjs';
 import { buildChildArgv, superviseChild } from '../loop/children.mjs';
-import { setupWorktrees, preflightWorktree, postflightWorktree, mergeSubtask, worktreePaths } from '../loop/worktrees.mjs';
+import { setupWorktrees, preflightWorktree, postflightWorktree, mergeSubtask, selfHealWorktree, worktreePaths } from '../loop/worktrees.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
+import { runFailover } from '../loop/failover.mjs';
+import { loadSignatures } from '../detect/signatures.mjs';
+import { classify } from '../detect/classifier.mjs';
 import { atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
+import { appendEntry } from '../util/jsonl.mjs';
 import { emitEnvelope, usageError, parseFlagsStrict, resolveRoot } from './shared.mjs';
+import { acquireSupervisorLock } from './loop.mjs';
+import { loadLoopState } from '../loop/state.mjs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+
+const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
 const STRING_FLAGS = new Set(['root']);
 const EXIT_ESCALATED = 3;
@@ -93,9 +103,33 @@ async function runPipeline(flags, io) {
   if (subtaskError !== null) return usageError(io, flags, 'pipeline', subtaskError);
   const { config } = loadConfig(root, io);
   if (!config) return usageError(io, flags, 'pipeline', `no readable baton.config.json at ${root} — the role matrix is required`);
-  const cap = typeof spec?.budgets?.iterationCap === 'number' ? spec.budgets.iterationCap : 5;
+  // The 5-iteration cap is a hard invariant (Gate-2 fold G2): a spec asking
+  // for more is rejected BEFORE anything spawns.
+  const rawCap = spec?.budgets?.iterationCap;
+  if (rawCap !== undefined && (typeof rawCap !== 'number' || rawCap < 1 || rawCap > 5)) {
+    return usageError(io, flags, 'pipeline', `budgets.iterationCap must be a number between 1 and 5 (the 5-iteration cap is a hard invariant; got ${JSON.stringify(rawCap)})`);
+  }
+  const cap = typeof rawCap === 'number' ? rawCap : 5;
   const timeoutMs = (typeof spec?.budgets?.perRoleTimeoutMin === 'number' ? spec.budgets.perRoleTimeoutMin : 30) * 60_000;
 
+  // One supervisor at a time — the same atomic run lock as `loop run`, with
+  // dead-owner reclaim + orphan reaping (Gate-2 fold G2/B8).
+  const lock = await acquireSupervisorLock(root, io, 'pipeline run');
+  if (lock.ok !== true) return lock.code;
+  try {
+    return await drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs });
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * @param {Record<string, string | boolean>} flags @param {any} io
+ * @param {{root: string, p: any, spec: any, config: any, cap: number, timeoutMs: number}} ctx
+ * @returns {Promise<number>}
+ */
+async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs }) {
+  const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
   /** @param {string} role @returns {any | null} */
   const resolveOne = (role) => {
     const a = resolveRoles({ config, to: 'claude-code', avoid: [], avoidEntries: [], probes: null }).assignments[role];
@@ -109,9 +143,22 @@ async function runPipeline(flags, io) {
     goal: spec.goal,
     phases: subtasks.map((/** @type {any} */ st, /** @type {number} */ i) => ({ id: `subtask-${st.id}`, role: `worker-${i % 2 === 0 ? 'a' : 'b'}` })),
   };
+  // RESUME, never re-init: a prior run's cap counters and position survive a
+  // re-invocation (Gate-2 fold G2 — no cap refunds).
   /** @type {any} */
-  let state = initLoopState(stateSpec, io);
-  await writeLoopState(root, state, io);
+  let state = (await loadLoopState(root, io)).state;
+  if (state === null) {
+    state = initLoopState(stateSpec, io);
+    await writeLoopState(root, state, io);
+  }
+  if (state.status === LOOP_STATUS.ESCALATED) {
+    io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+    return EXIT_ESCALATED;
+  }
+  if (state.status === LOOP_STATUS.PARKED) {
+    io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'}\n`);
+    return EXIT_PARKED;
+  }
   const runner = io.superviseChild ?? superviseChild;
   const seats = worktreePaths(root).seats;
   let childSeq = 0;
@@ -133,13 +180,36 @@ async function runPipeline(flags, io) {
 
   const spawn = async (/** @type {any} */ assignment, /** @type {string} */ prompt, /** @type {string} */ seatPath, /** @type {string} */ label) => {
     childSeq += 1;
-    const logPath = `${p.dir}/children/${String(childSeq).padStart(3, '0')}-${label}.log`;
+    const childId = `${String(childSeq).padStart(3, '0')}-${label}`;
+    const logPath = `${p.dir}/children/${childId}.log`;
     ensureDir(io.fs, `${p.dir}/children`);
     const childSpec = buildChildArgv(assignment, prompt, { root: seatPath });
-    return runner(childSpec, { timeoutMs, graceMs: 10_000, logPath, maxLogBytes: 1_000_000, platform: assignment.platform });
+    return runner(childSpec, {
+      timeoutMs,
+      graceMs: 10_000,
+      logPath,
+      maxLogBytes: 1_000_000,
+      platform: assignment.platform,
+      onStart: (/** @type {{pid: number, pgid: number}} */ info) => {
+        appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, pid: info.pid, pgid: info.pgid, startedAt: io.now() });
+      },
+    });
   };
 
-  for (let i = 0; i < subtasks.length; i += 1) {
+  // Prepare a seat for use, healing a listed-but-raw-deleted worktree (prune
+  // + re-add) once before giving up (Gate-2 fold G5).
+  const withSeatHealing = async (/** @type {string} */ seat, /** @type {() => Promise<any>} */ fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      const msg = String(/** @type {any} */ (err)?.message ?? err);
+      if (/already exists/i.test(msg)) throw err; // a stale branch is a park, not a heal
+      await selfHealWorktree(root, { seat, branch: `baton/wt-${seat}/base` }, io);
+      return fn();
+    }
+  };
+
+  for (let i = state.phaseIndex; i < subtasks.length; i += 1) {
     const st = subtasks[i];
     const seat = i % 2 === 0 ? 'a' : 'b';
     const other = seat === 'a' ? 'b' : 'a';
@@ -153,14 +223,25 @@ async function runPipeline(flags, io) {
       return park(`no eligible assignment for subtask '${st.id}' (worker-${seat}/worker-${other}/merger must all resolve)`);
     }
 
-    // Start the subtask branch in the writer's seat, then verify the seat.
-    await io.execFile('git', ['checkout', '-b', branch], { cwd: seats[seat] });
-    const pre = await preflightWorktree(root, { seat, branch }, io);
-    if (pre.ok !== true) return park(`preflight refused subtask '${st.id}': ${pre.refusal}`);
-    const mainSha = (await io.execFile('git', ['rev-parse', 'main'], { cwd: root })).stdout.trim();
+    // Start the subtask branch in the writer's seat (self-healing a raw-deleted
+    // seat), then verify the seat. A pre-existing (stale) branch parks.
+    let mainSha;
+    try {
+      const alreadyOnBranch =
+        String((await withSeatHealing(seat, () => io.execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: seats[seat] }))).stdout).trim() === branch;
+      if (!alreadyOnBranch) await withSeatHealing(seat, () => io.execFile('git', ['checkout', '-b', branch], { cwd: seats[seat] }));
+      const pre = await preflightWorktree(root, { seat, branch }, io);
+      if (pre.ok !== true) return park(`preflight refused subtask '${st.id}': ${pre.refusal}`);
+      mainSha = (await io.execFile('git', ['rev-parse', 'main'], { cwd: root })).stdout.trim();
+    } catch (err) {
+      return park(`seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
+    }
 
     let findings = '';
     let merged = false;
+    let failoverAttempt = 0;
+    /** @type {any | null} */
+    let forcedWriter = null;
     while (!merged) {
       if ((state.iterations?.[gate] ?? 0) >= cap) {
         await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
@@ -174,6 +255,8 @@ async function runPipeline(flags, io) {
       }
 
       // Writer (write-capable, its own seat).
+      const writerAsg = forcedWriter ?? { ...writerAssignment, role: `worker-${seat}` };
+      forcedWriter = null;
       const writerPrompt = [
         `You are the writer (worker-${seat}) for subtask '${st.id}': ${st.title}.`,
         `Goal: ${spec.goal}. Work ONLY on branch ${branch} in your worktree; commit your work there.`,
@@ -181,15 +264,69 @@ async function runPipeline(flags, io) {
       ]
         .filter(Boolean)
         .join('\n\n');
-      await spawn({ ...writerAssignment, role: `worker-${seat}` }, writerPrompt, seats[seat], `${st.id}-writer`);
+      const writerResult = await spawn(writerAsg, writerPrompt, seats[seat], `${st.id}-writer`);
+
+      // The writer's result is CONSUMED, never discarded (Gate-2 fold G3):
+      // classify its log first — a limit/model death routes through failover,
+      // a BLOCKED self-check retries the writer, and only a passing writer
+      // hands off to review.
+      const writerLog = writerResult.logPath && io.fs.existsSync(writerResult.logPath) ? io.fs.readFileSync(writerResult.logPath, 'utf8') : '';
+      const writerCls = classify({ text: writerLog, exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
+      if (writerCls !== 'ok') {
+        failoverAttempt += 1;
+        const decision = await runFailover({
+          root,
+          io,
+          config,
+          role: writerAsg.role === 'merger' ? writerAsg.role : `worker-${seat}`,
+          assignment: writerAsg,
+          transcript: writerLog,
+          exitCode: writerResult.exitCode ?? 1,
+          sessionHint: `loop-${state.runId}`,
+          probes: null,
+          avoid: [],
+          avoidEntries: [],
+          attempt: failoverAttempt,
+          loopState: { runId: state.runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+        });
+        if (decision.action === 'park') return park(`writer failover parked subtask '${st.id}': ${decision.reason}`);
+        if (decision.action === 'relaunch') {
+          forcedWriter = { ...decision.assignment, role: `worker-${seat}` };
+        }
+        continue; // relaunch or retry the writer — never review a failed attempt
+      }
+      if (writerResult.verdict !== 'APPROVED' && writerResult.verdict !== 'APPROVED_WITH_NOTES') {
+        findings = String(writerResult.findings ?? '');
+        const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
+        if (after.status === LOOP_STATUS.ESCALATED) {
+          atomicWriteText(io.fs, `${p.dir}/ESCALATION.md`, `# Pipeline escalation\n\nGate '${gate}' exhausted its ${cap}-iteration cap.\nLast findings:\n\n${findings}\n`);
+          return EXIT_ESCALATED;
+        }
+        continue; // the writer retries; no reviewer sees a failed attempt
+      }
 
       const post = await postflightWorktree(root, { seat, branch, mainSha }, io);
       if (post.ok !== true) return park(`postflight refused subtask '${st.id}': ${post.refusal}`);
 
+      // An empty branch never merges (Gate-2 fold G3): the writer must have
+      // actually committed work ahead of main.
+      const ahead = String((await io.execFile('git', ['log', `main..${branch}`, '--format=%H'], { cwd: root })).stdout).trim();
+      if (ahead.length === 0) return park(`subtask '${st.id}' produced an EMPTY branch (no commits ahead of main) — nothing to review or merge`);
+
+      // Reviewer-seat preflight (Gate-2 fold G5): the reviewing seat must be
+      // listed and clean before a reviewer spawns into it.
+      try {
+        const otherBranch = String((await withSeatHealing(other, () => io.execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: seats[other] }))).stdout).trim();
+        const reviewerPre = await preflightWorktree(root, { seat: other, branch: otherBranch }, io);
+        if (reviewerPre.ok !== true) return park(`reviewer-seat preflight refused subtask '${st.id}': ${reviewerPre.refusal}`);
+      } catch (err) {
+        return park(`reviewer-seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
+      }
+
       // Reviewer (read-only, the OTHER seat's model and cwd, subtask-reviewer role).
       const reviewPrompt = [
         `You are the subtask-reviewer for subtask '${st.id}': ${st.title}.`,
-        `Review the diff of ${branch} against main from the ${other} seat (fresh context).`,
+        `Review the change on ${branch} against main from the ${other} seat (fresh context). Run: git diff main..${branch} (and git log main..${branch}) to see exactly what changed — branch refs are shared across worktrees.`,
         "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ].join('\n\n');
       const review = await spawn({ ...reviewerModel, role: 'subtask-reviewer' }, reviewPrompt, seats[other], `${st.id}-review`);

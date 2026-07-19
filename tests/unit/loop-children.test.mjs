@@ -45,12 +45,21 @@ const valAfter = (/** @type {string[]} */ args, /** @type {string} */ flag) => {
   const i = args.indexOf(flag);
   return i >= 0 ? args[i + 1] : undefined;
 };
-// A claude child is WRITE-CAPABLE if it auto-accepts edits OR its tool allowlist
-// includes a write tool. Kept mechanism-agnostic (permission-mode vs allowlist).
+// A claude child is READ-ONLY only if EVERY allowed tool is in the known
+// read-only set — Read/Grep/Glob or a scoped read-only git command
+// (`Bash(git diff:*)` / `log` / `show` / `status`). Anything else (acceptEdits,
+// Write/Edit, a bare or non-git Bash, an unknown tool, or a missing allowlist)
+// is treated as WRITE-CAPABLE. Fail CLOSED (verifier finding 8): an unrecognized
+// grant must never be assumed safe.
+const READONLY_TOOLS = new Set(['Read', 'Grep', 'Glob']);
+const READONLY_GIT_BASH = /^Bash\(git (diff|log|show|status)[):]/;
 const claudeGrantsWrite = (/** @type {string[]} */ args) => {
-  const pm = valAfter(args, '--permission-mode');
-  const tools = valAfter(args, '--allowedTools') ?? '';
-  return pm === 'acceptEdits' || /Write|Edit|Bash/.test(tools);
+  if (valAfter(args, '--permission-mode') === 'acceptEdits') return true;
+  const tools = valAfter(args, '--allowedTools');
+  if (typeof tools !== 'string') return true; // no explicit allowlist ⇒ not provably read-only
+  const entries = tools.split(',').map((t) => t.trim()).filter(Boolean);
+  if (entries.length === 0) return true;
+  return entries.some((t) => !READONLY_TOOLS.has(t) && !READONLY_GIT_BASH.test(t));
 };
 
 // ===========================================================================
@@ -70,6 +79,43 @@ describe('buildChildArgv — claude-code roles', () => {
       const r = buildChildArgv(asg('claude-code', role, 'claude-fable-5'), 'P', { root: '/repo' });
       assert.equal(claudeGrantsWrite(r.args), false, `${role} must be read-only (no acceptEdits / write permission)`);
     }
+  });
+
+  // G1 (A1/B1/B2): a claude child that never carries the resolved model, never
+  // requests a structured result, and never sets its cwd is unusable in
+  // production — the role matrix is voided, parseVerdict reads BLOCKED-unparseable,
+  // and the child spawns in the supervisor cwd (breaking seat isolation).
+  it('RED (G1): claude argv passes the resolved --model (the role matrix / entry avoidance is honored)', () => {
+    const { buildChildArgv } = M();
+    const r = buildChildArgv(asg('claude-code', 'implementer', 'claude-opus-4-8'), 'P', { root: '/repo' });
+    assert.equal(valAfter(r.args, '--model'), 'claude-opus-4-8', 'the resolved model reaches the claude child');
+  });
+
+  it('RED (G1): claude argv requests --output-format json (parseVerdict reads the structured result)', () => {
+    const { buildChildArgv } = M();
+    const r = buildChildArgv(asg('claude-code', 'implementer', 'claude-fable-5'), 'P', { root: '/repo' });
+    assert.equal(valAfter(r.args, '--output-format'), 'json', 'claude emits a structured result the verdict parser can read');
+  });
+
+  it('RED (G1): the spawn spec carries the child cwd = opts.root (the child runs in its seat, not the supervisor cwd)', () => {
+    const { buildChildArgv } = M();
+    const cc = buildChildArgv(asg('claude-code', 'implementer', 'claude-fable-5'), 'P', { root: '/repo/.worktrees/wt-a' });
+    assert.equal(cc.cwd, '/repo/.worktrees/wt-a', 'the claude spawn spec expresses its cwd so superviseChild runs it in the seat');
+    const cx = buildChildArgv(asg('codex', 'implementer', 'gpt-5.6-sol', 'xhigh'), 'P', { root: '/repo/.worktrees/wt-b' });
+    assert.equal(cx.cwd, '/repo/.worktrees/wt-b', 'the codex spawn spec carries the same cwd field');
+  });
+
+  // G5 (A5/B5): a claude read-only reviewer with only Read,Grep,Glob cannot run
+  // `git diff` — it is blind to the change it must review. The reviewer allowlist
+  // gains scoped read-only git, still WITHOUT general write tools.
+  it('RED (G5): a claude reviewer allowlist includes scoped read-only git (diff/log/show), no general write tools', () => {
+    const { buildChildArgv } = M();
+    const r = buildChildArgv(asg('claude-code', 'subtask-reviewer', 'claude-fable-5'), 'P', { root: '/repo' });
+    const tools = valAfter(r.args, '--allowedTools') ?? '';
+    assert.match(tools, /Bash\(git diff[):]/, 'the reviewer can run git diff');
+    assert.match(tools, /Bash\(git (log|show)[):]/, 'the reviewer can inspect history');
+    assert.doesNotMatch(tools, /\bWrite\b|\bEdit\b/, 'no Write/Edit in a reviewer allowlist');
+    assert.equal(claudeGrantsWrite(r.args), false, 'scoped git reads keep the reviewer read-only');
   });
 });
 

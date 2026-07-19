@@ -20,6 +20,7 @@ import { classify } from '../detect/classifier.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { atomicWriteJson, atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
+import { appendEntry } from '../util/jsonl.mjs';
 import { emitEnvelope, usageError, parseFlagsStrict, resolveRoot } from './shared.mjs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
@@ -63,12 +64,13 @@ export async function cmdLoop(args, io) {
 
   const sub = positionals[0];
   if (sub === undefined) return usageError(io, flags, 'loop', 'a subcommand is required — try: baton loop init "<goal>" or baton loop run');
-  if (sub === 'run') {
+  if (sub === 'run' || sub === 'resume') {
     if (positionals.length > 1) return usageError(io, flags, 'loop', `unexpected argument '${positionals[1]}'`);
     if (flags['approve-smoke'] === '') return usageError(io, flags, 'loop', '--approve-smoke requires a value (the token from smoke-approval.json)');
+    if (sub === 'resume') flags.__resume = true;
     return runLoop(flags, io);
   }
-  if (sub !== 'init') return usageError(io, flags, 'loop', `unknown subcommand '${sub}' (supported: init, run)`);
+  if (sub !== 'init') return usageError(io, flags, 'loop', `unknown subcommand '${sub}' (supported: init, run, resume)`);
 
   const goal = positionals[1];
   if (goal === undefined) return usageError(io, flags, 'loop', 'loop init requires a goal — baton loop init "<goal>"');
@@ -110,6 +112,90 @@ const gitHeadOf = (g) => g?.headSha ?? 'none';
 const gitContentOf = (g) => g?.contentDigest ?? dedupeKey(g ?? null);
 
 /**
+ * Acquire the supervisor run lock ATOMICALLY (exclusive create — never
+ * check-then-write, which loses a race by clobbering the winner). A live
+ * owner refuses; a provably-dead one is reclaimed: its recorded in-flight
+ * child groups (.handoff/loop/children.ndjson) are KILLED first so no
+ * orphan survives the takeover, then the lock is retried once.
+ * Shared by `loop run` and `pipeline run`.
+ * @param {string} root @param {any} io @param {string} cmdLabel
+ * @returns {Promise<{ok: true, release: () => void} | {ok: false, code: number}>}
+ */
+export async function acquireSupervisorLock(root, io, cmdLabel) {
+  const p = loopPaths(root);
+  const lockPath = `${p.dir}/supervisor.lock`;
+  const childrenPath = `${p.dir}/children.ndjson`;
+  ensureDir(io.fs, p.dir);
+  const payload = JSON.stringify({ host: io.host, pid: io.pid, startTime: io.startTime, runId: `sup-${io.pid}` });
+
+  const tryExclusive = () => {
+    // Fast-path an already-present lock (fakes without O_EXCL semantics rely
+    // on this); the wx flag below is the REAL exclusivity on a POSIX fs — a
+    // competitor that lands between the check and the write throws EEXIST
+    // instead of being clobbered.
+    if (io.fs.existsSync(lockPath)) return false;
+    try {
+      io.fs.writeFileSync(lockPath, payload, { flag: 'wx' });
+      return true;
+    } catch (err) {
+      if (/** @type {any} */ (err)?.code === 'EEXIST') return false;
+      throw err;
+    }
+  };
+
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    if (tryExclusive()) {
+      return {
+        ok: true,
+        release: () => {
+          try {
+            if (io.fs.existsSync(lockPath)) io.fs.unlinkSync(lockPath);
+          } catch {
+            // Best effort — a stale lock is recoverable via the dead path.
+          }
+        },
+      };
+    }
+    const existing = safeReadJson(io.fs, lockPath);
+    const other = existing.ok ? existing.value : null;
+    const alive = other && typeof other.pid === 'number' && typeof io.processAlive === 'function' ? io.processAlive(other.pid) : true;
+    const sameProcess = other && other.pid === io.pid && other.startTime === io.startTime;
+    if (!sameProcess && (!other || other.host !== io.host || alive)) {
+      io.stderr.write(`baton ${cmdLabel}: another supervisor (pid ${other?.pid ?? 'unknown'} on ${other?.host ?? 'unknown'}, run ${other?.runId ?? '?'}) holds the run lock — refusing a second supervisor\n`);
+      return { ok: false, code: 1 };
+    }
+    // Provably dead (or our own stale lock): reap its recorded in-flight
+    // child groups BEFORE anything else runs, then reclaim.
+    if (io.fs.existsSync(childrenPath)) {
+      const lines = String(io.fs.readFileSync(childrenPath, 'utf8')).split('\n').filter((l) => l.trim() !== '');
+      for (const line of lines) {
+        try {
+          const rec = JSON.parse(line);
+          if (typeof rec?.pgid === 'number' && typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
+          }
+        } catch {
+          // A torn record is unreapable — skip it.
+        }
+      }
+      try {
+        io.fs.unlinkSync(childrenPath);
+      } catch {
+        // Best effort.
+      }
+    }
+    io.stderr.write(`baton ${cmdLabel}: reclaimed the run lock from a provably-dead supervisor (pid ${other?.pid})\n`);
+    try {
+      io.fs.unlinkSync(lockPath);
+    } catch {
+      // Already gone.
+    }
+  }
+  io.stderr.write(`baton ${cmdLabel}: could not acquire the run lock after reclaiming — another supervisor keeps winning\n`);
+  return { ok: false, code: 1 };
+}
+
+/**
  * The supervisor state machine: drives the spec's phases through headless
  * role children, records every transition in the journal-replayable loop
  * state, enforces the 5-cap, pauses at the smoke gate, and hands limit
@@ -137,19 +223,10 @@ async function runLoop(flags, io) {
   }
   const spec = validated.spec;
 
-  // Supervisor run lock — same provably-dead discipline as the bundle lock:
-  // a live same-host owner is refused; a dead one is reclaimed.
-  const existingLock = safeReadJson(io.fs, lockPath);
-  if (existingLock.ok && existingLock.value && typeof existingLock.value.pid === 'number') {
-    const other = existingLock.value;
-    const alive = typeof io.processAlive === 'function' ? io.processAlive(other.pid) : true;
-    const sameProcess = other.pid === io.pid && other.startTime === io.startTime;
-    if (!sameProcess && (other.host !== io.host || alive)) {
-      io.stderr.write(`baton loop run: another supervisor (pid ${other.pid} on ${other.host}, run ${other.runId}) holds the run lock — refusing a second supervisor\n`);
-      return 1;
-    }
-    io.stderr.write(`baton loop run: reclaimed the run lock from a provably-dead supervisor (pid ${other.pid})\n`);
-  }
+  // Supervisor run lock — atomic exclusive acquisition; provably-dead owners
+  // are reclaimed with their recorded child groups reaped first (B8 + G4).
+  const lock = await acquireSupervisorLock(root, io, 'loop run');
+  if (lock.ok !== true) return lock.code;
 
   // Load or initialize the run state.
   let { state } = await loadLoopState(root, io);
@@ -158,8 +235,6 @@ async function runLoop(flags, io) {
     await writeLoopState(root, state, io);
   }
   const runId = state.runId;
-  ensureDir(io.fs, p.dir);
-  atomicWriteJson(io.fs, lockPath, { host: io.host, pid: io.pid, startTime: io.startTime, runId });
 
   /** Apply one event, journal it, persist the snapshot — one transition. */
   const transition = async (/** @type {any} */ ev) => {
@@ -180,6 +255,18 @@ async function runLoop(flags, io) {
   let childSeq = 0;
 
   try {
+    // `loop resume` — a PARK is resumable; an escalation is operator-only.
+    if (flags.__resume === true) {
+      if (state.status === LOOP_STATUS.ESCALATED) {
+        io.stderr.write(`baton loop resume: the run is ESCALATED (gate ${state.escalation?.gate}) — escalation is an operator decision; resolve the findings and start a fresh gate instead\n`);
+        return EXIT_ESCALATED;
+      }
+      if (state.status === LOOP_STATUS.PARKED) {
+        await transition({ type: LOOP_EVENT.RESUME });
+        io.stdout.write('baton loop resume: the parked run is running again\n');
+      }
+    }
+
     // --approve-smoke: verify the presented token against RECOMPUTED inputs;
     // drift parks (the human approved a state that no longer exists).
     if (typeof flags['approve-smoke'] === 'string') {
@@ -278,7 +365,8 @@ async function runLoop(flags, io) {
         forcedPrompt = null;
 
         childSeq += 1;
-        const logPath = `${p.dir}/children/${String(childSeq).padStart(3, '0')}-${phase.id}.log`;
+        const childId = `${String(childSeq).padStart(3, '0')}-${phase.id}`;
+        const logPath = `${p.dir}/children/${childId}.log`;
         ensureDir(io.fs, `${p.dir}/children`);
         const childSpec = buildChildArgv(assignment, prompt, { root });
         const result = await runner(childSpec, {
@@ -287,6 +375,12 @@ async function runLoop(flags, io) {
           logPath,
           maxLogBytes: 1_000_000,
           platform: assignment.platform,
+          // Persist the child's process group the INSTANT it spawns — a
+          // supervisor crash must leave every in-flight child reap-able by
+          // the reclaiming run (G4).
+          onStart: (/** @type {{pid: number, pgid: number}} */ info) => {
+            appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, pid: info.pid, pgid: info.pgid, startedAt: io.now() });
+          },
         });
 
         // Classification reads the child's LOG (the frozen transcript), so a
@@ -392,10 +486,6 @@ async function runLoop(flags, io) {
   } finally {
     // The lock is per-invocation: release on every exit path so a paused run
     // (awaiting approval) can be resumed by the next invocation.
-    try {
-      if (io.fs.existsSync(lockPath)) io.fs.unlinkSync(lockPath);
-    } catch {
-      // Best effort — a stale lock is recoverable via the provably-dead path.
-    }
+    lock.release();
   }
 }

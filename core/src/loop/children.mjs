@@ -34,7 +34,7 @@ const GIT_IDENTITY = Object.freeze({
  * @param {{platform: string, role: string, model: string, effort?: string | null, mode?: string}} assignment
  * @param {string} prompt
  * @param {{root: string}} opts
- * @returns {{command: string, args: string[], env: Record<string, string>, stdio: any[]}}
+ * @returns {{command: string, args: string[], env: Record<string, string>, stdio: any[], cwd: string}}
  */
 export function buildChildArgv(assignment, prompt, opts) {
   const readOnly = REVIEWER_ROLES.has(assignment.role);
@@ -42,20 +42,25 @@ export function buildChildArgv(assignment, prompt, opts) {
   const stdio = ['ignore', 'pipe', 'pipe'];
 
   if (assignment.platform === 'claude-code') {
-    const args = ['-p', prompt];
+    // --model honors the role matrix (and entry-level avoidance);
+    // --output-format json is what parseVerdict's claude branch reads; the
+    // cwd puts the child in its seat, never the supervisor cwd.
+    const args = ['-p', prompt, '--model', assignment.model, '--output-format', 'json'];
     if (readOnly) {
-      args.push('--permission-mode', 'default', '--allowedTools', 'Read,Grep,Glob');
+      // Scoped read-only git so a reviewer can actually SEE the diff it
+      // reviews — still no write/edit capability.
+      args.push('--permission-mode', 'default', '--allowedTools', 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)');
     } else {
       args.push('--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Grep,Glob,Write,Edit,Bash');
     }
-    return { command: 'claude', args, env, stdio };
+    return { command: 'claude', args, env, stdio, cwd: opts.root };
   }
 
   // codex (and the default shape for exec-style CLIs).
   const args = ['exec', '-C', opts.root, '-s', readOnly ? 'read-only' : 'workspace-write', '--model', assignment.model];
   if (assignment.effort) args.push('-c', `model_reasoning_effort=${assignment.effort}`);
   args.push(prompt);
-  return { command: 'codex', args, env, stdio };
+  return { command: 'codex', args, env, stdio, cwd: opts.root };
 }
 
 const VERDICT_RE = /VERDICT:\s*(APPROVED_WITH_NOTES|APPROVED|BLOCKED)\b/g;
@@ -152,8 +157,8 @@ function killGroup(pid, sig) {
  * zombie grandchildren). Output streams to a capped log at opts.logPath; the
  * verdict is parsed from the full transcript, region-bounded.
  * @param {{command: string, args: string[], env?: Record<string, string>, cwd?: string}} spec
- * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string}} opts
- * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string}>}
+ * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+ * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string, pgid?: number}>}
  */
 export function superviseChild(spec, opts) {
   return new Promise((resolve) => {
@@ -164,6 +169,13 @@ export function superviseChild(spec, opts) {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: true, // its own process group — the kill unit
     });
+
+    // Report the group at spawn time so the supervisor can persist it BEFORE
+    // the child completes — a supervisor crash leaves the orphan reap-able.
+    const pgid = typeof child.pid === 'number' ? child.pid : -1;
+    if (typeof opts.onStart === 'function' && typeof child.pid === 'number') {
+      opts.onStart({ pid: child.pid, pgid });
+    }
 
     let out = '';
     let timedOut = false;
@@ -205,6 +217,7 @@ export function superviseChild(spec, opts) {
         findings: parsed.findings,
         ...(parsed.reason ? { reason: parsed.reason } : {}),
         logPath: opts.logPath,
+        pgid,
       });
     };
 

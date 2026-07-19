@@ -19,10 +19,7 @@ import { teardownWorktrees } from '../../core/src/loop/worktrees.mjs';
 // loop-children-spawn). Children are in-process async fns injected via
 // io.superviseChild — no real claude/codex needed; pipeline WRITERS do REAL git.
 //
-// Most are acceptance PINS (green — the composition exists); the chained
-// A→B→A failover (constraint 2) is expected RED against the current loop, which
-// ACCUMULATES its avoid list across failovers and parks on the second death
-// instead of resolving back to the first platform — a documented finding.
+// These are the real-fs/real-git acceptance pins for constraints 1–6.
 // ---------------------------------------------------------------------------
 
 const SKIP_WIN = process.platform === 'win32';
@@ -277,9 +274,8 @@ describe('e2e — simulated limit death mid-subtask on real fs (constraint 2)', 
     ]);
     const io = makeRealIo(cwd, { superviseChild: runner });
     const code = await cmdLoop(['run'], io);
-    // CONSTRAINT 2 requires chained A→B→A. This is expected RED against the
-    // current loop, which accumulates avoid=[claude-code, codex] and parks on the
-    // second death instead of resolving back to claude-code.
+    // Constraint 2 requires chained A→B→A: after the second death the run must
+    // resolve back to the first platform (the avoid list is per-failover).
     assert.equal(code, 0, `chained A→B→A must complete; stderr: ${io.stderrText()}`);
     const live = loadBundle(cwd, io).bundle;
     assert.ok(live.generation >= 3, 'two failovers opened a third generation');

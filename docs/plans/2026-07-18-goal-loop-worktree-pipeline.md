@@ -319,6 +319,23 @@ signature table gains the `model-unavailable` class; `checkpoint` gains a
    (children.mjs) with per-platform fixtures, same seam discipline as
    normalize.mjs.
 
+## Deferred from v1 of this milestone (Gate-2 fold, recorded 2026-07-19)
+
+Explicitly deferred — recorded so the shipped surface is never read as
+implementing them (Gate-2 findings G8–G13): `loop run --detach` (the
+supervisor is foreground-only in v1; recovery via the run lock + journal is
+implemented and tested); probe-cache integration in the loop/pipeline
+resolvers (probes: null — resolution is degraded-flagged offline behavior);
+a smoke gate in pipeline mode (the smoke gate is a loop-mode surface);
+findings persistence across supervisor restarts (findings are in-memory per
+invocation; the journal carries gate iterations, not findings text);
+reviews/ artifact generation from loop children; per-phase (vs global)
+maxChildrenPerPhase accounting; a live-transcript codex marker fixture;
+streaming log caps + head/tail classification buffers; child-log secret
+redaction + inclusion in the purge walk; deriving the trunk branch instead
+of assuming 'main'. These are v1.1 hardening items unless a gate re-raises
+one as blocking.
+
 ## Out of scope for this milestone
 
 Multi-repo loops; parallel subtask fan-out (>1 writer at once); cloud/cron

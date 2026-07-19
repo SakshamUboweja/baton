@@ -39,6 +39,7 @@ const MAIN_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const WT_A = '/repo/.worktrees/wt-a';
 const WT_B = '/repo/.worktrees/wt-b';
 const MERGE_LOCK = '/repo/.handoff/loop/merge.lock';
+const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
 
 // Both seats codex so --model is present in every child argv (claude-code omits
 // it), letting the tests assert per-seat models directly.
@@ -77,14 +78,43 @@ const REC = (sha, an, ae, cn, ce, body) => [sha, an, ae, cn, ce, body].join('\x0
 const logStdout = (...recs) => recs.map((r) => r + '\x1e').join('');
 const CLEAN_LOG = logStdout(REC('c1', NAME, EMAIL, NAME, EMAIL, 'subtask work'));
 
+// A seeded handoff bundle so a pipeline writer limit-death has a real bundle to
+// seal/receive through runFailover.
+function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+  return {
+    schema: 'baton/bundle@1',
+    bundleId: 'b_pipe00000000000',
+    generation: 1,
+    createdAt: T0,
+    updatedAt: T0,
+    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+    task: { goal: 'Ship the pipeline', constraints: [], acceptance: [] },
+    plan: { steps: [] },
+    decisions: [],
+    files: { touched: [] },
+    roles: { assignments: {} },
+    git: null,
+    handoff:
+      status === 'sealed'
+        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+    journalSeq: 0,
+    compaction: { droppedDecisions: 0, note: null },
+    dedupeRing: [],
+  };
+}
+
 /**
  * A STRICT, stateful fake git: unstubbed commands reject; worktree add/list and
  * checkout -b are modeled so setup + preflight/postflight + merge cohere.
  * `over` overrides specific responses (e.g. a merge conflict).
  */
-function pipelineGit({ over = {}, log = CLEAN_LOG } = {}) {
+function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyCwds = [] } = {}) {
   const added = /** @type {Map<string,string>} */ (new Map()); // path -> branch
   const branchAt = /** @type {Map<string,string>} */ (new Map()); // cwd -> current branch
+  const branches = new Set(existingBranches); // stale/pre-existing namespaced branches
+  const dirty = new Set(dirtyCwds); // seat cwds whose index is dirty
+  const deleted = new Set(); // seats listed by git but raw-deleted on disk
   const calls = /** @type {any[]} */ ([]);
   const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
   let mainSha = MAIN_SHA; // mutable so a child can "move main" mid-subtask
@@ -108,17 +138,29 @@ function pipelineGit({ over = {}, log = CLEAN_LOG } = {}) {
       return Promise.resolve({ stdout: r?.stdout ?? '', stderr: r?.stderr ?? '' });
     }
 
+    // A raw-deleted seat: git still LISTS it, but any command IN that cwd fails
+    // (the directory is gone). Only self-heal (prune + re-add) recovers it.
+    if (opts?.cwd && deleted.has(opts.cwd) && !argstr.startsWith('worktree ')) {
+      return Promise.reject(Object.assign(new Error(`fatal: cannot chdir to '${opts.cwd}': No such file or directory`), { code: 128, stderr: 'No such file or directory\n' }));
+    }
     if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
     if (argstr.startsWith('worktree add')) {
       const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
       const bi = args.indexOf('-b');
       const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
-      if (path) { added.set(path, branch); branchAt.set(path, branch); }
+      if (path) { added.set(path, branch); branchAt.set(path, branch); deleted.delete(path); }
       return Promise.resolve({ stdout: '', stderr: '' });
     }
-    if (argstr.startsWith('worktree prune') || argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
-    if (argstr.startsWith('checkout -b')) { if (opts?.cwd) branchAt.set(opts.cwd, args[args.indexOf('-b') + 1]); return Promise.resolve({ stdout: '', stderr: '' }); }
-    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: '', stderr: '' });
+    if (argstr.startsWith('worktree prune')) { deleted.clear(); return Promise.resolve({ stdout: '', stderr: '' }); }
+    if (argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
+    if (argstr.startsWith('checkout -b')) {
+      const target = args[args.indexOf('-b') + 1];
+      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
+      branches.add(target);
+      if (opts?.cwd) branchAt.set(opts.cwd, target);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    }
+    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
     if (argstr === 'rev-parse --abbrev-ref HEAD') return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'main'}\n`, stderr: '' });
     if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${mainSha}\n`, stderr: '' });
     if (argstr.startsWith('log ')) return Promise.resolve({ stdout: log, stderr: '' });
@@ -134,6 +176,13 @@ function pipelineGit({ over = {}, log = CLEAN_LOG } = {}) {
   fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
   fn.moveMain = (/** @type {string} */ sha) => { mainSha = sha; }; // a child "moves main" mid-subtask
   fn.setBranch = (/** @type {string} */ cwd, /** @type {string} */ branch) => { branchAt.set(cwd, branch); };
+  // Explicit seed: git LISTS this worktree; `raw` marks its dir as deleted on
+  // disk (any in-cwd command fails until prune + re-add self-heals it).
+  fn.seedWorktree = (/** @type {string} */ path, /** @type {string} */ branch, /** @type {{raw?: boolean}} */ o = {}) => {
+    added.set(path, branch);
+    branchAt.set(path, branch);
+    if (o.raw) deleted.add(path);
+  };
   return fn;
 }
 
@@ -323,6 +372,19 @@ describe('pipeline — reviewer seat (read-only, other seat)', () => {
     assert.equal(valAfter(argsOf(reviewers[1]), '-C'), WT_A, 'subtask 2 reviewer reviews from wt-a');
     assert.equal(valAfter(argsOf(reviewers[1]), '-s'), 'read-only', 'subtask 2 reviewer cannot write');
   });
+
+  it('RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>)', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    const rev = reviewersOf(io.__runner)[0];
+    assert.ok(rev, 'a reviewer child ran');
+    const prompt = argsOf(rev).join(' ');
+    // Refs are shared across worktrees, so the reviewer must be told to inspect
+    // the exact range with git (not left to guess "the diff").
+    assert.match(prompt, /git diff main\.\.baton\/wt-a\/subtask-t1/, 'the reviewer prompt names the exact `git diff main..<branch>` range to review');
+  });
 });
 
 // ===========================================================================
@@ -509,6 +571,205 @@ describe('pipeline — completion', () => {
     assert.equal(state.status, LOOP_STATUS.DONE, 'the pipeline completed');
     assert.ok(loopFile(io, 'state.json'), 'loop state persisted');
     assert.ok(io.fs.existsSync(loopPaths('/repo').journal), 'the loop journal persisted');
+  });
+});
+
+// ===========================================================================
+// G1 (A1/B1/B2) — a claude worker seat's writer child carries its model + cwd.
+describe('pipeline — G1: a claude-code worker seat writer carries model + seat cwd', () => {
+  // worker-b on claude-code so subtask 2's writer is a claude child.
+  const CLAUDE_SEAT_CONFIG = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-b': ['claude-code/cc-writer'] } };
+
+  it('RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer', async () => {
+    const io = makePipeRepo({ config: CLAUDE_SEAT_CONFIG, runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    // subtask 2 writer is the write-capable claude child (command 'claude').
+    const claudeWriter = io.__runner.calls.find((c) => c.command === 'claude' && argsOf(c).includes('cc-writer'));
+    assert.ok(claudeWriter, 'the wt-b writer ran as a claude child on the resolved model');
+    assert.equal(claudeWriter.spec.cwd, WT_B, 'the claude writer runs in its seat worktree (spec.cwd), not the supervisor cwd');
+    assert.equal(valAfter(argsOf(claudeWriter), '--output-format'), 'json', 'the claude writer emits a structured result');
+  });
+});
+
+// ===========================================================================
+// G2 (A2/B3) — pipeline preconditions, caps, resume, run-lock.
+describe('pipeline — G2: cap validation / resume / run-lock / stale branch', () => {
+  it('RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant)', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ budgets: { iterationCap: 6, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }) });
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 2, 'a spec asking for a 6th iteration is invalid');
+    assert.match(io.stderrText() + io.stdoutText(), /iterationCap|cap/i, 'the error names the cap');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawns for an invalid spec');
+  });
+
+  it('RED (G2): a LIVE supervisor.lock refuses pipeline run (exit 1), zero spawns', async () => {
+    const io = makePipeRepo();
+    io.processAlive = (p) => p === 55555;
+    const p = loopPaths('/repo');
+    io.fs.mkdirSync(p.dir, { recursive: true });
+    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'pipe-host', pid: 55555, startTime: 222, runId: 'other' }));
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 1, 'a live supervisor blocks a concurrent pipeline run');
+    assert.match(io.stderrText() + io.stdoutText(), /55555|lock|supervisor/i, 'the refusal names the live supervisor');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned while another supervisor is live');
+  });
+
+  it('RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing', async () => {
+    const git = pipelineGit({ existingBranches: ['baton/wt-a/subtask-t1'] });
+    const io = makePipeRepo({ git, runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    let code;
+    await assert.doesNotReject(async () => { code = await run(['pipeline', 'run'], io); }, 'a stale branch must not crash the supervisor');
+    assert.equal(code, 4, 'a stale subtask branch parks the run');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.PARKED);
+  });
+
+  it('RED (G2): a second pipeline run RESUMES loadLoopState — cap counters survive re-invocation (no refund)', async () => {
+    // A strict runner that NEVER falls back to default-APPROVED: it throws once
+    // the script is exhausted, so a re-initing (refunding) impl is caught rather
+    // than masked. The checkout -b branch state is neutralized by giving each run
+    // a fresh git (a resumed run legitimately reuses persisted worktree state).
+    const strictRunner = (io, script) => {
+      const queue = [...script];
+      const calls = [];
+      const fn = (spec, opts) => {
+        if (queue.length === 0) throw new Error('strictRunner: queue exhausted (no default-APPROVED fallback)');
+        calls.push({ spec, opts, command: spec?.command, args: spec?.args ?? [] });
+        const r = queue.shift();
+        return Promise.resolve({ timedOut: false, exitCode: 0, verdict: r.verdict, findings: r.findings ?? '', logPath: opts.logPath });
+      };
+      fn.calls = calls;
+      return fn;
+    };
+    const freshGit = () => { const g = pipelineGit(); g.setLockProbe(() => io.fs.existsSync(MERGE_LOCK)); return g; };
+
+    const spec = pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] });
+    const io = makePipeRepo({ spec, runner: undefined });
+
+    // Run 1 crashes at EXACTLY 3 persisted review iterations: writer+reviewer(BLOCKED)
+    // x3, then the 4th writer spawn throws (a supervisor crash mid-run).
+    io.execFile = freshGit();
+    const runner1 = strictRunner(io, [
+      { verdict: 'APPROVED' }, { verdict: 'BLOCKED', findings: 'x' },
+      { verdict: 'APPROVED' }, { verdict: 'BLOCKED', findings: 'x' },
+      { verdict: 'APPROVED' }, { verdict: 'BLOCKED', findings: 'x' },
+    ]);
+    io.superviseChild = runner1;
+    io.__runner = runner1;
+    let firstCode = 'ran';
+    try { firstCode = await run(['pipeline', 'run'], io); } catch { firstCode = 'crashed'; }
+    assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 3, 'exactly 3 review iterations persisted before the crash');
+
+    // Run 2 resumes: two more BLOCKED reviews reach the 5-cap; the 6th escalates.
+    // The strict runner throws on a 5th call, so a REFUNDING (re-init) impl — which
+    // would need more attempts before escalating — fails to reach exit 3.
+    io.execFile = freshGit();
+    const runner2 = strictRunner(io, [
+      { verdict: 'APPROVED' }, { verdict: 'BLOCKED', findings: 'x' }, // iteration 4
+      { verdict: 'APPROVED' }, { verdict: 'BLOCKED', findings: 'x' }, // iteration 5 -> next spawn is refused by the cap
+    ]);
+    io.superviseChild = runner2;
+    io.__runner = runner2;
+    let second = 'ran';
+    try { second = await run(['pipeline', 'run'], io); } catch { second = 'crashed'; }
+    assert.equal(second, 3, 'the cap counter survived re-invocation — cumulative attempts (3+2) escalate, not refund');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.ESCALATED);
+  });
+});
+
+// ===========================================================================
+// G3 (A3/B4) — pipeline consumes writer results/classification.
+describe('pipeline — G3: writer result handling', () => {
+  it('RED (G3): a writer BLOCKED retries the WRITER without spawning a reviewer for the failed attempt', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', findings: 'writer-not-done' }, // writer 1 fails its own self-check
+      { verdict: 'APPROVED' }, // writer retry
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    // Two write-capable writer attempts ran; no reviewer ran until the writer passed.
+    assert.equal(writersOf(io.__runner).length, 2, 'the BLOCKED writer retried');
+    // The FIRST reviewer spawn must come AFTER the second (passing) writer — never
+    // a review of the first, failed writer attempt.
+    const firstReviewerIdx = io.__runner.calls.findIndex((c) => valAfter(argsOf(c), '-s') === 'read-only');
+    const writerIdxs = io.__runner.calls.map((c, i) => (valAfter(argsOf(c), '-s') === 'workspace-write' ? i : -1)).filter((i) => i >= 0);
+    assert.ok(firstReviewerIdx > writerIdxs[1], 'no reviewer spawned for the failed writer attempt (review only follows a passing writer)');
+  });
+
+  it('RED (G3): a writer whose LOG carries the claude session-limit banner routes to failover (not a plain review)', async () => {
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }),
+      files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' },
+      config: { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-w', 'codex/cx-w@xhigh'] } },
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `implementing...\n${CC_LIMIT}\n` }, // writer hits a limit
+      { verdict: 'APPROVED' }, // relaunched writer
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    // Failover was consulted: the relaunched writer ran on the OTHER platform
+    // (codex/cx-w — the failover-resolved model), and the failed (limit) writer
+    // NEVER handed off to a reviewer.
+    const relaunch = io.__runner.calls.find((c) => c.command === 'codex' && argsOf(c).includes('cx-w'));
+    assert.ok(relaunch, 'the limit death was classified and the writer relaunched on the failover model (codex/cx-w)');
+    const firstReviewerIdx = io.__runner.calls.findIndex((c) => valAfter(argsOf(c), '-s') === 'read-only');
+    const relaunchIdx = io.__runner.calls.indexOf(relaunch);
+    assert.ok(firstReviewerIdx === -1 || firstReviewerIdx > relaunchIdx, 'the limit-failed writer never handed off to a reviewer before the relaunch');
+  });
+
+  it('RED (G3): a writer that commits NOTHING (empty branch) is refused/parked — an empty branch never merges', async () => {
+    // The stateful git returns an EMPTY main..branch log (no commits ahead).
+    const git = pipelineGit({ log: '' });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 4, 'an empty subtask branch parks rather than merging nothing');
+    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'no empty branch is merged to main');
+  });
+});
+
+// ===========================================================================
+// G5 (A5/B5) — reviewer-seat preflight + self-heal wiring.
+describe('pipeline — G5: reviewer-seat preflight + self-heal', () => {
+  it('RED (G5): a DIRTY reviewer seat parks BEFORE the reviewer spawns', async () => {
+    // subtask 1 reviewer runs from wt-b; a dirty wt-b must be caught by preflight.
+    const git = pipelineGit({ dirtyCwds: [WT_B] });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 4, 'a dirty reviewer seat parks the run');
+    assert.equal(reviewersOf(io.__runner).length, 0, 'the reviewer never spawned into a dirty seat');
+  });
+
+  it('RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash', async () => {
+    // git genuinely LISTS wt-a (explicit seed) but its dir is raw-deleted, so any
+    // in-cwd git in wt-a fails until self-heal prunes + re-adds it.
+    const git = pipelineGit();
+    git.seedWorktree(WT_A, 'baton/wt-a/base', { raw: true });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    let threw = false;
+    try {
+      await run(['pipeline', 'run'], io);
+    } catch {
+      threw = true;
+    }
+    assert.equal(threw, false, 'a raw-deleted seat must self-heal, not crash the supervisor');
+    assert.ok(io.__git.issued(/worktree prune/), 'the stale worktree metadata was pruned during self-heal');
+    assert.ok(io.__git.matching(/worktree add/).some((c) => c.argstr.includes(WT_A)), 'the raw-deleted seat was re-added');
   });
 });
 

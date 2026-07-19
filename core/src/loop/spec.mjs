@@ -113,6 +113,12 @@ export function validateLoopSpec(spec, config) {
   } else {
     if (!(smoke.cmd === null || typeof smoke.cmd === 'string')) errors.push(`smoke.cmd must be a string or null (got ${JSON.stringify(smoke.cmd)})`);
     if (!(smoke.expect === null || typeof smoke.expect === 'string')) errors.push(`smoke.expect must be a string or null (got ${JSON.stringify(smoke.expect)})`);
+    // The human smoke gate fires after the 'smoke-build' phase — a spec that
+    // sets smoke.cmd without that phase would silently skip the gate (Gate-2
+    // fold, G7/B7).
+    if (typeof smoke.cmd === 'string' && smoke.cmd.length > 0 && Array.isArray(s.phases) && !s.phases.some((/** @type {any} */ ph) => ph?.id === 'smoke-build')) {
+      errors.push("smoke.cmd is set but no phase has id 'smoke-build' — the smoke gate fires after that phase, so it would be silently skipped");
+    }
   }
 
   if (errors.length > 0) return { ok: false, errors };

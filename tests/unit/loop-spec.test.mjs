@@ -180,9 +180,12 @@ describe('validateLoopSpec — accepts a valid spec and fills defaults', () => {
       goal: 'Custom goal',
       constraints: ['no-network', 'deterministic-only'],
       smoke: { cmd: 'npm test', expect: 'all green' },
+      // A smoke.cmd requires a smoke-build phase (G7); the other custom ids are
+      // preserved verbatim alongside it.
       phases: [
         { id: 'design', role: 'planner' },
         { id: 'review', role: 'plan-reviewer' },
+        { id: 'smoke-build', role: 'implementer' },
         { id: 'build', role: 'implementer' },
       ],
       budgets: { iterationCap: 3, perRoleTimeoutMin: 15, maxChildrenPerPhase: 4 },
@@ -190,7 +193,8 @@ describe('validateLoopSpec — accepts a valid spec and fills defaults', () => {
     const r = validateLoopSpec(custom, fullConfig());
     assert.equal(r.ok, true, `a valid custom spec must pass; errors: ${JSON.stringify(r.errors)}`);
     // Every field of a fully-specified valid spec survives verbatim — including
-    // phase IDS (design/review/build), which a default-substituting impl would lose.
+    // the custom phase IDS (design/review/smoke-build/build), which a
+    // default-substituting impl would lose.
     assert.deepEqual(r.spec, custom, 'a fully-specified valid spec is returned byte-for-byte (no default substitution)');
   });
 });
@@ -288,5 +292,42 @@ describe('validateLoopSpec — rejections (each error names the offender)', () =
     for (const needle of [/schema/, /goal/, /constraints/, /\bid\b/, /unknown role 'ghost-role'/, /cmd|smoke/, /iterationCap/, /perRoleTimeoutMin/, /maxChildrenPerPhase/]) {
       assert.ok(needle.test(joined), `an error mentions ${needle}; got ${JSON.stringify(r.errors)}`);
     }
+  });
+
+  // G7 (B7): the smoke gate keyed to the literal 'smoke-build' phase id — a spec
+  // that sets smoke.cmd but has NO smoke-build phase would silently skip the
+  // human gate, so validateLoopSpec must reject it (offender named).
+  it('RED (G7): smoke.cmd set with NO smoke-build phase is rejected, naming the missing phase', () => {
+    const { validateLoopSpec } = M();
+    const r = validateLoopSpec(
+      validSpec({
+        smoke: { cmd: 'npm run smoke', expect: 'ok' },
+        phases: [{ id: 'plan', role: 'planner' }, { id: 'gate-1', role: 'plan-reviewer' }], // no smoke-build
+      }),
+      fullConfig(),
+    );
+    assert.equal(r.ok, false, 'a smoke command with no smoke-build phase silently skips the human gate — invalid');
+    assert.ok(
+      r.errors.some((/** @type {string} */ e) => /smoke-build/.test(e) && /smoke/.test(e)),
+      `an error names the missing smoke-build phase; got ${JSON.stringify(r.errors)}`,
+    );
+  });
+
+  it('a smoke.cmd WITH a smoke-build phase is accepted (the gate can fire)', () => {
+    const { validateLoopSpec } = M();
+    const r = validateLoopSpec(
+      validSpec({
+        smoke: { cmd: 'npm run smoke', expect: 'ok' },
+        phases: [{ id: 'smoke-build', role: 'implementer' }, { id: 'gate-1', role: 'plan-reviewer' }],
+      }),
+      fullConfig(),
+    );
+    assert.equal(r.ok, true, `a smoke.cmd is valid when a smoke-build phase exists; errors: ${JSON.stringify(r.errors)}`);
+  });
+
+  it('smoke.cmd null (no smoke gate) needs NO smoke-build phase', () => {
+    const { validateLoopSpec } = M();
+    const r = validateLoopSpec(validSpec({ smoke: { cmd: null, expect: null }, phases: [{ id: 'plan', role: 'planner' }] }), fullConfig());
+    assert.equal(r.ok, true, 'no smoke command means no smoke-build requirement');
   });
 });
