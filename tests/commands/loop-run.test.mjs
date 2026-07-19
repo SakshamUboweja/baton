@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { cmdLoop } from '../../core/src/commands/loop.mjs';
 import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+import { dedupeKey } from '../../core/src/util/ids.mjs';
 
 // ---------------------------------------------------------------------------
 // RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
@@ -626,5 +627,162 @@ describe('loop run — resume (G6)', () => {
     assert.match(io.stderrText() + io.stdoutText(), /escalat|operator/i, 'the refusal explains escalation is operator-only');
     assert.equal(io.__runner.calls.length, 0, 'resume never spawns on an escalated run');
     assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.ESCALATED, 'the run stays escalated');
+  });
+});
+
+// ===========================================================================
+// H3 (A2/B5) — children.ndjson RETIRES completed children; reclaim kills only
+// still-in-flight groups (never an OS-recycled pid of a retired child).
+describe('loop run — child registry retirement (H3)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  const readChildren = (io) => {
+    const raw = io.files()[`${DIR}/children.ndjson`];
+    if (typeof raw !== 'string') return [];
+    return raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+  };
+
+  it('RED (H3a): after a clean run, EVERY started child has a matching retire record ({childId, endedAt})', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    // A runner that reports its group (so the supervisor writes the START record
+    // via its onStart handler); the RETIRE record is the supervisor's job on resolve.
+    let n = 0;
+    const notRetiredAtStart = [];
+    io.superviseChild = (/** @type {any} */ _spec, /** @type {any} */ opts) => {
+      n += 1;
+      const pgid = 9000 + n;
+      if (typeof opts.onStart === 'function') opts.onStart({ pid: 8000 + n, pgid });
+      // Ordering: the child is IN FLIGHT here — it must have a start record and
+      // NO retire yet (retirement happens only on resolution).
+      const start = readChildren(io).find((r) => r.pgid === pgid);
+      const retiredEarly = readChildren(io).some((r) => start && r.childId === start.childId && typeof r.endedAt === 'string');
+      notRetiredAtStart.push(!!start && !retiredEarly);
+      return Promise.resolve({ timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '', logPath: opts.logPath, pgid });
+    };
+    io.__runner = { calls: [] };
+    const code = await cmdLoop(['run'], io);
+    assert.ok(notRetiredAtStart.length >= 1 && notRetiredAtStart.every(Boolean), 'a just-started child has a start record and NO endedAt while in flight');
+    assert.equal(code, 0);
+    const recs = readChildren(io);
+    const started = recs.filter((r) => typeof r.pgid === 'number').map((r) => r.childId);
+    const retired = recs.filter((r) => typeof r.endedAt === 'string').map((r) => r.childId);
+    assert.ok(started.length >= 1, 'at least one child started');
+    for (const id of started) assert.ok(retired.includes(id), `child ${id} was retired (a {childId, endedAt} record exists)`);
+  });
+
+  it('RED (H3b): a dead-lock reclaim KILLS NOTHING for a RETIRED child, even when processAlive says its (recycled) pgid is alive', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    const killCalls = [];
+    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { killCalls.push({ pid, sig }); return true; };
+    // The prior run's child is RETIRED, but its pgid was recycled by an unrelated live process.
+    io.processAlive = (/** @type {number} */ p) => p === 9001;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'crashed' }));
+    io.fs.writeFileSync(
+      `${DIR}/children.ndjson`,
+      JSON.stringify({ childId: '001-plan', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n' + JSON.stringify({ childId: '001-plan', endedAt: T0 }) + '\n',
+    );
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the reclaiming run completes; stderr: ${io.stderrText()}`);
+    assert.ok(!killCalls.some((k) => Math.abs(k.pid) === 9001), `a retired child is never killed (pid-reuse safety); kills: ${JSON.stringify(killCalls)}`);
+  });
+});
+
+// ===========================================================================
+// H5 (B4) vice-versa — a pipeline-flavored state is refused by `loop run`.
+describe('loop run — state flavor binding (H5)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  it('RED (H5): a state.json created by `pipeline run` (flavor pipeline) is REFUSED by loop run (exit 2), zero spawns', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(
+      `${DIR}/state.json`,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 0,
+        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        flavor: 'pipeline',
+      }, null, 2) + '\n',
+    );
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 2, 'a pipeline-flavored state cannot be resumed as a loop');
+    assert.match(io.stderrText() + io.stdoutText(), /flavor|pipeline|mismatch/i, 'the refusal names the flavor mismatch');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  });
+
+  it('RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns', async () => {
+    // The current loop.json has plan -> gate-1; the seeded state was digested over
+    // a different phase list, so resuming its phaseIndex would misalign.
+    const io = makeLoopRepo({ runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    const oldPhases = [{ id: 'plan', role: 'planner' }, { id: 'REMOVED', role: 'plan-reviewer' }, { id: 'gate-1', role: 'plan-reviewer' }];
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(
+      `${DIR}/state.json`,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 2, phaseIndex: 1,
+        iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        flavor: 'loop', specDigest: dedupeKey(oldPhases),
+      }, null, 2) + '\n',
+    );
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 2, 'a resume against a changed phase list refuses rather than misaligning');
+    assert.match(io.stderrText() + io.stdoutText(), /phase|spec|changed|digest/i, 'the refusal names the spec change');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+  });
+});
+
+// ===========================================================================
+// H6 (B6) — ESCALATION.md must not instruct `baton loop run` as remediation.
+describe('loop run — ESCALATION.md wording (H6)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  it('RED (H6): a resume that is already at the cap escalates with operator wording, NOT "baton loop run"', async () => {
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    // Resume with the gate ALREADY at the 5-cap: the top-of-loop cap gate fires.
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(
+      `${DIR}/state.json`,
+      JSON.stringify({
+        schema: 'baton/loop-state@1', runId: 'loop-seeded', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 0,
+        iterations: { 'gate-1': 5 }, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+        flavor: 'loop',
+      }, null, 2) + '\n',
+    );
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 3, 'an at-cap gate escalates');
+    const esc = loopFile(io, 'ESCALATION.md');
+    assert.ok(esc, 'ESCALATION.md was written');
+    assert.doesNotMatch(esc, /baton loop run/, 'the escalation must NOT tell the operator to re-run the loop (escalation is operator-only)');
+    assert.match(esc, /operator|resolve the findings|escalat/i, 'the escalation uses operator remediation wording');
+  });
+});
+
+// ===========================================================================
+// H8 (B8b) — the run-lock runId matches the state runId while children spawn.
+describe('loop run — lock runId correlates with state runId (H8)', () => {
+  const DIR = `${loopPaths('/repo').dir}`;
+  it('RED (H8): the supervisor.lock runId equals state.runId by the time the first child spawns', async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    let lockRunIdAtSpawn = null;
+    const base = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+    io.superviseChild = (/** @type {any} */ spec, /** @type {any} */ opts) => {
+      if (lockRunIdAtSpawn === null) {
+        const raw = io.files()[`${DIR}/supervisor.lock`];
+        lockRunIdAtSpawn = raw ? JSON.parse(raw).runId : 'no-lock';
+      }
+      return base(spec, opts);
+    };
+    io.__runner = base;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0);
+    const stateRunId = (await loadLoopState('/repo', io)).state.runId;
+    assert.equal(lockRunIdAtSpawn, stateRunId, `the lock runId matches the state runId at spawn time (got lock=${lockRunIdAtSpawn}, state=${stateRunId})`);
   });
 });

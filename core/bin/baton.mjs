@@ -58,6 +58,16 @@ const code = await run(process.argv.slice(2), {
       return true; // unverifiable — never steal on uncertainty
     }
   },
+  // Kill a process or (negative pid) process group — the supervisor's orphan
+  // reaper on dead-lock reclaim (gate-2 fold H4).
+  processKill: (/** @type {number} */ pid, /** @type {NodeJS.Signals | number} */ signal) => {
+    try {
+      process.kill(pid, signal);
+      return true;
+    } catch {
+      return false; // ESRCH/EPERM — nothing reapable
+    }
+  },
   newFencingToken: () => `tok-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
   platform: process.platform,
   stdout: process.stdout,

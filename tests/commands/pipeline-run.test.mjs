@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { run } from '../../core/src/cli.mjs';
 import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+import { dedupeKey } from '../../core/src/util/ids.mjs';
 
 // ---------------------------------------------------------------------------
 // RED — `baton pipeline run` (subtask pipeline, Layer 3). NEW command that
@@ -40,6 +41,8 @@ const WT_A = '/repo/.worktrees/wt-a';
 const WT_B = '/repo/.worktrees/wt-b';
 const MERGE_LOCK = '/repo/.handoff/loop/merge.lock';
 const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+const CODEX_LIMIT = "You've hit your usage limit"; // codex usage-limit signature
+const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account'; // codex model-unavailable signature
 
 // Both seats codex so --model is present in every child argv (claude-code omits
 // it), letting the tests assert per-seat models directly.
@@ -109,12 +112,13 @@ function ownedBundle(originPlatform = 'claude-code', status = 'open') {
  * checkout -b are modeled so setup + preflight/postflight + merge cohere.
  * `over` overrides specific responses (e.g. a merge conflict).
  */
-function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyCwds = [] } = {}) {
+function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyCwds = [], mergedBranches = [] } = {}) {
   const added = /** @type {Map<string,string>} */ (new Map()); // path -> branch
   const branchAt = /** @type {Map<string,string>} */ (new Map()); // cwd -> current branch
   const branches = new Set(existingBranches); // stale/pre-existing namespaced branches
   const dirty = new Set(dirtyCwds); // seat cwds whose index is dirty
   const deleted = new Set(); // seats listed by git but raw-deleted on disk
+  const merged = new Set(mergedBranches); // branches already merged into main (ancestor; empty main..branch)
   const calls = /** @type {any[]} */ ([]);
   const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
   let mainSha = MAIN_SHA; // mutable so a child can "move main" mid-subtask
@@ -163,7 +167,18 @@ function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyC
     if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
     if (argstr === 'rev-parse --abbrev-ref HEAD') return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'main'}\n`, stderr: '' });
     if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${mainSha}\n`, stderr: '' });
-    if (argstr.startsWith('log ')) return Promise.resolve({ stdout: log, stderr: '' });
+    // merge-base --is-ancestor <branch> main : exit 0 iff <branch> is already in main.
+    if (argstr.startsWith('merge-base --is-ancestor')) {
+      const b = args[args.indexOf('--is-ancestor') + 1];
+      return merged.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
+    }
+    if (argstr.startsWith('log ')) {
+      // A merged branch has NO commits ahead of main (empty main..<branch>).
+      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
+      const branch = String(range).split('..')[1];
+      if (branch && merged.has(branch)) return Promise.resolve({ stdout: '', stderr: '' });
+      return Promise.resolve({ stdout: log, stderr: '' });
+    }
     if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' });
     if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
     return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
@@ -770,6 +785,151 @@ describe('pipeline — G5: reviewer-seat preflight + self-heal', () => {
     assert.equal(threw, false, 'a raw-deleted seat must self-heal, not crash the supervisor');
     assert.ok(io.__git.issued(/worktree prune/), 'the stale worktree metadata was pruned during self-heal');
     assert.ok(io.__git.matching(/worktree add/).some((c) => c.argstr.includes(WT_A)), 'the raw-deleted seat was re-added');
+  });
+});
+
+// A persisted loop-state fixture. `flavor`/`specDigest` are the state-binding
+// stamp (H5 design): flavor ∈ {'loop','pipeline'}; specDigest = dedupeKey of the
+// driving spec (subtasks for pipeline, phases for loop).
+function seedPipelineState(io, over = {}) {
+  const state = {
+    schema: 'baton/loop-state@1',
+    runId: 'loop-seeded',
+    goal: 'Ship the pipeline',
+    phaseCount: 2,
+    phaseIndex: 0,
+    iterations: {},
+    status: 'running',
+    parkReason: null,
+    escalation: null,
+    smokeApproval: null,
+    createdAt: T0,
+    journalSeq: 0,
+    flavor: 'pipeline',
+    ...over,
+  };
+  io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+  io.fs.writeFileSync(loopPaths('/repo').state, JSON.stringify(state, null, 2) + '\n');
+  return state;
+}
+
+// ===========================================================================
+// H1 (B1) — the WRITER prompt must carry the verdict-tail contract.
+describe('pipeline — H1: writer prompt carries the verdict-tail contract', () => {
+  it('RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable)', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    const writer = writersOf(io.__runner)[0];
+    assert.ok(writer, 'a writer child ran');
+    const prompt = argsOf(writer).join(' ');
+    assert.match(prompt, /End with exactly/, 'the writer prompt states the required tail');
+    assert.match(prompt, /VERDICT:/, 'the writer prompt names the VERDICT line it must emit');
+  });
+});
+
+// ===========================================================================
+// H2 (A1/B2) — bounded failover: avoidEntries/avoid carry; exhaustion PARKS.
+describe('pipeline — H2: bounded failover (avoid carries; exhaustion parks)', () => {
+  // A recording runner that emits a platform-appropriate death banner and THROWS
+  // once a bound is exceeded, so an unbounded ping-pong terminates the test RED.
+  function boundedDeathRunner(io, { bound, banner }) {
+    const calls = [];
+    const fn = (/** @type {any} */ spec, /** @type {any} */ opts) => {
+      calls.push({ spec, command: spec?.command, args: (spec?.args ?? []).map(String) });
+      if (calls.length > bound) throw new Error(`unbounded failover: exceeded ${bound} child spawns (ping-pong)`);
+      const text = typeof banner === 'function' ? banner(spec) : banner;
+      io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+      io.fs.writeFileSync(opts.logPath, `working...\n${text}\n`);
+      return Promise.resolve({ timedOut: false, exitCode: 1, verdict: 'BLOCKED', findings: '', logPath: opts.logPath });
+    };
+    fn.calls = calls;
+    return fn;
+  }
+  const modelsOf = (runner) => runner.calls.filter((c) => valAfter(c.args, '-s') === 'workspace-write').map((c) => valAfter(c.args, '--model'));
+
+  it('RED (H2a): always-model-unavailable on a two-entry codex chain never re-picks a rejected model; all rejected -> PARK (bounded)', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa1@xhigh', 'codex/wa2@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    const runner = boundedDeathRunner(io, { bound: 3, banner: MODEL_UNAVAIL }); // correct impl parks at 2 writers
+    io.superviseChild = runner;
+    io.__runner = runner;
+    let code = 'ran';
+    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+    assert.equal(code, 4, 'both models rejected -> the subtask parks (bounded, no infinite ping-pong)');
+    // BOTH entries are attempted, in order, exactly once — then it parks.
+    assert.deepEqual(modelsOf(runner), ['wa1', 'wa2'], `each chain entry is tried once, in order; got ${JSON.stringify(modelsOf(runner))}`);
+    assert.ok(runner.calls.length <= 3, `the runner stayed within the throwing bound (no ping-pong); calls=${runner.calls.length}`);
+  });
+
+  it('RED (H2b): always-usage-limit across a cross-platform chain parks within a bounded child budget (no infinite loop)', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/wa-cc', 'codex/wa-cx@xhigh'] } };
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }),
+      config,
+      files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' },
+      runner: undefined,
+    });
+    const runner = boundedDeathRunner(io, { bound: 4, banner: (spec) => (spec.command === 'claude' ? CC_LIMIT : CODEX_LIMIT) });
+    io.superviseChild = runner;
+    io.__runner = runner;
+    let code = 'ran';
+    try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+    assert.equal(code, 4, 'a repeatedly-limit-dying subtask parks within the child budget, never loops forever');
+  });
+});
+
+// ===========================================================================
+// H5 (B4) — state flavor + spec binding across loop/pipeline.
+describe('pipeline — H5: state flavor + spec-digest binding', () => {
+  it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  });
+
+  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+    io.__runner = io.superviseChild;
+    // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+    // the current subtasks, so resuming its phaseIndex would misalign.
+    const oldSubtasks = [{ id: 't1', title: 'a' }, { id: 'REMOVED', title: 'gone' }, { id: 't2', title: 'b' }];
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+    assert.match(io.stderrText() + io.stdoutText(), /subtask|spec|changed|digest/i, 'the refusal names the spec change');
+    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+  });
+});
+
+// ===========================================================================
+// H7 (B7) — a crash between merge and PHASE_ADVANCE advances, not empty-park.
+describe('pipeline — H7: an already-merged subtask advances on resume (no empty-branch park)', () => {
+  it('RED (H7): a resumed subtask whose branch is already an ancestor of main ADVANCES (no writer, no empty-branch park)', async () => {
+    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+    // t1's branch is already merged: `merge-base --is-ancestor` exits 0 AND
+    // `log main..t1` is empty; t2 is a normal, unmerged subtask.
+    const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+    io.__runner = io.superviseChild;
+    // A crash left the run at phaseIndex 0 (t1 merged but not advanced).
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `an already-merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge/i, 'the already-merged subtask is NOT mistaken for an empty branch');
+    // t1 (seat a) is skipped — the first writer is t2's, in wt-b.
+    const writers = writersOf(io.__runner);
+    assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as already merged and skipped');
   });
 });
 

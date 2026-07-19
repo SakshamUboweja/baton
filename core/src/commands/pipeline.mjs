@@ -26,6 +26,7 @@ import { loadSignatures } from '../detect/signatures.mjs';
 import { classify } from '../detect/classifier.mjs';
 import { atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
 import { appendEntry } from '../util/jsonl.mjs';
+import { dedupeKey } from '../util/ids.mjs';
 import { emitEnvelope, usageError, parseFlagsStrict, resolveRoot } from './shared.mjs';
 import { acquireSupervisorLock } from './loop.mjs';
 import { loadLoopState } from '../loop/state.mjs';
@@ -144,12 +145,22 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     phases: subtasks.map((/** @type {any} */ st, /** @type {number} */ i) => ({ id: `subtask-${st.id}`, role: `worker-${i % 2 === 0 ? 'a' : 'b'}` })),
   };
   // RESUME, never re-init: a prior run's cap counters and position survive a
-  // re-invocation (Gate-2 fold G2 — no cap refunds).
+  // re-invocation (Gate-2 fold G2 — no cap refunds). The state is stamped
+  // {flavor, specDigest} so a cross-flavor or changed-spec resume refuses
+  // instead of misaligning (H5).
+  const specDigest = dedupeKey(subtasks);
   /** @type {any} */
   let state = (await loadLoopState(root, io)).state;
   if (state === null) {
-    state = initLoopState(stateSpec, io);
+    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
     await writeLoopState(root, state, io);
+  } else {
+    if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
+      return usageError(io, flags, 'pipeline', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a pipeline (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+    }
+    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
+      return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
+    }
   }
   if (state.status === LOOP_STATUS.ESCALATED) {
     io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
@@ -184,7 +195,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     const logPath = `${p.dir}/children/${childId}.log`;
     ensureDir(io.fs, `${p.dir}/children`);
     const childSpec = buildChildArgv(assignment, prompt, { root: seatPath });
-    return runner(childSpec, {
+    const result = await runner(childSpec, {
       timeoutMs,
       graceMs: 10_000,
       logPath,
@@ -194,6 +205,10 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, pid: info.pid, pgid: info.pgid, startedAt: io.now() });
       },
     });
+    // Retire on resolution — reclaim must never kill a completed child's
+    // (possibly recycled) group (H3).
+    appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, endedAt: io.now() });
+    return result;
   };
 
   // Prepare a seat for use, healing a listed-but-raw-deleted worktree (prune
@@ -215,6 +230,22 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     const other = seat === 'a' ? 'b' : 'a';
     const branch = `baton/wt-${seat}/subtask-${st.id}`;
     const gate = `subtask-${st.id}-review`;
+
+    // A crash between merge and PHASE_ADVANCE leaves the branch fully merged:
+    // recognize it (tip is an ancestor of main) and advance instead of a
+    // misleading empty-branch park (H7).
+    let alreadyMerged = false;
+    try {
+      await io.execFile('git', ['merge-base', '--is-ancestor', branch, 'main'], { cwd: root });
+      alreadyMerged = true;
+    } catch {
+      // Not merged (or the branch does not exist yet) — the normal path.
+    }
+    if (alreadyMerged) {
+      io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main — advancing\n`);
+      await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+      continue;
+    }
 
     const writerAssignment = resolveOne(`worker-${seat}`);
     const reviewerModel = resolveOne(`worker-${other}`);
@@ -240,6 +271,8 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     let findings = '';
     let merged = false;
     let failoverAttempt = 0;
+    /** @type {Array<{platform: string, model: string}>} */
+    let subtaskAvoidEntries = [];
     /** @type {any | null} */
     let forcedWriter = null;
     while (!merged) {
@@ -261,6 +294,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         `You are the writer (worker-${seat}) for subtask '${st.id}': ${st.title}.`,
         `Goal: ${spec.goal}. Work ONLY on branch ${branch} in your worktree; commit your work there.`,
         findings ? `The previous attempt was BLOCKED — address every finding:\n${findings}` : '',
+        "When your work is committed and self-checked, End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -274,23 +308,33 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       const writerCls = classify({ text: writerLog, exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
       if (writerCls !== 'ok') {
         failoverAttempt += 1;
+        // Failover is BOUNDED: at most one relaunch per configured chain entry
+        // for this seat — beyond that the subtask parks instead of ping-ponging
+        // across platforms forever (H2).
+        const chainLen = Array.isArray(config?.roles?.[`worker-${seat}`]) ? config.roles[`worker-${seat}`].length : 1;
+        if (failoverAttempt > chainLen) {
+          return park(`subtask '${st.id}' exhausted its failover budget (${chainLen} chain entr${chainLen === 1 ? 'y' : 'ies'}, ${failoverAttempt} deaths) — parked instead of looping`);
+        }
         const decision = await runFailover({
           root,
           io,
           config,
-          role: writerAsg.role === 'merger' ? writerAsg.role : `worker-${seat}`,
+          role: `worker-${seat}`,
           assignment: writerAsg,
           transcript: writerLog,
           exitCode: writerResult.exitCode ?? 1,
           sessionHint: `loop-${state.runId}`,
           probes: null,
           avoid: [],
-          avoidEntries: [],
+          avoidEntries: subtaskAvoidEntries,
           attempt: failoverAttempt,
           loopState: { runId: state.runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
         });
         if (decision.action === 'park') return park(`writer failover parked subtask '${st.id}': ${decision.reason}`);
         if (decision.action === 'relaunch') {
+          // Carry entry-level avoidance across relaunches — a rejected model
+          // stays rejected for this subtask (H2).
+          if (Array.isArray(decision.avoidEntries)) subtaskAvoidEntries = decision.avoidEntries;
           forcedWriter = { ...decision.assignment, role: `worker-${seat}` };
         }
         continue; // relaunch or retry the writer — never review a failed attempt

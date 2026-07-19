@@ -168,14 +168,25 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
     // child groups BEFORE anything else runs, then reclaim.
     if (io.fs.existsSync(childrenPath)) {
       const lines = String(io.fs.readFileSync(childrenPath, 'utf8')).split('\n').filter((l) => l.trim() !== '');
+      /** @type {Map<string, any>} */
+      const starts = new Map();
+      const retired = new Set();
       for (const line of lines) {
         try {
           const rec = JSON.parse(line);
-          if (typeof rec?.pgid === 'number' && typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
-            if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
-          }
+          if (typeof rec?.endedAt === 'string') retired.add(rec.childId);
+          else if (typeof rec?.pgid === 'number') starts.set(rec.childId, rec);
         } catch {
           // A torn record is unreapable — skip it.
+        }
+      }
+      // Kill ONLY genuinely in-flight children (start with no retire): a
+      // retired child's pgid may have been recycled by an unrelated live
+      // process — killing it would be a pid-reuse casualty (H3).
+      for (const [childId, rec] of starts) {
+        if (retired.has(childId)) continue;
+        if (typeof io.processAlive === 'function' && io.processAlive(rec.pgid)) {
+          if (typeof io.processKill === 'function') io.processKill(-rec.pgid, 'SIGKILL');
         }
       }
       try {
@@ -228,13 +239,24 @@ async function runLoop(flags, io) {
   const lock = await acquireSupervisorLock(root, io, 'loop run');
   if (lock.ok !== true) return lock.code;
 
-  // Load or initialize the run state.
+  // Load or initialize the run state — stamped with {flavor, specDigest} so
+  // cross-flavor or changed-spec resumes refuse instead of misaligning (H5).
+  const specDigest = dedupeKey(spec.phases);
   let { state } = await loadLoopState(root, io);
   if (state === null) {
-    state = initLoopState(spec, io);
+    state = { ...initLoopState(spec, io), flavor: 'loop', specDigest };
     await writeLoopState(root, state, io);
+  } else {
+    if (typeof state.flavor === 'string' && state.flavor !== 'loop') {
+      return usageError(io, flags, 'loop', `the persisted run state is flavor '${state.flavor}' — a ${state.flavor} run cannot be resumed as a loop (flavor mismatch); archive .handoff/loop or finish the ${state.flavor} run first`);
+    }
+    if (typeof state.specDigest === 'string' && state.specDigest !== specDigest) {
+      return usageError(io, flags, 'loop', 'loop.json phases changed since this run started (spec digest mismatch) — resuming would misalign the phase position; archive .handoff/loop to start fresh');
+    }
   }
   const runId = state.runId;
+  // The lock payload's runId now correlates with the run it guards (H8).
+  io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: io.host, pid: io.pid, startTime: io.startTime, runId }));
 
   /** Apply one event, journal it, persist the snapshot — one transition. */
   const transition = async (/** @type {any} */ ev) => {
@@ -328,7 +350,7 @@ async function runLoop(flags, io) {
           atomicWriteText(
             io.fs,
             `${p.dir}/ESCALATION.md`,
-            `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n\nResolve the findings, then resume with baton loop run.\n`,
+            `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n\nEscalation is operator-only: review and resolve the findings with the operator before any new gate attempt.\n`,
           );
           io.stderr.write(`baton loop run: gate '${phase.id}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
           return EXIT_ESCALATED;
@@ -382,6 +404,9 @@ async function runLoop(flags, io) {
             appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, pid: info.pid, pgid: info.pgid, startedAt: io.now() });
           },
         });
+        // Retire the child the moment it resolves — a reclaim must never kill
+        // a completed child's (possibly OS-recycled) process group (H3).
+        appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, endedAt: io.now() });
 
         // Classification reads the child's LOG (the frozen transcript), so a
         // limit banner routes to failover even when a verdict parsed.
