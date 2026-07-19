@@ -1,11 +1,35 @@
-import { defaultLoopSpec } from '../loop/spec.mjs';
-import { atomicWriteJson, ensureDir } from '../util/fsx.mjs';
+import { defaultLoopSpec, validateLoopSpec } from '../loop/spec.mjs';
+import {
+  loopPaths,
+  initLoopState,
+  applyLoopEvent,
+  writeLoopState,
+  appendLoopEvent,
+  loadLoopState,
+  smokeApprovalToken,
+  verifySmokeToken,
+  LOOP_EVENT,
+  LOOP_STATUS,
+} from '../loop/state.mjs';
+import { buildChildArgv, superviseChild } from '../loop/children.mjs';
+import { runFailover } from '../loop/failover.mjs';
+import { loadConfig } from '../roles/matrix.mjs';
+import { resolveRoles } from '../roles/resolve.mjs';
+import { loadSignatures } from '../detect/signatures.mjs';
+import { classify } from '../detect/classifier.mjs';
+import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
+import { dedupeKey } from '../util/ids.mjs';
+import { atomicWriteJson, atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
 import { emitEnvelope, usageError, parseFlagsStrict, resolveRoot } from './shared.mjs';
+import { fileURLToPath } from 'node:url';
+import { join, dirname } from 'node:path';
+
+const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
 // Flags that consume a value — needed to split positionals from flag tokens
 // without mistaking a flag's value for a positional. Keep in sync with the
 // strict spec below plus the implied common string flag (--root).
-const STRING_FLAGS = new Set(['root']);
+const STRING_FLAGS = new Set(['root', 'approve-smoke']);
 
 /**
  * `baton loop <subcommand>` — the Layer-2 goal-loop surface. v1 subcommands:
@@ -33,13 +57,18 @@ export async function cmdLoop(args, io) {
     }
   }
 
-  const parsed = parseFlagsStrict(flagTokens, { 'dry-run': 'boolean' });
+  const parsed = parseFlagsStrict(flagTokens, { 'dry-run': 'boolean', 'approve-smoke': 'string' });
   if (parsed.error !== undefined) return usageError(io, parsed.flags, 'loop', parsed.error);
   const flags = parsed.flags;
 
   const sub = positionals[0];
-  if (sub === undefined) return usageError(io, flags, 'loop', 'a subcommand is required — try: baton loop init "<goal>"');
-  if (sub !== 'init') return usageError(io, flags, 'loop', `unknown subcommand '${sub}' (supported: init)`);
+  if (sub === undefined) return usageError(io, flags, 'loop', 'a subcommand is required — try: baton loop init "<goal>" or baton loop run');
+  if (sub === 'run') {
+    if (positionals.length > 1) return usageError(io, flags, 'loop', `unexpected argument '${positionals[1]}'`);
+    if (flags['approve-smoke'] === '') return usageError(io, flags, 'loop', '--approve-smoke requires a value (the token from smoke-approval.json)');
+    return runLoop(flags, io);
+  }
+  if (sub !== 'init') return usageError(io, flags, 'loop', `unknown subcommand '${sub}' (supported: init, run)`);
 
   const goal = positionals[1];
   if (goal === undefined) return usageError(io, flags, 'loop', 'loop init requires a goal — baton loop init "<goal>"');
@@ -67,4 +96,301 @@ export async function cmdLoop(args, io) {
   ensureDir(io.fs, root);
   atomicWriteJson(io.fs, path, defaultLoopSpec(goal));
   return finish({ created: true, path }, `baton loop init: wrote ${path} (goal "${goal}") — edit constraints/smoke, then run baton loop run`);
+}
+
+// Exit codes for `loop run` (frozen by the loop-run test contract):
+// 0 done / awaiting-smoke-approval · 1 live-lock refusal · 2 usage error ·
+// 3 escalated · 4 parked.
+const EXIT_ESCALATED = 3;
+const EXIT_PARKED = 4;
+
+/** @param {any} g */
+const gitHeadOf = (g) => g?.headSha ?? 'none';
+/** @param {any} g */
+const gitContentOf = (g) => g?.contentDigest ?? dedupeKey(g ?? null);
+
+/**
+ * The supervisor state machine: drives the spec's phases through headless
+ * role children, records every transition in the journal-replayable loop
+ * state, enforces the 5-cap, pauses at the smoke gate, and hands limit
+ * deaths to the failover transaction. Children run via the injectable seam
+ * `io.superviseChild ?? superviseChild`.
+ * @param {Record<string, string | boolean>} flags @param {any} io
+ * @returns {Promise<number>}
+ */
+async function runLoop(flags, io) {
+  const root = resolveRoot(io, flags);
+  const specPath = `${root}/loop.json`;
+  const p = loopPaths(root);
+  const lockPath = `${p.dir}/supervisor.lock`;
+
+  // Preconditions — before any lock or spawn.
+  const rawSpec = safeReadJson(io.fs, specPath);
+  if (!rawSpec.ok) {
+    return usageError(io, flags, 'loop', `no loop.json at ${specPath} — scaffold one with: baton loop init "<goal>"`);
+  }
+  const { config } = loadConfig(root, io);
+  if (!config) return usageError(io, flags, 'loop', `no readable baton.config.json at ${root} — the role matrix is required`);
+  const validated = validateLoopSpec(rawSpec.value, config);
+  if (validated.ok !== true) {
+    return usageError(io, flags, 'loop', `loop.json is invalid:\n  - ${validated.errors.join('\n  - ')}`);
+  }
+  const spec = validated.spec;
+
+  // Supervisor run lock — same provably-dead discipline as the bundle lock:
+  // a live same-host owner is refused; a dead one is reclaimed.
+  const existingLock = safeReadJson(io.fs, lockPath);
+  if (existingLock.ok && existingLock.value && typeof existingLock.value.pid === 'number') {
+    const other = existingLock.value;
+    const alive = typeof io.processAlive === 'function' ? io.processAlive(other.pid) : true;
+    const sameProcess = other.pid === io.pid && other.startTime === io.startTime;
+    if (!sameProcess && (other.host !== io.host || alive)) {
+      io.stderr.write(`baton loop run: another supervisor (pid ${other.pid} on ${other.host}, run ${other.runId}) holds the run lock — refusing a second supervisor\n`);
+      return 1;
+    }
+    io.stderr.write(`baton loop run: reclaimed the run lock from a provably-dead supervisor (pid ${other.pid})\n`);
+  }
+
+  // Load or initialize the run state.
+  let { state } = await loadLoopState(root, io);
+  if (state === null) {
+    state = initLoopState(spec, io);
+    await writeLoopState(root, state, io);
+  }
+  const runId = state.runId;
+  ensureDir(io.fs, p.dir);
+  atomicWriteJson(io.fs, lockPath, { host: io.host, pid: io.pid, startTime: io.startTime, runId });
+
+  /** Apply one event, journal it, persist the snapshot — one transition. */
+  const transition = async (/** @type {any} */ ev) => {
+    const next = applyLoopEvent(state, ev);
+    const seq = await appendLoopEvent(root, ev, io);
+    state = { ...next, journalSeq: seq };
+    await writeLoopState(root, state, io);
+    return state;
+  };
+
+  const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
+  const runner = io.superviseChild ?? superviseChild;
+  const sessionHint = `loop-${runId}`;
+  /** @type {string[]} */
+  let avoid = [];
+  /** @type {Array<{platform: string, model: string}>} */
+  let avoidEntries = [];
+  let childSeq = 0;
+
+  try {
+    // --approve-smoke: verify the presented token against RECOMPUTED inputs;
+    // drift parks (the human approved a state that no longer exists).
+    if (typeof flags['approve-smoke'] === 'string') {
+      if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+        return usageError(io, flags, 'loop', `--approve-smoke only applies while the run awaits smoke approval (status: ${state.status})`);
+      }
+      const record = safeReadJson(io.fs, `${p.dir}/smoke-approval.json`);
+      if (!record.ok) return usageError(io, flags, 'loop', 'no smoke-approval.json found — run the loop to the smoke gate first');
+      const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+      const currentInputs = {
+        stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+        smokeCmd: String(spec.smoke?.cmd ?? ''),
+        smokeOutputDigest: String(record.value?.inputs?.smokeOutputDigest ?? ''),
+        gitHead: gitHeadOf(git),
+        gitContentDigest: gitContentOf(git),
+        childAssignment: String(record.value?.inputs?.childAssignment ?? ''),
+      };
+      const verify = verifySmokeToken(String(flags['approve-smoke']), currentInputs);
+      if (verify.ok !== true) {
+        const drifted = 'driftedInputs' in verify ? verify.driftedInputs.join(', ') : 'unknown';
+        await transition({ type: LOOP_EVENT.PARK, reason: `smoke approval token is stale — drifted inputs: ${drifted}; re-run the smoke gate` });
+        io.stderr.write(`baton loop run: smoke approval REFUSED — inputs drifted since the token was issued (${drifted}); the run is parked for a fresh smoke pass\n`);
+        return EXIT_PARKED;
+      }
+      await transition({ type: LOOP_EVENT.SMOKE_APPROVE, token: flags['approve-smoke'], verified: true });
+      io.stdout.write('baton loop run: smoke approval verified — continuing the run\n');
+    }
+
+    if (state.status === LOOP_STATUS.ESCALATED) {
+      io.stderr.write(`baton loop run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
+      return EXIT_ESCALATED;
+    }
+    if (state.status === LOOP_STATUS.PARKED) {
+      io.stderr.write(`baton loop run: the run is parked — ${state.parkReason ?? 'no reason recorded'}\n`);
+      return EXIT_PARKED;
+    }
+    if (state.status === LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+      io.stdout.write(`baton loop run: awaiting smoke approval — resume with: baton loop run --approve-smoke <token from ${p.dir}/smoke-approval.json>\n`);
+      return 0;
+    }
+
+    // ---- The phase loop. ---------------------------------------------------
+    while (state.status === LOOP_STATUS.RUNNING && state.phaseIndex < state.phaseCount) {
+      const phase = spec.phases[state.phaseIndex];
+      const cap = spec.budgets.iterationCap;
+      let findings = '';
+      let failoverAttempt = 0;
+      /** @type {any | null} */
+      let forcedAssignment = null;
+      /** @type {string | null} */
+      let forcedPrompt = null;
+      let phaseDone = false;
+
+      while (!phaseDone) {
+        // The cap gates the SPAWN: at the cap the reducer escalates and a
+        // 6th child never starts.
+        if ((state.iterations?.[phase.id] ?? 0) >= cap) {
+          await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict: 'BLOCKED' });
+          atomicWriteText(
+            io.fs,
+            `${p.dir}/ESCALATION.md`,
+            `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n\nResolve the findings, then resume with baton loop run.\n`,
+          );
+          io.stderr.write(`baton loop run: gate '${phase.id}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
+          return EXIT_ESCALATED;
+        }
+        if (childSeq >= spec.budgets.maxChildrenPerPhase * spec.phases.length) {
+          await transition({ type: LOOP_EVENT.PARK, reason: 'total child budget exhausted' });
+          return EXIT_PARKED;
+        }
+
+        const resolved =
+          forcedAssignment ??
+          (() => {
+            const r = resolveRoles({ config, to: 'claude-code', avoid, avoidEntries, probes: null }).assignments[phase.role];
+            return r && r.mode !== 'unavailable' ? r : null;
+          })();
+        if (!resolved) {
+          await transition({ type: LOOP_EVENT.PARK, reason: `no eligible platform/model for role '${phase.role}'` });
+          io.stderr.write(`baton loop run: no eligible assignment for role '${phase.role}' — parked\n`);
+          return EXIT_PARKED;
+        }
+        const assignment = { ...resolved, role: phase.role };
+        const prompt =
+          forcedPrompt ??
+          [
+            `You are the ${phase.role} for loop run ${runId}, phase '${phase.id}'.`,
+            `Goal: ${spec.goal}`,
+            spec.constraints.length > 0 ? `Constraints:\n${spec.constraints.map((/** @type {string} */ c) => `- ${c}`).join('\n')}` : '',
+            findings ? `The previous attempt was BLOCKED with these findings — address every one:\n${findings}` : '',
+            "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
+          ]
+            .filter(Boolean)
+            .join('\n\n');
+        forcedAssignment = null;
+        forcedPrompt = null;
+
+        childSeq += 1;
+        const logPath = `${p.dir}/children/${String(childSeq).padStart(3, '0')}-${phase.id}.log`;
+        ensureDir(io.fs, `${p.dir}/children`);
+        const childSpec = buildChildArgv(assignment, prompt, { root });
+        const result = await runner(childSpec, {
+          timeoutMs: spec.budgets.perRoleTimeoutMin * 60_000,
+          graceMs: 10_000,
+          logPath,
+          maxLogBytes: 1_000_000,
+          platform: assignment.platform,
+        });
+
+        // Classification reads the child's LOG (the frozen transcript), so a
+        // limit banner routes to failover even when a verdict parsed.
+        const transcript = io.fs.existsSync(logPath) ? io.fs.readFileSync(logPath, 'utf8') : '';
+        const cls = classify({ text: transcript, exitCode: result.exitCode ?? 0, platform: assignment.platform, table }).class;
+
+        if (cls === 'usage-limit' || cls === 'model-unavailable' || cls === 'other-error' || cls === 'throttle' || cls === 'auth') {
+          failoverAttempt += 1;
+          const decision = await runFailover({
+            root,
+            io,
+            config,
+            role: phase.role,
+            assignment,
+            transcript,
+            exitCode: result.exitCode ?? 1,
+            sessionHint,
+            probes: null,
+            avoid,
+            avoidEntries,
+            attempt: failoverAttempt,
+            loopState: { runId, phaseIndex: state.phaseIndex, iterations: state.iterations, status: state.status },
+          });
+          if (decision.action === 'park') {
+            await transition({ type: LOOP_EVENT.PARK, reason: decision.reason });
+            io.stderr.write(`baton loop run: parked — ${decision.reason}${'resumeAt' in decision && decision.resumeAt ? ` (resume around ${decision.resumeAt})` : ''}\n`);
+            return EXIT_PARKED;
+          }
+          if (decision.action === 'relaunch') {
+            if (decision.class === 'usage-limit') avoid = avoid.includes(assignment.platform) ? avoid : [...avoid, assignment.platform];
+            if (Array.isArray(decision.avoidEntries)) avoidEntries = decision.avoidEntries;
+            forcedAssignment = { ...decision.assignment, role: phase.role };
+            forcedPrompt = typeof decision.prompt === 'string' && decision.prompt.length > 0 ? decision.prompt : null;
+            continue; // relaunch the same phase on the new assignment
+          }
+          continue; // retry: re-spawn the same phase once more
+        }
+
+        const verdict = String(result.verdict ?? 'BLOCKED');
+        if (verdict === 'APPROVED' || verdict === 'APPROVED_WITH_NOTES') {
+          await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+          phaseDone = true;
+
+          // The smoke gate fires right after the smoke-build phase completes.
+          if (phase.id === 'smoke-build' && typeof spec.smoke?.cmd === 'string' && spec.smoke.cmd.length > 0) {
+            const [cmd, ...cmdArgs] = spec.smoke.cmd.split(/\s+/);
+            let smokeOut = '';
+            try {
+              const r = await io.execFile(cmd, cmdArgs, { cwd: root });
+              smokeOut = `${r?.stdout ?? ''}${r?.stderr ?? ''}`;
+            } catch (err) {
+              smokeOut = `smoke command failed: ${/** @type {any} */ (err)?.message ?? String(err)}`;
+            }
+            await transition({ type: LOOP_EVENT.SMOKE_AWAIT });
+            const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+            const inputs = {
+              stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+              smokeCmd: spec.smoke.cmd,
+              smokeOutputDigest: dedupeKey(smokeOut),
+              gitHead: gitHeadOf(git),
+              gitContentDigest: gitContentOf(git),
+              childAssignment: JSON.stringify({ platform: assignment.platform, model: assignment.model }),
+            };
+            const token = smokeApprovalToken(inputs);
+            atomicWriteJson(io.fs, `${p.dir}/smoke-approval.json`, { token, inputs, issuedAt: io.now() });
+            atomicWriteText(
+              io.fs,
+              `${p.dir}/SMOKE-REVIEW.md`,
+              `# Smoke gate — human approval required\n\nRun: ${runId}\nCommand: \`${spec.smoke.cmd}\`\nExpected: ${spec.smoke.expect ?? '(unspecified)'}\n\n## Output\n\n\`\`\`\n${smokeOut}\n\`\`\`\n\nApprove with:\n\n    baton loop run --approve-smoke ${token}\n\nThe token is bound to the current state/output/git — any drift refuses it.\n`,
+            );
+            io.stdout.write(`baton loop run: smoke gate reached — review ${p.dir}/SMOKE-REVIEW.md and approve with --approve-smoke <token>\n`);
+            return 0;
+          }
+        } else {
+          // BLOCKED (or unparseable, already coerced to BLOCKED upstream).
+          findings = String(result.findings ?? '');
+          const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict });
+          if (after.status === LOOP_STATUS.ESCALATED) {
+            atomicWriteText(
+              io.fs,
+              `${p.dir}/ESCALATION.md`,
+              `# Loop escalation\n\nGate '${phase.id}' exhausted its ${cap}-iteration cap on run ${runId}.\nLast findings:\n\n${findings}\n`,
+            );
+            io.stderr.write(`baton loop run: gate '${phase.id}' escalated at the cap — see ${p.dir}/ESCALATION.md\n`);
+            return EXIT_ESCALATED;
+          }
+        }
+      }
+    }
+
+    if (state.status === LOOP_STATUS.DONE || state.phaseIndex >= state.phaseCount) {
+      io.stdout.write(`baton loop run: done — every phase completed (run ${runId})\n`);
+      return 0;
+    }
+    io.stdout.write(`baton loop run: stopped in status ${state.status}\n`);
+    return state.status === LOOP_STATUS.PARKED ? EXIT_PARKED : state.status === LOOP_STATUS.ESCALATED ? EXIT_ESCALATED : 0;
+  } finally {
+    // The lock is per-invocation: release on every exit path so a paused run
+    // (awaiting approval) can be resumed by the next invocation.
+    try {
+      if (io.fs.existsSync(lockPath)) io.fs.unlinkSync(lockPath);
+    } catch {
+      // Best effort — a stale lock is recoverable via the provably-dead path.
+    }
+  }
 }
