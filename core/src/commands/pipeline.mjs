@@ -20,6 +20,7 @@ import {
 import { buildChildArgv, superviseChild } from '../loop/children.mjs';
 import { setupWorktrees, preflightWorktree, postflightWorktree, mergeSubtask, selfHealWorktree, worktreePaths } from '../loop/worktrees.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
+import { readProbeCache } from '../roles/availability.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
 import { runFailover } from '../loop/failover.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
@@ -138,7 +139,7 @@ async function runPipeline(flags, io) {
   const lock = await acquireSupervisorLock(root, io, 'pipeline run');
   if (lock.ok !== true) return lock.code;
   try {
-    return await drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs });
+    return await drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs, probes: readProbeCache(root, io) });
   } finally {
     lock.release();
   }
@@ -146,14 +147,14 @@ async function runPipeline(flags, io) {
 
 /**
  * @param {Record<string, string | boolean>} flags @param {any} io
- * @param {{root: string, p: any, spec: any, config: any, cap: number, timeoutMs: number}} ctx
+ * @param {{root: string, p: any, spec: any, config: any, cap: number, timeoutMs: number, probes: any}} ctx
  * @returns {Promise<number>}
  */
-async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs }) {
+async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs, probes }) {
   const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
   /** @param {string} role @param {Array<{platform: string, model: string}>} [avoidEntries] @returns {any | null} */
   const resolveOne = (role, avoidEntries = []) => {
-    const a = resolveRoles({ config, to: 'claude-code', avoid: [], avoidEntries, probes: null }).assignments[role];
+    const a = resolveRoles({ config, to: 'claude-code', avoid: [], avoidEntries, probes }).assignments[role];
     return a && a.mode !== 'unavailable' ? a : null;
   };
 
@@ -472,7 +473,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
           transcript: log,
           exitCode: result.exitCode ?? 1,
           sessionHint: state.runId,
-          probes: null,
+          probes,
           avoid: [],
           avoidEntries: subtaskAvoidEntries,
           attempt,
@@ -537,7 +538,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
           transcript: writerLog,
           exitCode: writerResult.exitCode ?? 1,
           sessionHint: state.runId,
-          probes: null,
+          probes,
           avoid: [],
           avoidEntries: subtaskAvoidEntries,
           attempt: failoverAttempt,

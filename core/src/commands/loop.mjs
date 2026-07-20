@@ -15,6 +15,7 @@ import { buildChildArgv, superviseChild } from '../loop/children.mjs';
 import { runFailover } from '../loop/failover.mjs';
 import { loadConfig } from '../roles/matrix.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
+import { readProbeCache } from '../roles/availability.mjs';
 import { loadSignatures } from '../detect/signatures.mjs';
 import { classify, transcriptTail } from '../detect/classifier.mjs';
 import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
@@ -299,6 +300,10 @@ async function runLoop(flags, io) {
   };
 
   const table = loadSignatures({ builtinPath: BUILTIN_SIGNATURES }, io);
+  // The doctor's cached availability probes (fresh ≤15 min) skip a
+  // rate-limited platform at spawn time (v1.1 item 8); a missing or stale
+  // cache reads null — offline-degraded, exactly as before.
+  const probes = readProbeCache(root, io);
   const runner = io.superviseChild ?? superviseChild;
   // The runId is already 'loop-<hex>' — no extra prefix (D5).
   const sessionHint = runId;
@@ -453,7 +458,7 @@ async function runLoop(flags, io) {
         const resolved =
           forcedAssignment ??
           (() => {
-            const r = resolveRoles({ config, to: 'claude-code', avoid, avoidEntries, probes: null }).assignments[phase.role];
+            const r = resolveRoles({ config, to: 'claude-code', avoid, avoidEntries, probes }).assignments[phase.role];
             return r && r.mode !== 'unavailable' ? r : null;
           })();
         if (!resolved) {
@@ -515,7 +520,7 @@ async function runLoop(flags, io) {
             transcript,
             exitCode: result.exitCode ?? 1,
             sessionHint,
-            probes: null,
+            probes,
             avoid,
             avoidEntries,
             attempt: failoverAttempt,

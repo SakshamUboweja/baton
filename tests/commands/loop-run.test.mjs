@@ -672,6 +672,78 @@ describe('loop run — review artifacts from gate children (item 4b)', () => {
 });
 
 // ===========================================================================
+// ITEM 8 (v1.1) — probe integration. Each invocation loads the doctor's cached
+// availability probes ONCE (readProbeCache, 15-min freshness) and passes that
+// snapshot as probes: into EVERY resolveRoles/runFailover call. A fresh cache
+// marking a platform rate-limited diverts resolution off it; a stale/missing
+// cache is null → today's offline-degraded behavior, byte-identical.
+describe('loop run — probe integration (item 8)', () => {
+  const CACHE = '/repo/.handoff/log/probe-cache.json';
+  const seedCache = (io, records, at = T0) => {
+    io.fs.mkdirSync('/repo/.handoff/log', { recursive: true });
+    io.fs.writeFileSync(CACHE, JSON.stringify({ at, records }));
+  };
+  const soloImpl = () => loopSpec({ phases: [{ id: 'work', role: 'implementer' }] });
+
+  it('RED (8-1): a fresh cache rate-limiting the head platform diverts the FIRST spawn to the fallback', async () => {
+    const io = makeLoopRepo({ spec: soloImpl(), runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    // implementer chain head is claude-code; rate-limit it → codex fallback.
+    seedCache(io, [{ platform: 'claude-code', capability: 'installed', outcome: 'rate-limited' }]);
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the run completes on the fallback; stderr: ${io.stderrText()}`);
+    assert.equal(io.__runner.calls.length, 1, 'one child spawned');
+    assert.equal(io.__runner.calls[0].command, 'codex', 'the first spawn diverted to codex — the rate-limited claude-code never spawned');
+    assert.equal(valAfter(argsOf(io, 0), '--model'), 'gpt-5.6-sol', 'the resolved model is the fallback chain entry');
+  });
+
+  it('RED (8-1 failover): a loop failover relaunch honors the cache — dead head avoided, rate-limited middle skipped for the surviving tail', async () => {
+    const cfg = JSON.parse(JSON.stringify(CONFIG));
+    cfg.roles['trio'] = ['codex/cx-head@xhigh', 'claude-code/cc-mid', 'cursor/cu-tail'];
+    const spec = loopSpec({ phases: [{ id: 'work', role: 'trio' }] });
+    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2) }, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `working…\n${MODEL_UNAVAIL}\n` }, // cx-head dies model-unavailable
+      { verdict: 'APPROVED' }, // the relaunched child
+    ]);
+    io.__runner = io.superviseChild;
+    seedCache(io, [{ platform: 'claude-code', capability: 'installed', outcome: 'rate-limited' }]);
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the relaunch completes on the surviving tail; stderr: ${io.stderrText()}`);
+    assert.equal(io.__runner.calls.length, 2, 'the head died and exactly one relaunch spawned');
+    assert.notEqual(io.__runner.calls[1].command, 'claude', 'the failover skipped the rate-limited claude-code middle entry');
+    assert.equal(valAfter(argsOf(io, 1), '--model'), 'cu-tail', 'the relaunch landed on the surviving cursor tail (cache reached loop runFailover)');
+  });
+
+  it('GUARD (8-4): a STALE cache and a MISSING cache both change nothing — the head spawns as today', async () => {
+    const staleAt = new Date(Date.parse(T0) - 20 * 60 * 1000).toISOString(); // 20 min old, past the window
+    const ioStale = makeLoopRepo({ spec: soloImpl(), runner: undefined });
+    ioStale.superviseChild = fakeRunner(ioStale, [{ verdict: 'APPROVED' }]);
+    ioStale.__runner = ioStale.superviseChild;
+    seedCache(ioStale, [{ platform: 'claude-code', capability: 'installed', outcome: 'rate-limited' }], staleAt);
+    await cmdLoop(['run'], ioStale);
+    assert.equal(ioStale.__runner.calls[0].command, 'claude', 'a stale cache is ignored — the head (claude-code) spawns as today');
+
+    const ioNone = makeLoopRepo({ spec: soloImpl(), runner: undefined });
+    ioNone.superviseChild = fakeRunner(ioNone, [{ verdict: 'APPROVED' }]);
+    ioNone.__runner = ioNone.superviseChild;
+    await cmdLoop(['run'], ioNone);
+    assert.equal(ioNone.__runner.calls[0].command, 'claude', 'no cache file — the head spawns as today');
+  });
+
+  it('GUARD (8-5): a fresh cache marking the head merely unverifiable (installed/ok) still resolves it — degraded, never blocked', async () => {
+    const io = makeLoopRepo({ spec: soloImpl(), runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    seedCache(io, [{ platform: 'claude-code', capability: 'installed', outcome: 'ok' }]);
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, 'an unverifiable-but-not-rate-limited head is not blocked');
+    assert.equal(io.__runner.calls[0].command, 'claude', 'installed/ok is selectable (degraded) — the head still spawns, never skipped');
+  });
+});
+
+// ===========================================================================
 describe('loop run — failover integration', () => {
   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits

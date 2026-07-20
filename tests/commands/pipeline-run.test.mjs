@@ -1322,6 +1322,147 @@ describe('pipeline — review artifacts (item 4b)', () => {
 });
 
 // ===========================================================================
+// ITEM 8 (v1.1) — probe integration (pipeline half). readProbeCache is loaded
+// once and passed as probes: into resolveOne (writer/reviewer/merger) AND every
+// runFailover. A fresh rate-limited platform diverts the first spawn and every
+// re-resolution; stale/missing cache is null (today's behavior).
+describe('pipeline — probe integration (item 8)', () => {
+  const CACHE = '/repo/.handoff/log/probe-cache.json';
+  const seedCache = (io, records, at = T0) => {
+    io.fs.mkdirSync('/repo/.handoff/log', { recursive: true });
+    io.fs.writeFileSync(CACHE, JSON.stringify({ at, records }));
+  };
+  const rateLimited = (platform) => [{ platform, capability: 'installed', outcome: 'rate-limited' }];
+  // Identify children by their prompt ROLE phrase — robust across platforms
+  // (claude writers carry no `-s workspace-write` flag, so writersOf misses them).
+  const writerChildren = (io) => io.__runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the writer'));
+  const reviewerChildren = (io) => io.__runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the subtask-reviewer'));
+
+  it('RED (8-2): a fresh cache rate-limiting worker-a head diverts the FIRST writer to the fallback', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-wa', 'codex/cx-wa@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedCache(io, rateLimited('claude-code'));
+    await run(['pipeline', 'run'], io);
+    const writer = writerChildren(io)[0];
+    assert.ok(writer, 'a writer spawned');
+    assert.notEqual(writer.command, 'claude', 'the rate-limited claude-code never spawned as the writer');
+    assert.equal(valAfter(argsOf(writer), '--model'), 'cx-wa', 'the first writer diverted to the codex worker-a fallback');
+  });
+
+  it('RED (8-2 failover): a failover relaunch honors the cache — the rate-limited middle entry is skipped for the surviving one', async () => {
+    // worker-a: codex head (dies model-unavailable) → claude-code middle (RATE-LIMITED
+    // by the cache) → cursor tail. The relaunch must skip the middle and land on cursor.
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/cx-head@xhigh', 'claude-code/cc-mid', 'cursor/cu-tail'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `working…\n${MODEL_UNAVAIL}\n` }, // cx-head dies model-unavailable
+      { verdict: 'APPROVED' }, // the relaunched writer
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    seedCache(io, rateLimited('claude-code'));
+    await run(['pipeline', 'run'], io);
+    const relaunch = writerChildren(io)[1];
+    assert.ok(relaunch, 'a relaunched writer spawned after the model-unavailable death');
+    assert.notEqual(relaunch.command, 'claude', 'the failover skipped the rate-limited claude-code middle entry');
+    assert.equal(valAfter(argsOf(relaunch), '--model'), 'cu-tail', 'the failover relaunch landed on the surviving cursor entry (cache honored in runFailover)');
+  });
+
+  it('RED (8-3): the reviewer re-resolution honors the cache — a rate-limited head diverts the reviewer', async () => {
+    // Subtask t1 reviews from the OTHER seat (worker-b); rate-limit its head.
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-b': ['claude-code/cc-rev', 'codex/cx-rev@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedCache(io, rateLimited('claude-code'));
+    await run(['pipeline', 'run'], io);
+    const reviewer = reviewerChildren(io)[0];
+    assert.ok(reviewer, 'a reviewer spawned');
+    assert.notEqual(reviewer.command, 'claude', 'the rate-limited claude-code never spawned as the reviewer');
+    assert.equal(valAfter(argsOf(reviewer), '--model'), 'cx-rev', 'the reviewer diverted to the codex worker-b fallback');
+  });
+
+  const mergerChildren = (io) => io.__runner.calls.filter((c) => argsOf(c).join(' ').includes('You are the merger'));
+
+  it('RED (8-3 reviewer failover): a reviewer failover relaunch honors the cache — dead head avoided, rate-limited middle skipped for the surviving tail', async () => {
+    // worker-b (the reviewer chain): codex head dies model-unavailable → claude-code
+    // middle (RATE-LIMITED) → cursor tail. The relaunch must land on cursor.
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-b': ['codex/cx-rvh@xhigh', 'claude-code/cc-rvm', 'cursor/cu-rvt'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'APPROVED' }, // writer (worker-a, default codex)
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `reviewing…\n${MODEL_UNAVAIL}\n` }, // reviewer head dies
+      { verdict: 'APPROVED' }, // relaunched reviewer
+      { verdict: 'APPROVED' }, // merger
+    ]);
+    io.__runner = io.superviseChild;
+    seedCache(io, rateLimited('claude-code'));
+    await run(['pipeline', 'run'], io);
+    const relaunch = reviewerChildren(io)[1];
+    assert.ok(relaunch, 'a relaunched reviewer spawned after the model-unavailable death');
+    assert.notEqual(relaunch.command, 'claude', 'the reviewer failover skipped the rate-limited claude-code middle entry');
+    assert.equal(valAfter(argsOf(relaunch), '--model'), 'cu-rvt', 'the reviewer relaunch landed on the surviving cursor tail (cache reached superviseVerdictChild runFailover)');
+  });
+
+  it('RED (8-3 merger failover): a merger failover relaunch honors the cache — dead head avoided, rate-limited middle skipped for the surviving tail', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/cx-mgh@xhigh', 'claude-code/cc-mgm', 'cursor/cu-mgt'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'APPROVED' }, // writer
+      { verdict: 'APPROVED' }, // reviewer
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `merge-check…\n${MODEL_UNAVAIL}\n` }, // merger head dies
+      { verdict: 'APPROVED' }, // relaunched merger
+    ]);
+    io.__runner = io.superviseChild;
+    seedCache(io, rateLimited('claude-code'));
+    await run(['pipeline', 'run'], io);
+    const relaunch = mergerChildren(io)[1];
+    assert.ok(relaunch, 'a relaunched merger spawned after the model-unavailable death');
+    assert.notEqual(relaunch.command, 'claude', 'the merger failover skipped the rate-limited claude-code middle entry');
+    assert.equal(valAfter(argsOf(relaunch), '--model'), 'cu-mgt', 'the merger relaunch landed on the surviving cursor tail (cache reached superviseVerdictChild runFailover)');
+  });
+
+  it('GUARD (8-4 pipeline): a STALE cache and a MISSING cache both change nothing — the writer head spawns as today', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-wa', 'codex/cx-wa@xhigh'] } };
+    const staleAt = new Date(Date.parse(T0) - 20 * 60 * 1000).toISOString();
+
+    const ioStale = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    ioStale.superviseChild = fakeRunner(ioStale, cleanSubtask());
+    ioStale.__runner = ioStale.superviseChild;
+    seedCache(ioStale, rateLimited('claude-code'), staleAt);
+    await run(['pipeline', 'run'], ioStale);
+    assert.equal(writerChildren(ioStale)[0].command, 'claude', 'a stale cache is ignored — the writer head (claude-code) spawns as today');
+
+    const ioNone = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    ioNone.superviseChild = fakeRunner(ioNone, cleanSubtask());
+    ioNone.__runner = ioNone.superviseChild;
+    await run(['pipeline', 'run'], ioNone);
+    assert.equal(writerChildren(ioNone)[0].command, 'claude', 'no cache file — the writer head spawns as today');
+  });
+
+  it('GUARD (8-5 pipeline): an unverifiable-not-rate-limited head still resolves (never blocked) and its verdict.md keeps the degraded audit field', async () => {
+    const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['claude-code/cc-wa', 'codex/cx-wa@xhigh'] } };
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    // installed/ok = auth unverified but NOT rate-limited → selectable (degraded).
+    seedCache(io, [{ platform: 'claude-code', capability: 'installed', outcome: 'ok' }]);
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, 'an unverifiable head is not blocked — the run completes');
+    const writer = writerChildren(io)[0];
+    assert.equal(writer.command, 'claude', 'installed/ok is selectable — the head still spawns, never skipped');
+    // The degraded audit field is preserved in the gate artifact header.
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    const verdictMd = io.files()[`/repo/reviews/${runId}/subtask-t1-review/iteration-01/writer.verdict.md`];
+    assert.ok(verdictMd, 'the writer verdict.md artifact exists');
+    assert.match(verdictMd, /^degraded: .+$/m, 'the degraded audit field is present and non-empty');
+  });
+});
+
+// ===========================================================================
 // ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
 // actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
 // rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
