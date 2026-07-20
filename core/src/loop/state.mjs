@@ -117,7 +117,11 @@ export function applyLoopEvent(state, ev) {
       // or false `verified` is unverified — it never resumes the run.
       if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) return state;
       if (ev.verified !== true) return state;
-      return { ...state, status: LOOP_STATUS.RUNNING, smokeApproval: { token: ev.token, at: ev.ts ?? null } };
+      // A smoke gate on the FINAL phase already advanced past phaseCount —
+      // approval completes the run as DONE, not RUNNING (dogfood finding D9:
+      // the printed done/exit 0 left a 'running' artifact behind).
+      const resumedStatus = state.phaseIndex >= state.phaseCount ? LOOP_STATUS.DONE : LOOP_STATUS.RUNNING;
+      return { ...state, status: resumedStatus, smokeApproval: { token: ev.token, at: ev.ts ?? null } };
     }
     default:
       return state;
