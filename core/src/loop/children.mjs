@@ -11,6 +11,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { classify } from '../detect/classifier.mjs';
+import { redactSecrets } from '../util/redact.mjs';
 
 // Every review seat is read-only — writers are the implementer-side roles
 // only. The merger CHILD is read-only too: it adversarially re-checks, but
@@ -235,7 +236,9 @@ export function superviseChild(spec, opts) {
       const fsx = opts.fs ?? { writeFileSync, mkdirSync };
       try {
         fsx.mkdirSync(dirname(opts.logPath), { recursive: true });
-        fsx.writeFileSync(opts.logPath, transcript);
+        // Secrets never land on disk (v1.1 item 6): the written log is
+        // redacted; clean text passes through byte-identical.
+        fsx.writeFileSync(opts.logPath, redactSecrets(transcript));
       } catch {
         // The log must never mask the result.
       }

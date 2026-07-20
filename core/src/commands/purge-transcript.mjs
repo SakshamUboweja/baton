@@ -2,6 +2,7 @@ import { bundlePaths } from '../bundle/store.mjs';
 import { withLock, LockHeldError } from '../bundle/lock.mjs';
 import { atomicWriteText, atomicWriteJson } from '../util/fsx.mjs';
 import { checkHandoffTree } from '../util/jail.mjs';
+import { redactSecrets } from '../util/redact.mjs';
 import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
 
 /**
@@ -72,6 +73,9 @@ function scrubLinesFile(io, path) {
       return line; // tolerate foreign lines verbatim
     }
     const stripped = stripTranscript(parsed);
+    // Loop findings persist review text verbatim (v1.1 item 4) — scrub any
+    // secrets from that field too, keeping the line valid JSON (item 6).
+    if (typeof stripped?.findings === 'string') stripped.findings = redactSecrets(stripped.findings);
     const next = JSON.stringify(stripped);
     if (next !== JSON.stringify(parsed)) {
       changed = true;
@@ -80,6 +84,15 @@ function scrubLinesFile(io, path) {
     return line;
   });
   if (changed) atomicWriteText(io.fs, path, lines.join('\n'));
+}
+
+/** Raw-text redaction for child logs (v1.1 item 6) — non-destructive: only
+ * secret spans are replaced; a clean log is left untouched.
+ * @param {any} io @param {string} path */
+function scrubTextFile(io, path) {
+  const raw = io.fs.readFileSync(path, 'utf8');
+  const next = redactSecrets(raw);
+  if (next !== raw) atomicWriteText(io.fs, path, next);
 }
 
 /**
@@ -127,6 +140,7 @@ export async function cmdPurgeTranscript(args, io) {
         if (file === markerPath) continue;
         if (/\.(ndjson|jsonl)$/.test(file)) scrubLinesFile(io, file);
         else if (/\.(json|bak)$/.test(file)) scrubJsonFile(io, file);
+        else if (/\.log$/.test(file)) scrubTextFile(io, file);
       }
       io.fs.unlinkSync(markerPath);
     });

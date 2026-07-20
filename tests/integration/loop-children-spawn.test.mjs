@@ -219,6 +219,80 @@ describe('superviseChild — streaming log cap (item 5)', () => {
 });
 
 // ===========================================================================
+// ITEM 6 (v1.1) — child-log redaction at write. superviseChild must route the
+// capped log write through the existing secret-redaction filter so a planted
+// credential never lands in .handoff/loop/children/*.log.
+describe('superviseChild — child-log secret redaction (item 6)', () => {
+  it('RED (6-1): a planted secret in child output is REDACTED in the written log; the verdict still parses', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const secret = 'sk-PLANTED-CHILDLOG-ABC123XYZ456'; // matches the sk-… redaction pattern
+    const script = join(dir, 'leaky.cjs');
+    writeFileSync(
+      script,
+      [
+        `process.stdout.write("configuring api_key=" + ${JSON.stringify(secret)} + "\\n");`,
+        'process.stdout.write("tokens used: 3\\n");',
+        'process.stdout.write("VERDICT: APPROVED\\n");',
+        'process.stdout.write("FINDINGS: none\\n");',
+        'process.exit(0);',
+      ].join('\n'),
+    );
+    const logPath = join(dir, 'leaky.log');
+    const result = await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, platform: 'codex' },
+    );
+    const log = readFileSync(logPath, 'utf8');
+    assert.ok(!log.includes(secret), 'the secret is NOT present verbatim in the written child log');
+    assert.match(log, /\[redacted\]/, 'the secret was replaced with the redaction marker');
+    assert.equal(result.verdict, 'APPROVED', 'the verdict still parses after redaction (tail structure preserved)');
+  });
+
+  it('RED (6×5): an over-cap child with a secret in the RETAINED head + a verdict tail → truncation marker, secret redacted, verdict parses', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const cap = 2000; // head ≈ 800 bytes retained
+    const secret = 'sk-OVERCAP-SECRET-HEAD-ABC123XYZ';
+    const script = join(dir, 'floodleak.cjs');
+    writeFileSync(
+      script,
+      [
+        `process.stdout.write("boot api_key=" + ${JSON.stringify(secret)} + "\\n"); // secret in the HEAD (retained)`,
+        'for (let i = 0; i < 100; i++) process.stdout.write("X".repeat(100) + "\\n"); // ~10 KB — middle truncated',
+        'process.stdout.write("tokens used: 7\\n");',
+        'process.stdout.write("VERDICT: APPROVED\\n");',
+        'process.exit(0);',
+      ].join('\n'),
+    );
+    const logPath = join(dir, 'floodleak.log');
+    const result = await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex' },
+    );
+    const log = readFileSync(logPath, 'utf8');
+    assert.match(log, /truncat/i, 'the over-cap log is truncated (item 5 head+marker+tail cap)');
+    assert.ok(!log.includes(secret), 'the secret in the retained head is NOT present verbatim (item 6 redaction)');
+    assert.match(log, /\[redacted\]/, 'the secret was replaced with the redaction marker');
+    assert.equal(result.verdict, 'APPROVED', 'the verdict tail still parses under cap + redaction');
+  });
+
+  it('GUARD (6): a secret-free child log is byte-identical (no false-positive redaction)', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
+    const script = join(dir, 'clean6.cjs');
+    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
+    const logPath = join(dir, 'clean6.log');
+    await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' },
+    );
+    assert.equal(readFileSync(logPath, 'utf8'), body, 'a secret-free sub-cap log is written verbatim — no false-positive redaction');
+  });
+});
+
+// ===========================================================================
 describe('superviseChild — stdin is genuinely closed', () => {
   it('a child that reads stdin does not hang — it gets EOF and exits promptly', { skip: SKIP_WIN }, async () => {
     const { superviseChild } = M();

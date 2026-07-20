@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { cmdPurgeTranscript } from '../../core/src/commands/purge-transcript.mjs';
 import { bundlePaths } from '../../core/src/bundle/store.mjs';
+import { loopPaths } from '../../core/src/loop/state.mjs';
 
 // ---------------------------------------------------------------------------
 // Command-level contract for core/src/commands/purge-transcript.mjs. Direct
@@ -148,6 +149,46 @@ describe('purge-transcript — whole-tree secret removal', () => {
       [],
       'the planted secret must be gone from the ENTIRE .handoff/ tree (snapshot, .bak, journal, history freeze + journal, log)',
     );
+  });
+
+  it('RED (item 6): purge also scrubs the planted secret from loop children/*.log and findings/*.ndjson', async () => {
+    const LOOP = loopPaths(ROOT);
+    const io = makeIo({
+      files: {
+        ...fullTree(),
+        // Raw child transcript log (item 6 routes these through redaction) + a
+        // findings line whose SECRET lives in the `findings` field (not a
+        // `transcript` field, so today's field-strip alone misses it).
+        [`${LOOP.dir}/children/001-gate-1.log`]: `working...\nconfiguring api_key=${SECRET} keep it safe\ntokens used: 9\nVERDICT: BLOCKED\n`,
+        [`${LOOP.dir}/findings/gate-1.ndjson`]: JSON.stringify({ iteration: 1, findings: `leak: ${SECRET}`, at: T0 }) + '\n',
+      },
+    });
+    // Precondition: the loop tree carries the secret before purge.
+    assert.ok(io.files()[`${LOOP.dir}/children/001-gate-1.log`].includes(SECRET), 'the child log is seeded with the secret');
+    assert.ok(io.files()[`${LOOP.dir}/findings/gate-1.ndjson`].includes(SECRET), 'the findings ndjson is seeded with the secret');
+
+    const code = await cmdPurgeTranscript([], io);
+    assert.equal(code, 0, `purge should succeed; stderr: ${io.stderrText()}`);
+    assert.deepEqual(
+      treeContainsSecret(io).map((f) => f.path),
+      [],
+      'the secret is gone from the ENTIRE .handoff tree, including .handoff/loop/children/*.log and findings/*.ndjson',
+    );
+
+    // Non-destructive: purge REDACTS, it does not delete. Both loop files still
+    // exist with their non-secret content intact.
+    const childLog = io.files()[`${LOOP.dir}/children/001-gate-1.log`];
+    assert.ok(typeof childLog === 'string', 'the child log still exists after purge');
+    assert.match(childLog, /working\.\.\./, 'the child log keeps its non-secret body');
+    assert.match(childLog, /VERDICT: BLOCKED/, 'the child log keeps its verdict text');
+    assert.match(childLog, /\[redacted\]/, 'the secret was replaced with the redaction marker (not the whole log deleted)');
+
+    const findingsRaw = io.files()[`${LOOP.dir}/findings/gate-1.ndjson`];
+    assert.ok(typeof findingsRaw === 'string', 'the findings ndjson still exists after purge');
+    const line = JSON.parse(findingsRaw.split('\n').filter((l) => l.trim() !== '')[0]);
+    assert.equal(line.iteration, 1, 'the findings line still parses with its non-secret iteration field');
+    assert.equal(line.at, T0, 'the findings line keeps its non-secret timestamp');
+    assert.ok(!String(line.findings).includes(SECRET), 'the secret is redacted out of the findings text');
   });
 
   it('is surgical: the active snapshot loses ONLY its transcript; goal, decisions, journalSeq survive', async () => {
