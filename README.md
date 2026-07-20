@@ -12,6 +12,15 @@ Usage-limit failover for AI coding sessions. When Claude Code, Codex CLI, or Cur
 
 baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
 
+## Install
+
+| Harness | Command |
+|---|---|
+| Claude Code | `/plugin marketplace add SakshamUboweja/baton` → install `baton` |
+| Codex CLI | `npx @sakshamuboweja/baton init --codex` |
+| Cursor | `npx @sakshamuboweja/baton init --cursor` |
+| Anything else | `baton receive --platform codex --print-prompt` (pure CLI — pass the supported platform whose role defaults best fit the target harness) |
+
 ## baton loop
 
 `baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
@@ -92,18 +101,9 @@ A run *parks* (exit 4) when it can't safely continue on its own — a phase exha
 
 A plain `baton loop run` (or `baton pipeline run`) on an already-parked run reports the park and exits 4 without resuming — use `resume` to continue.
 
-## Install
-
-| Harness | Command |
-|---|---|
-| Claude Code | `/plugin marketplace add SakshamUboweja/baton` → install `baton` |
-| Codex CLI | `npx @sakshamuboweja/baton init --codex` |
-| Cursor | `npx @sakshamuboweja/baton init --cursor` |
-| Anything else | `baton receive --platform codex --print-prompt` (pure CLI — pass the supported platform whose role defaults best fit the target harness) |
-
 ## Status
 
-Under construction — v1 (failover layer) in progress. See `docs/plans/` for the approved plan and `reviews/` for the gate history.
+v1 is feature-complete and unpublished. The usage-limit failover core, the `baton loop` goal supervisor, and the `baton pipeline` dual-worktree preset are all built TDD behind review gates and proven in live dogfood runs; v1.1 hardening is closed. See `docs/plans/` for the approved plans, `CHANGELOG.md` for what shipped, and `reviews/` for the gate history. The npm publish is pending.
 
 ## License
 
