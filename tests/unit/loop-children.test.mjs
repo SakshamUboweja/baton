@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { classify } from '../../core/src/detect/classifier.mjs';
+import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+import { classify, transcriptTail } from '../../core/src/detect/classifier.mjs';
+import { loadSignatures } from '../../core/src/detect/signatures.mjs';
 
 // ---------------------------------------------------------------------------
 // RED — loop child supervision, PURE parts (subtask loop-children, part A).
@@ -362,4 +366,46 @@ describe('classifyChildExit — delegates to core detect classify() for EVERY ma
       assert.equal(classifyChildExit(text, exitCode, platform, table), expected, `must equal core classify() for: ${label}`);
     });
   }
+});
+
+// ===========================================================================
+// ITEM 7 (v1.1) — live codex marker fixture.
+// tests/fixtures/codex-live-child.transcript.txt (a non-ignored extension — the
+// repo gitignores *.log) is a ~16 KB TAIL SLICE of a live gpt-5.5
+// supervised-writer transcript — the
+// last chunk of genuine body, the real "tokens used" marker line, and the
+// verbatim verdict tail. It pins parseVerdict's region parse and the D1 tail-only
+// classification against reality (regression protection against marker drift).
+// Provenance: /Users/saksham/baton-dogfood-3/.handoff/loop-archive-pipeline/
+// children/002-doc-loop-writer.log (attempt-3 pipeline dogfood, 2026-07-20);
+// trimmed to a tail slice so the tracked surface is small and hand-verifiable —
+// plain build/test/README-editing chatter, no tokens/keys/personal data beyond
+// the repo's own paths. ONE alteration: the pre-marker body verdict block was
+// changed to a distinct decoy (VERDICT: BLOCKED / "decoy-before-marker — must
+// never be parsed") for region-bounding teeth; the 'tokens used' marker line and
+// the post-marker verdict tail are VERBATIM from the live transcript. These pin
+// REALITY (not a new feature): GREEN pins today.
+const LIVE_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'codex-live-child.transcript.txt');
+const liveTranscript = readFileSync(LIVE_FIXTURE, 'utf8');
+// The SHIPPED signature table — the exact one the loop/pipeline supervisor uses,
+// so 7-2 pins reality against the real signatures, not a toy fixture.
+const SHIPPED_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'data', 'signatures.v1.json');
+const shippedTable = loadSignatures({ builtinPath: SHIPPED_SIGNATURES }, { fs: { readFileSync, existsSync } });
+
+describe('parseVerdict + classify — LIVE codex transcript fixture (item 7)', () => {
+  it('GREEN (7-1): parseVerdict reads ONLY the post-marker region — the pre-marker decoy is never parsed', () => {
+    const { parseVerdict } = M();
+    // Teeth: the fixture carries a DISTINCT pre-marker decoy (VERDICT: BLOCKED),
+    // so a non-region-bounded parse would read the wrong verdict/findings.
+    assert.ok(liveTranscript.includes('decoy-before-marker'), 'precondition: the fixture has a distinct pre-marker decoy verdict');
+    const parsed = parseVerdict(liveTranscript, { platform: 'codex' });
+    assert.equal(parsed.verdict, 'APPROVED_WITH_NOTES', 'the region-bounded parse reads the post-marker verdict, not the pre-marker BLOCKED decoy');
+    assert.match(parsed.findings, /17 unrelated spawn\/integration failures/, 'the parsed findings carry the verbatim post-marker findings tail');
+    assert.doesNotMatch(parsed.findings, /decoy-before-marker/, 'the pre-marker decoy findings are NEVER parsed (region bounding proven)');
+  });
+
+  it('GREEN (7-2): classify(transcriptTail(live), exitCode 0, codex) === ok — the live exit-0 tail false-positives no signature', () => {
+    const cls = classify({ text: transcriptTail(liveTranscript), exitCode: 0, platform: 'codex', table: shippedTable }).class;
+    assert.equal(cls, 'ok', 'a healthy exit-0 live transcript tail must not match any death signature (D1 pinned against reality)');
+  });
 });

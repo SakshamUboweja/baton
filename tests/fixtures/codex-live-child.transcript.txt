@@ -1,0 +1,261 @@
++baton loop run
++```
++
++`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
++
++If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
++
++```sh
++baton loop run --approve-smoke <token>
++```
++
++The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
++
++Park/resume/escalate behavior is explicit:
++
++| Exit | Meaning | Operator action |
++|---:|---|---|
++| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
++| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
++| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
++| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
++| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
++
++A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
++
+ ## Install
+ 
+ | Harness | Command |
+
+2026-07-19T23:10:40.852171Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The commit was created. I’m doing a final repository sanity check and recording the required baton checkpoint as a handoff-safe note; `.handoff/` is gitignored and will not be committed.
+exec
+/bin/zsh -lc 'git show -s --format=%H%n%an <%ae>%n%s HEAD' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ exited 1 in 0ms:
+zsh:1: no such file or directory: %ae
+
+exec
+/bin/zsh -lc 'git status --short --branch' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ succeeded in 0ms:
+## baton/wt-a/subtask-doc-loop
+
+exec
+/bin/zsh -lc 'git diff HEAD~1..HEAD --stat' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ succeeded in 0ms:
+ README.md | 34 ++++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/README.md b/README.md
+index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,40 @@
+ 
+ baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+ 
++## baton loop
++
++`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
++
++Quickstart:
++
++```sh
++baton loop init "<goal>"
++# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
++baton loop run
++```
++
++`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
++
++If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
++
++```sh
++baton loop run --approve-smoke <token>
++```
++
++The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
++
++Park/resume/escalate behavior is explicit:
++
++| Exit | Meaning | Operator action |
++|---:|---|---|
++| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
++| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
++| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
++| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
++| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
++
++A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
++
+ ## Install
+ 
+ | Harness | Command |
+
+2026-07-19T23:10:52.608128Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The branch is clean after the commit. One metadata check command had shell quoting wrong around `<%ae>`, so I’m rerunning it quoted and then checkpointing the completed subtask.
+exec
+/bin/zsh -lc "git show -s --format='%H%n%an <%ae>%n%s' HEAD" in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ succeeded in 0ms:
+fa10e206f9321a3f2ec8d2ed7c94f0e2f15da6e1
+SakshamUboweja <ssakshamu@gmail.com>
+Document baton loop surface
+
+exec
+/bin/zsh -lc "printf '%s\\n' '{\"schema\":\"baton/event@1\",\"events\":[{\"type\":\"decision\",\"payload\":{\"summary\":\"doc-loop README section committed: documents baton loop supervisor, quickstart, smoke approval, and park/resume/escalate exit semantics.\"}}]}' | node core/bin/baton.mjs checkpoint --platform codex" in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ succeeded in 0ms:
+diff --git a/README.md b/README.md
+index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,40 @@
+ 
+ baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+ 
++## baton loop
++
++`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
++
++Quickstart:
++
++```sh
++baton loop init "<goal>"
++# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
++baton loop run
++```
++
++`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
++
++If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
++
++```sh
++baton loop run --approve-smoke <token>
++```
++
++The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
++
++Park/resume/escalate behavior is explicit:
++
++| Exit | Meaning | Operator action |
++|---:|---|---|
++| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
++| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
++| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
++| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
++| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
++
++A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
++
+ ## Install
+ 
+ | Harness | Command |
+
+2026-07-19T23:10:59.196444Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The checkpoint command completed and the commit metadata is correct. I’m checking final status once more so the handoff result is clean.
+exec
+/bin/zsh -lc 'git status --short --branch' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+ succeeded in 0ms:
+## baton/wt-a/subtask-doc-loop
+
+diff --git a/README.md b/README.md
+index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,40 @@
+ 
+ baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+ 
++## baton loop
++
++`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
++
++Quickstart:
++
++```sh
++baton loop init "<goal>"
++# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
++baton loop run
++```
++
++`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
++
++If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
++
++```sh
++baton loop run --approve-smoke <token>
++```
++
++The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
++
++Park/resume/escalate behavior is explicit:
++
++| Exit | Meaning | Operator action |
++|---:|---|---|
++| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
++| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
++| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
++| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
++| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
++
++A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
++
+ ## Install
+ 
+ | Harness | Command |
+
+2026-07-19T23:11:02.936435Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+VERDICT: BLOCKED
+FINDINGS: 1. decoy-before-marker — must never be parsed
+diff --git a/README.md b/README.md
+index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+--- a/README.md
++++ b/README.md
+@@ -12,6 +12,40 @@
+ 
+ baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+ 
++## baton loop
++
++`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
++
++Quickstart:
++
++```sh
++baton loop init "<goal>"
++# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
++baton loop run
++```
++
++`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
++
++If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
++
++```sh
++baton loop run --approve-smoke <token>
++```
++
++The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
++
++Park/resume/escalate behavior is explicit:
++
++| Exit | Meaning | Operator action |
++|---:|---|---|
++| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
++| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
++| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
++| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
++| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
++
++A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
++
+ ## Install
+ 
+ | Harness | Command |
+
+tokens used
+105,019
+VERDICT: APPROVED_WITH_NOTES
+FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
