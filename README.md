@@ -79,7 +79,18 @@ What it needs:
 | `subtask-reviewer` | the role reviewer children run under (the model comes from the opposite seat's worker chain) |
 | `merger` | the read-only pre-merge adversarial check |
 
-Merges are crash-safe. Each merged subtask appends a receipt to `.handoff/loop/merges.ndjson` *before* the run's position advances, so a crash between merge and advance resumes into a receipt-backed skip instead of re-running merged work. `baton pipeline resume` continues a parked run; an escalated run stays with the operator (read `.handoff/loop/ESCALATION.md`). Resume refuses to misalign: editing the `subtasks` list mid-run, or resuming a `loop` run as a pipeline (and vice versa), is rejected — archive `.handoff/loop/` to start fresh. Exit codes match the `baton loop` table above.
+Merges are crash-safe. Each merged subtask appends a receipt to `.handoff/loop/merges.ndjson` *before* the run's position advances, so a crash between merge and advance resumes into a receipt-backed skip instead of re-running merged work. Exit codes match the `baton loop` table above.
+
+### Resuming a parked run
+
+A run *parks* (exit 4) when it can't safely continue on its own — a phase exhausts its child budget, no eligible model resolves for a role, failover runs out of platforms, or a smoke-approval token drifted; a pipeline also parks on a merge conflict or an empty subtask branch. Parking preserves state, child logs, and worktree context under `.handoff/loop/`, so you can inspect the reason before continuing.
+
+`baton loop resume` (or `baton pipeline resume`) picks a parked run back up from where it stopped, without refunding any review gate's iteration count. It handles two cases deliberately:
+
+- **Escalated runs are operator-only.** Escalation means a review gate hit its hard 5-iteration cap, so resume refuses (exit 3) and points at `.handoff/loop/ESCALATION.md`. Resolve the findings and start a fresh gate yourself; baton will not open a hidden sixth attempt.
+- **Stale or absent state is refused, not guessed.** Resuming with no run state here ("nothing to resume") is treated as a wrong-directory mistake. A run whose `loop.json` phases or `subtasks` list changed since it started — or a `loop` run resumed as a `pipeline`, or vice versa — is rejected rather than misaligned; archive `.handoff/loop/` to start fresh.
+
+A plain `baton loop run` (or `baton pipeline run`) on an already-parked run reports the park and exits 4 without resuming — use `resume` to continue.
 
 ## Install
 
