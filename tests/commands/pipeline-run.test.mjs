@@ -1274,6 +1274,54 @@ describe('pipeline — findings persistence (item 4)', () => {
 });
 
 // ===========================================================================
+// ITEM 4b (v1.1) — review artifacts, pipeline half. Multi-child gates encode the
+// child ROLE in the filename: reviews/<runId>/subtask-<id>-review/iteration-NN/
+// <role>.prompt.md + <role>.verdict.md, role ∈ writer|reviewer|merger (the
+// writer self-check verdict included). NN = the gate iteration count at the
+// WRITER spawn of the cycle (01-based) — all three children share it.
+describe('pipeline — review artifacts (item 4b)', () => {
+  const promptOf = (call) => (argsOf(call) ?? []).find((a) => a.includes('You are the')) ?? '';
+  const parseVerdictMd = (text) => {
+    const lines = String(text ?? '').split('\n');
+    const header = /** @type {Record<string,string>} */ ({});
+    let i = 0;
+    for (; i < lines.length; i += 1) {
+      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
+      if (!m) break;
+      header[m[1].toLowerCase()] = m[2].trim();
+    }
+    return { header, body: lines.slice(i).join('\n').trim() };
+  };
+
+  it('RED (4b pipeline): a clean subtask cycle writes writer/reviewer/merger prompt+verdict artifacts under iteration-01', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask()); // writer, reviewer, merger — all APPROVED
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the subtask completes; stderr: ${io.stderrText()}`);
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    const base = `/repo/reviews/${runId}/subtask-t1-review/iteration-01`;
+    const f = (rel) => io.files()[`${base}/${rel}`];
+
+    const writerCall = writersOf(io.__runner)[0];
+    const reviewerCall = reviewersOf(io.__runner)[0];
+    const mergerCall = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
+    for (const [role, call, model] of [['writer', writerCall, 'wa-model'], ['reviewer', reviewerCall, 'wb-model'], ['merger', mergerCall, 'mg-model']]) {
+      assert.ok(call, `${role} child ran`);
+      assert.ok(f(`${role}.prompt.md`), `${role}.prompt.md written under iteration-01`);
+      assert.ok(f(`${role}.verdict.md`), `${role}.verdict.md written under iteration-01`);
+      assert.equal(f(`${role}.prompt.md`), promptOf(call), `${role}.prompt.md === the ${role} prompt verbatim`);
+      const v = parseVerdictMd(f(`${role}.verdict.md`));
+      assert.equal(v.header.verdict, 'APPROVED', `${role} verdict header: exact verdict`);
+      assert.match(v.header.model ?? '', new RegExp(model), `${role} verdict header: concrete model`);
+      assert.match(v.header.date ?? '', /^\d{4}-\d{2}-\d{2}$/, `${role} verdict header: date`);
+      assert.ok('degraded' in v.header, `${role} verdict header: degraded field present`);
+    }
+  });
+});
+
+// ===========================================================================
 // ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
 // actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
 // rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never

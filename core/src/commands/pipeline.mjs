@@ -234,6 +234,33 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     ensureDir(io.fs, `${p.dir}/findings`);
     appendEntry(io.fs, `${p.dir}/findings/${gate}.ndjson`, { iteration: state.iterations?.[gate] ?? 0, findings: text, at: io.now() });
   };
+  // Review artifacts from gate children (v1.1 item 4b): every PARSED verdict
+  // leaves reviews/<runId>/<gate>/iteration-NN/<role>.{prompt,verdict}.md —
+  // all children of one review cycle share NN (fixed at the writer spawn).
+  // FAIL-OPEN: an artifact error warns and never fails the run.
+  /** @param {string} gate @param {string} nn @param {string} roleFile @param {any} assignment @param {string} promptText @param {string} verdict @param {string} findingsText */
+  const writeGateArtifact = (gate, nn, roleFile, assignment, promptText, verdict, findingsText) => {
+    const rel = `reviews/${state.runId}/${gate}/iteration-${nn}`;
+    const header = [
+      `role: ${assignment.role}`,
+      `model: ${assignment.platform}/${assignment.model}${assignment.effort ? `@${assignment.effort}` : ''}`,
+      `platform: ${assignment.platform}`,
+      `date: ${String(io.now()).slice(0, 10)}`,
+      `verdict: ${verdict}`,
+      `degraded: ${assignment.mode && assignment.mode !== 'native' ? String(assignment.mode) : 'none'}`,
+    ].join('\n');
+    for (const [name, content] of [
+      [`${roleFile}.prompt.md`, promptText],
+      [`${roleFile}.verdict.md`, `${header}\n\n${findingsText}\n`],
+    ]) {
+      try {
+        ensureDir(io.fs, `${root}/${rel}`);
+        atomicWriteText(io.fs, `${root}/${rel}/${name}`, content);
+      } catch (err) {
+        io.stderr.write(`baton pipeline run: could not write review artifact ${rel}/${name} — ${/** @type {any} */ (err)?.message ?? err} (fail-open; the run continues)\n`);
+      }
+    }
+  };
 
   /**
    * Persist the escalation (D7 — the exit-3 path must leave state.json
@@ -416,7 +443,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
      * through the bounded failover — a death NEVER reaches the gate; only a
      * real verdict returns.
      * @param {{roleChain: string, childRole: string, prompt: string, seatPath: string, label: string, subtaskId: string, roleLabel: string}} c
-     * @returns {Promise<{result?: any, parked?: number}>}
+     * @returns {Promise<{result?: any, assignment?: any, parked?: number}>}
      */
     const superviseVerdictChild = async (c) => {
       let attempt = 0;
@@ -431,7 +458,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         const result = await spawn(asg, c.prompt, c.seatPath, c.label);
         const log = result.logPath && io.fs.existsSync(result.logPath) ? io.fs.readFileSync(result.logPath, 'utf8') : '';
         const cls = classify({ text: transcriptTail(log), exitCode: result.exitCode ?? 0, platform: asg.platform, table }).class;
-        if (cls === 'ok') return { result };
+        if (cls === 'ok') return { result, assignment: asg };
         attempt += 1;
         if (attempt > chainLen) {
           return { parked: await park(`subtask '${c.subtaskId}' exhausted its ${c.roleLabel} failover budget (${chainLen} chain entr${chainLen === 1 ? 'y' : 'ies'}, ${attempt} deaths) — parked instead of looping`) };
@@ -464,6 +491,10 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         io.stderr.write(`baton pipeline run: gate '${gate}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
         return escalate(gate, findings, cap);
       }
+
+      // One review cycle = writer, reviewer, merger — all three share the
+      // artifact iteration number, fixed here at the writer spawn (item 4b).
+      const cycleNN = String((state.iterations?.[gate] ?? 0) + 1).padStart(2, '0');
 
       // Writer (write-capable, its own seat). Every resolution — including a
       // plain BLOCKED retry — honors the subtask's avoided entries, so a
@@ -521,6 +552,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         }
         continue; // relaunch or retry the writer — never review a failed attempt
       }
+      writeGateArtifact(gate, cycleNN, 'writer', writerAsg, writerPrompt, String(writerResult.verdict ?? 'BLOCKED'), String(writerResult.findings ?? ''));
       if (writerResult.verdict !== 'APPROVED' && writerResult.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(writerResult.findings ?? '');
         persistFindings(gate, findings);
@@ -569,6 +601,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         roleLabel: 'reviewer',
       });
       if (review.parked !== undefined) return review.parked;
+      writeGateArtifact(gate, cycleNN, 'reviewer', review.assignment, reviewPrompt, String(review.result.verdict ?? 'BLOCKED'), String(review.result.findings ?? ''));
       if (review.result.verdict !== 'APPROVED' && review.result.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(review.result.findings ?? '');
         persistFindings(gate, findings);
@@ -594,6 +627,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         roleLabel: 'merger',
       });
       if (mergerCheck.parked !== undefined) return mergerCheck.parked;
+      writeGateArtifact(gate, cycleNN, 'merger', mergerCheck.assignment, mergerPrompt, String(mergerCheck.result.verdict ?? 'BLOCKED'), String(mergerCheck.result.findings ?? ''));
       if (mergerCheck.result.verdict !== 'APPROVED' && mergerCheck.result.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(mergerCheck.result.findings ?? '');
         persistFindings(gate, findings);

@@ -179,11 +179,35 @@ describe('e2e — pipeline over REAL git: two subtasks, real merges, no residue 
     assert.match(git(cwd, ['branch', '--list', 'baton/wt-*']), /baton\/wt-a\/|baton\/wt-b\//, 'wt-* branches existed during the run');
   });
 
-  it('teardown + purge .handoff leaves a PLAIN git repo — no worktrees, no baton/wt-* branches (constraint 5)', { skip: SKIP_WIN }, async () => {
+  it('teardown + purge .handoff leaves a PLAIN git repo — no worktrees, no baton/wt-* branches; reviews/ is intended output (constraint 5)', { skip: SKIP_WIN }, async () => {
     const { cwd, io } = await runPipeline('baton-e2e-pipe-td-');
+
+    // Positive (plan item 4b): each subtask gate wrote its review artifacts on
+    // real fs — writer/reviewer/merger prompt + verdict under iteration-01.
+    const runId = (await loadLoopState(cwd, io)).state.runId;
+    for (const gate of ['subtask-t1-review', 'subtask-t2-review']) {
+      const dir = join(cwd, 'reviews', runId, gate, 'iteration-01');
+      for (const role of ['writer', 'reviewer', 'merger']) {
+        assert.ok(nodeFs.existsSync(join(dir, `${role}.prompt.md`)), `${gate}/iteration-01/${role}.prompt.md exists`);
+        assert.ok(nodeFs.existsSync(join(dir, `${role}.verdict.md`)), `${gate}/iteration-01/${role}.verdict.md exists`);
+      }
+    }
+
     await teardownWorktrees(cwd, io);
     rmSync(join(cwd, '.handoff'), { recursive: true, force: true });
-    assert.equal(git(cwd, ['status', '--porcelain']).trim(), '', 'the working tree is clean');
+
+    // Constraint 5's spirit is NO RUNTIME RESIDUE (no worktrees, no baton/wt-*
+    // branches, nothing from .handoff). reviews/** is INTENDED permanent output —
+    // the committed-tree review artifacts (plan item 4b), like the ones this repo
+    // itself commits — so the only untracked paths legitimately sit under reviews/.
+    const untracked = git(cwd, ['status', '--porcelain']).trim().split('\n').filter(Boolean);
+    assert.ok(
+      untracked.every((l) => l.slice(3).startsWith('reviews/')),
+      `the only untracked residue is intended reviews/ output (plan item 4b); got ${JSON.stringify(untracked)}`,
+    );
+    // With the intended output removed too, the tree is genuinely PLAIN.
+    rmSync(join(cwd, 'reviews'), { recursive: true, force: true });
+    assert.equal(git(cwd, ['status', '--porcelain']).trim(), '', 'the working tree is clean once intended output is set aside');
     assert.equal(git(cwd, ['worktree', 'list', '--porcelain']).split('\n\n').filter(Boolean).length, 1, 'only the main worktree remains');
     // FINDING (constraint 5): teardown deletes only each worktree's CURRENT branch,
     // leaving orphaned baton/wt-*/base branches after seats switch to subtask

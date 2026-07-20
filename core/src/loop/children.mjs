@@ -164,7 +164,7 @@ function killGroup(pid, sig) {
  * zombie grandchildren). Output streams to a capped log at opts.logPath; the
  * verdict is parsed from the full transcript, region-bounded.
  * @param {{command: string, args: string[], env?: Record<string, string>, cwd?: string}} spec
- * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+ * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, fs?: {writeFileSync: Function, mkdirSync: Function}, onStart?: (info: {pid: number, pgid: number}) => void}} opts
  * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string, pgid?: number}>}
  */
 export function superviseChild(spec, opts) {
@@ -184,13 +184,32 @@ export function superviseChild(spec, opts) {
       opts.onStart({ pid: child.pid, pgid });
     }
 
-    let out = '';
+    // Bounded head+tail capture (v1.1 item 5): the retained transcript never
+    // exceeds ~maxLogBytes, so a runaway child cannot balloon the supervisor.
+    // Under the cap the capture is verbatim; over it, the first half is
+    // frozen and the last half rolls — death banners and verdict tails live
+    // at the END of a log, so both classification and parsing survive.
+    const half = Math.max(64, Math.floor(maxLogBytes / 2));
+    let head = '';
+    let tail = '';
+    let truncated = false;
     let timedOut = false;
     /** @type {NodeJS.Timeout | null} */
     let killTimer = null;
 
     const onChunk = (/** @type {Buffer} */ c) => {
-      out += c.toString();
+      const s = c.toString();
+      if (!truncated) {
+        head += s;
+        if (head.length > maxLogBytes) {
+          tail = head.slice(half);
+          head = head.slice(0, half);
+          truncated = true;
+        }
+      } else {
+        tail += s;
+      }
+      if (truncated && tail.length > half) tail = tail.slice(-half);
     };
     child.stdout?.on('data', onChunk);
     child.stderr?.on('data', onChunk);
@@ -210,13 +229,17 @@ export function superviseChild(spec, opts) {
       if (killTimer) clearTimeout(killTimer);
       // Belt-and-braces: reap any group survivors even on a clean exit path.
       if (timedOut && typeof child.pid === 'number') killGroup(child.pid, 'SIGKILL');
+      const transcript = truncated ? `${head}\n[... log truncated: output exceeded ${maxLogBytes} bytes ...]\n${tail}` : head;
+      // Log writes go through the injectable fs seam (opts.fs, default
+      // node:fs) so callers can observe/bound them (v1.1 item 5).
+      const fsx = opts.fs ?? { writeFileSync, mkdirSync };
       try {
-        mkdirSync(dirname(opts.logPath), { recursive: true });
-        writeFileSync(opts.logPath, capLog(out, maxLogBytes));
+        fsx.mkdirSync(dirname(opts.logPath), { recursive: true });
+        fsx.writeFileSync(opts.logPath, transcript);
       } catch {
         // The log must never mask the result.
       }
-      const parsed = parseVerdict(out, { platform: opts.platform ?? 'codex' });
+      const parsed = parseVerdict(transcript, { platform: opts.platform ?? 'codex' });
       resolve({
         timedOut,
         exitCode: timedOut ? null : exitCode,

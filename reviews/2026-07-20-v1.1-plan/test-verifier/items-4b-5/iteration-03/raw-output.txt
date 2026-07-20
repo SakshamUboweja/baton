@@ -1,0 +1,2076 @@
+Reading additional input from stdin...
+2026-07-20T06:11:06.603452Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7e26-4d2a-7c72-9d91-611b02a24acb
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, items-4b-5 series iteration 3 of 5, re-auditing after your iteration-2 BLOCKED verdict (1 finding: 4b-1's iteration-02 verdict.md assertions thinner than iteration-01's; report: reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt). Uncommitted, tests-only; baseline db13a92.
+
+Claimed closure: iteration-02's verdict.md now asserts the full contract — effort (xhigh), harness/platform (codex), exact date (2026-07-19), degraded presence, exact verdict (APPROVED), exact body (v2.body === '', the clean-APPROVED fixture has no findings) — alongside role and model.
+
+Claimed totals: suite 1231, 1227 pass / 4 red (4b-1, 4b-2, 4b-pipeline, 5-1), guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — the item-5 integration test is judged by reading only (already accepted at iterations 1–2).
+
+Scope: verify the closure is genuine, red-phase integrity, no weakening, no regressions. Raise only NEW defects or a defective closure.
+
+You may run: node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+Review phase. I’ll audit the uncommitted tests-only changes against the claimed closure, then run the allowed targeted tests and typecheck.
+exec
+/bin/zsh -lc 'git rev-parse --short HEAD' in /Users/saksham/baton
+ succeeded in 0ms:
+db13a92
+
+exec
+/bin/zsh -lc 'git diff --stat' in /Users/saksham/baton
+ succeeded in 0ms:
+ tests/commands/loop-run.test.mjs               | 101 +++++++++++++++++++++++++
+ tests/commands/pipeline-run.test.mjs           |  48 ++++++++++++
+ tests/integration/loop-children-spawn.test.mjs |  77 ++++++++++++++++++-
+ 3 files changed, 225 insertions(+), 1 deletion(-)
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/saksham/baton
+ succeeded in 0ms:
+ M tests/commands/loop-run.test.mjs
+ M tests/commands/pipeline-run.test.mjs
+ M tests/integration/loop-children-spawn.test.mjs
+?? reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/
+
+exec
+/bin/zsh -lc 'git diff --name-only' in /Users/saksham/baton
+ succeeded in 0ms:
+tests/commands/loop-run.test.mjs
+tests/commands/pipeline-run.test.mjs
+tests/integration/loop-children-spawn.test.mjs
+
+codex
+The workspace is at `db13a92` with only three modified tracked test files plus the new review artifact directory. I’m reading the exact assertions now, especially the iteration-02 closure around item 4b-1.
+exec
+/bin/zsh -lc 'git diff -- tests/commands/loop-run.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'git diff -- tests/integration/loop-children-spawn.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'git diff -- tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+index 3ce5022..d717ea0 100644
+--- a/tests/commands/pipeline-run.test.mjs
++++ b/tests/commands/pipeline-run.test.mjs
+@@ -1273,6 +1273,54 @@ describe('pipeline — findings persistence (item 4)', () => {
+   });
+ });
+ 
++// ===========================================================================
++// ITEM 4b (v1.1) — review artifacts, pipeline half. Multi-child gates encode the
++// child ROLE in the filename: reviews/<runId>/subtask-<id>-review/iteration-NN/
++// <role>.prompt.md + <role>.verdict.md, role ∈ writer|reviewer|merger (the
++// writer self-check verdict included). NN = the gate iteration count at the
++// WRITER spawn of the cycle (01-based) — all three children share it.
++describe('pipeline — review artifacts (item 4b)', () => {
++  const promptOf = (call) => (argsOf(call) ?? []).find((a) => a.includes('You are the')) ?? '';
++  const parseVerdictMd = (text) => {
++    const lines = String(text ?? '').split('\n');
++    const header = /** @type {Record<string,string>} */ ({});
++    let i = 0;
++    for (; i < lines.length; i += 1) {
++      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
++      if (!m) break;
++      header[m[1].toLowerCase()] = m[2].trim();
++    }
++    return { header, body: lines.slice(i).join('\n').trim() };
++  };
++
++  it('RED (4b pipeline): a clean subtask cycle writes writer/reviewer/merger prompt+verdict artifacts under iteration-01', async () => {
++    const subtasks = [{ id: 't1', title: 'only' }];
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask()); // writer, reviewer, merger — all APPROVED
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the subtask completes; stderr: ${io.stderrText()}`);
++    const runId = (await loadLoopState('/repo', io)).state.runId;
++    const base = `/repo/reviews/${runId}/subtask-t1-review/iteration-01`;
++    const f = (rel) => io.files()[`${base}/${rel}`];
++
++    const writerCall = writersOf(io.__runner)[0];
++    const reviewerCall = reviewersOf(io.__runner)[0];
++    const mergerCall = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
++    for (const [role, call, model] of [['writer', writerCall, 'wa-model'], ['reviewer', reviewerCall, 'wb-model'], ['merger', mergerCall, 'mg-model']]) {
++      assert.ok(call, `${role} child ran`);
++      assert.ok(f(`${role}.prompt.md`), `${role}.prompt.md written under iteration-01`);
++      assert.ok(f(`${role}.verdict.md`), `${role}.verdict.md written under iteration-01`);
++      assert.equal(f(`${role}.prompt.md`), promptOf(call), `${role}.prompt.md === the ${role} prompt verbatim`);
++      const v = parseVerdictMd(f(`${role}.verdict.md`));
++      assert.equal(v.header.verdict, 'APPROVED', `${role} verdict header: exact verdict`);
++      assert.match(v.header.model ?? '', new RegExp(model), `${role} verdict header: concrete model`);
++      assert.match(v.header.date ?? '', /^\d{4}-\d{2}-\d{2}$/, `${role} verdict header: date`);
++      assert.ok('degraded' in v.header, `${role} verdict header: degraded field present`);
++    }
++  });
++});
++
+ // ===========================================================================
+ // ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+ // actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
+
+ succeeded in 0ms:
+diff --git a/tests/commands/loop-run.test.mjs b/tests/commands/loop-run.test.mjs
+index a487567..46fbd97 100644
+--- a/tests/commands/loop-run.test.mjs
++++ b/tests/commands/loop-run.test.mjs
+@@ -570,6 +570,107 @@ describe('loop run — findings persistence (item 4)', () => {
+   });
+ });
+ 
++// ===========================================================================
++// ITEM 4b (v1.1) — review artifacts from gate children. After EVERY verdict
++// parse for a gate child the supervisor writes reviews/<runId>/<gate>/
++// iteration-NN/{prompt.md, verdict.md} in the repo tree (layout per
++// reviews/README.md): prompt.md is the child prompt verbatim; verdict.md is a
++// header (role/model/date) + the parsed verdict + findings. NN = the gate
++// iteration count at parse time (01-based). Writes are FAIL-OPEN.
++describe('loop run — review artifacts from gate children (item 4b)', () => {
++  const promptOf = (call) => (call?.args ?? []).map(String).find((a) => a.includes('You are the')) ?? '';
++  // Parse a verdict.md into its leading `key: value` header block + trailing
++  // body (findings), per reviews/README.md's header convention.
++  const parseVerdictMd = (text) => {
++    const lines = String(text ?? '').split('\n');
++    const header = /** @type {Record<string,string>} */ ({});
++    let i = 0;
++    for (; i < lines.length; i += 1) {
++      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
++      if (!m) break;
++      header[m[1].toLowerCase()] = m[2].trim();
++    }
++    return { header, body: lines.slice(i).join('\n').trim() };
++  };
++
++  it('RED (4b-1): a two-iteration gate leaves iteration-01/02 with verbatim prompt.md + full-contract verdict.md', async () => {
++    const marker = 'FIX_THE_THING_MARKER';
++    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
++    const io = makeLoopRepo({ spec, runner: undefined });
++    io.superviseChild = fakeRunner(io, [
++      { verdict: 'BLOCKED', findings: marker },
++      { verdict: 'APPROVED' },
++    ]);
++    io.__runner = io.superviseChild;
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0, `the gate completes after the APPROVED; stderr: ${io.stderrText()}`);
++    const runId = (await loadLoopState('/repo', io)).state.runId;
++    const base = `/repo/reviews/${runId}/gate-1`;
++    const f = (rel) => io.files()[`${base}/${rel}`];
++
++    // iteration-01 — the BLOCKED attempt (01-based iteration count at parse time).
++    assert.ok(f('iteration-01/prompt.md'), 'iteration-01/prompt.md written');
++    assert.ok(f('iteration-01/verdict.md'), 'iteration-01/verdict.md written');
++    // prompt.md is EXACTLY the child prompt, verbatim.
++    assert.equal(f('iteration-01/prompt.md'), promptOf(io.__runner.calls[0]), 'iteration-01 prompt.md === the child prompt verbatim');
++    // verdict.md carries the FULL header contract + parsed verdict + findings.
++    const v1 = parseVerdictMd(f('iteration-01/verdict.md'));
++    assert.equal(v1.header.role, 'plan-reviewer', 'verdict header: exact role');
++    assert.match(v1.header.model ?? '', /gpt-5\.6-sol/, 'verdict header: concrete model');
++    assert.match(v1.header.model ?? '', /xhigh/, 'verdict header: the effort actually used');
++    assert.match(`${v1.header.harness ?? ''}${v1.header.platform ?? ''}`, /codex/i, 'verdict header: harness/platform');
++    assert.equal(v1.header.date, '2026-07-19', 'verdict header: date (YYYY-MM-DD from io.now())');
++    assert.equal(v1.header.verdict, 'BLOCKED', 'verdict header: exact verdict');
++    assert.ok('degraded' in v1.header, 'verdict header: degraded field present');
++    assert.equal(v1.body, marker, 'verdict.md body is the exact findings text');
++
++    // iteration-02 — the APPROVED attempt; its prompt embeds the prior findings.
++    assert.ok(f('iteration-02/prompt.md'), 'iteration-02/prompt.md written');
++    assert.equal(f('iteration-02/prompt.md'), promptOf(io.__runner.calls[1]), 'iteration-02 prompt.md === the second child prompt verbatim');
++    assert.match(f('iteration-02/prompt.md'), new RegExp(marker), 'the second prompt embeds the prior findings');
++    const v2 = parseVerdictMd(f('iteration-02/verdict.md'));
++    assert.equal(v2.header.role, 'plan-reviewer', 'iteration-02 verdict header: exact role');
++    assert.match(v2.header.model ?? '', /gpt-5\.6-sol/, 'iteration-02 verdict header: concrete model');
++    assert.match(v2.header.model ?? '', /xhigh/, 'iteration-02 verdict header: the effort actually used');
++    assert.match(`${v2.header.harness ?? ''}${v2.header.platform ?? ''}`, /codex/i, 'iteration-02 verdict header: harness/platform');
++    assert.equal(v2.header.date, '2026-07-19', 'iteration-02 verdict header: exact date');
++    assert.equal(v2.header.verdict, 'APPROVED', 'iteration-02 verdict header: exact verdict');
++    assert.ok('degraded' in v2.header, 'iteration-02 verdict header: degraded field present');
++    assert.equal(v2.body, '', 'iteration-02 verdict.md body is the exact findings (empty for a clean APPROVED)');
++  });
++
++  it('RED (4b-2, fail-open): an artifact write error WARNS but never fails the run', async () => {
++    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
++    const io = makeLoopRepo({ spec, runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
++    io.__runner = io.superviseChild;
++    // Every write under reviews/ throws — the run must not be failed by it.
++    const realWrite = io.fs.writeFileSync.bind(io.fs);
++    io.fs.writeFileSync = (/** @type {any} */ pth, /** @type {any} */ data, /** @type {any} */ o) => {
++      if (String(pth).includes('/reviews/')) throw Object.assign(new Error('EACCES: reviews/ not writable'), { code: 'EACCES' });
++      return realWrite(pth, data, o);
++    };
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0, 'an artifact write error does NOT fail the run (fail-open)');
++    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run still completed');
++    const runId = (await loadLoopState('/repo', io)).state.runId;
++    assert.match(io.stderrText(), new RegExp(`reviews/${runId}/gate-1/iteration-01/(prompt|verdict)\\.md`), 'the warning names the CONCRETE failed artifact path');
++  });
++
++  it('GUARD (4b): a DEAD (failover) gate child writes NO verdict.md — only parsed verdicts leave artifacts', async () => {
++    const cfg = JSON.parse(JSON.stringify(CONFIG));
++    cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh']; // single entry — a model death parks
++    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'solo-codex' }] });
++    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2), '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n' }, runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'BLOCKED', exitCode: 1, logContent: `child died: ${MODEL_UNAVAIL}\n` }]);
++    io.__runner = io.superviseChild;
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 4, 'the model-unavailable death parks');
++    const verdictArtifacts = Object.keys(io.files()).filter((k) => /\/reviews\/.*\/verdict\.md$/.test(k));
++    assert.deepEqual(verdictArtifacts, [], 'a child that produced no parsed verdict leaves no verdict.md');
++  });
++});
++
+ // ===========================================================================
+ describe('loop run — failover integration', () => {
+   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
+
+ succeeded in 0ms:
+diff --git a/tests/integration/loop-children-spawn.test.mjs b/tests/integration/loop-children-spawn.test.mjs
+index ec15d28..996d702 100644
+--- a/tests/integration/loop-children-spawn.test.mjs
++++ b/tests/integration/loop-children-spawn.test.mjs
+@@ -1,6 +1,6 @@
+ import { describe, it, after } from 'node:test';
+ import assert from 'node:assert/strict';
+-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
++import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+ import { tmpdir } from 'node:os';
+ import { join } from 'node:path';
+ 
+@@ -143,6 +143,81 @@ describe('superviseChild — well-behaved child: parsed verdict + capped log', (
+   });
+ });
+ 
++// ===========================================================================
++// ITEM 5 (v1.1) — streaming log caps. superviseChild must route its log writes
++// through an injectable fs (opts.fs, default node:fs) and cap DURING capture, so
++// a runaway child cannot balloon the supervisor. Memory boundedness is observed
++// per the plan's acceptance — a recording-fake byte counter — plus the capped
++// file staying ≤ cap and the verdict tail surviving.
++//
++// NOTE (test-author): the plan named tests/unit/loop-children.test.mjs, but that
++// file holds only the PURE helpers; superviseChild's real-process coverage and
++// the fake-process pattern live HERE, so these pins land in the integration file
++// (nothing existing is modified). Flagged for the verifier.
++describe('superviseChild — streaming log cap (item 5)', () => {
++  // A recording fs that DELEGATES to real node:fs (so the file still lands on
++  // disk) and records every write's path + byte size — the sanctioned
++  // recording-fake byte counter.
++  function recordingFs() {
++    const writes = /** @type {Array<{method: string, path: string, bytes: number}>} */ ([]);
++    return {
++      writes,
++      writeFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'writeFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return writeFileSync(p, d, o); },
++      appendFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'appendFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return appendFileSync(p, d, o); },
++      mkdirSync: (/** @type {any} */ p, /** @type {any} */ o) => mkdirSync(p, o),
++    };
++  }
++
++  it('RED (5-1): a >>cap child routes its log through the injected fs, caps the file, and keeps the verdict tail', { skip: SKIP_WIN }, async () => {
++    const { superviseChild } = M();
++    const dir = scratch();
++    const cap = 2000;
++    const script = join(dir, 'flood.cjs');
++    // ~5x the cap of body, then the verdict tail at the very END.
++    writeFileSync(
++      script,
++      [
++        'process.stdout.write("SYSTEM: end with VERDICT\\n");',
++        'for (let i = 0; i < 100; i++) process.stdout.write("X".repeat(100) + "\\n"); // ~10 KB body in chunks',
++        'process.stdout.write("tokens used: 9\\n");',
++        'process.stdout.write("VERDICT: APPROVED\\n");',
++        'process.stdout.write("FINDINGS: none\\n");',
++        'process.exit(0);',
++      ].join('\n'),
++    );
++    const logPath = join(dir, 'flood.log');
++    const rec = recordingFs();
++
++    const result = await superviseChild(
++      { command: process.execPath, args: [script], cwd: dir },
++      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex', fs: rec },
++    );
++
++    const logWrites = rec.writes.filter((w) => w.path === logPath);
++    assert.ok(logWrites.length >= 1, 'the log is written through the INJECTED fs (opts.fs), not node:fs directly');
++    const peak = Math.max(...logWrites.map((w) => w.bytes));
++    assert.ok(peak <= cap + 512, `no single log write dumps more than the cap (+slack); peak=${peak}`);
++    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= cap + 512, 'the final log respects maxLogBytes (+ marker slack)');
++    assert.equal(result.verdict, 'APPROVED', 'the verdict tail survives capping (parsed from the capped transcript)');
++  });
++
++  it('GUARD (5-2): a small-output child’s log is byte-identical to today (default fs, no regression)', { skip: SKIP_WIN }, async () => {
++    const { superviseChild } = M();
++    const dir = scratch();
++    const script = join(dir, 'small.cjs');
++    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
++    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
++    const logPath = join(dir, 'small.log');
++
++    const result = await superviseChild(
++      { command: process.execPath, args: [script], cwd: dir },
++      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' }, // default fs — no injection
++    );
++    assert.equal(result.exitCode, 0);
++    assert.equal(readFileSync(logPath, 'utf8'), body, 'a sub-cap child log is written verbatim (no truncation marker, no regression)');
++  });
++});
++
+ // ===========================================================================
+ describe('superviseChild — stdin is genuinely closed', () => {
+   it('a child that reads stdin does not hang — it gets EOF and exits promptly', { skip: SKIP_WIN }, async () => {
+
+exec
+/bin/zsh -lc 'find reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5 -maxdepth 3 -type f | sort' in /Users/saksham/baton
+ succeeded in 0ms:
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/prompt.md
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/raw-output.txt
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/prompt.md
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-03/prompt.md
+reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-03/raw-output.txt
+
+2026-07-20T06:11:31.975725Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The item 4b-1 closure is now materially broader in the diff: it checks iteration-02 role, model, effort, harness/platform, date, verdict, degraded header, and empty body. I’m checking whether any of those assertions are only superficial or weaken earlier red intent.
+exec
+/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '570,680p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   570	  });
+   571	});
+   572	
+   573	// ===========================================================================
+   574	// ITEM 4b (v1.1) — review artifacts from gate children. After EVERY verdict
+   575	// parse for a gate child the supervisor writes reviews/<runId>/<gate>/
+   576	// iteration-NN/{prompt.md, verdict.md} in the repo tree (layout per
+   577	// reviews/README.md): prompt.md is the child prompt verbatim; verdict.md is a
+   578	// header (role/model/date) + the parsed verdict + findings. NN = the gate
+   579	// iteration count at parse time (01-based). Writes are FAIL-OPEN.
+   580	describe('loop run — review artifacts from gate children (item 4b)', () => {
+   581	  const promptOf = (call) => (call?.args ?? []).map(String).find((a) => a.includes('You are the')) ?? '';
+   582	  // Parse a verdict.md into its leading `key: value` header block + trailing
+   583	  // body (findings), per reviews/README.md's header convention.
+   584	  const parseVerdictMd = (text) => {
+   585	    const lines = String(text ?? '').split('\n');
+   586	    const header = /** @type {Record<string,string>} */ ({});
+   587	    let i = 0;
+   588	    for (; i < lines.length; i += 1) {
+   589	      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
+   590	      if (!m) break;
+   591	      header[m[1].toLowerCase()] = m[2].trim();
+   592	    }
+   593	    return { header, body: lines.slice(i).join('\n').trim() };
+   594	  };
+   595	
+   596	  it('RED (4b-1): a two-iteration gate leaves iteration-01/02 with verbatim prompt.md + full-contract verdict.md', async () => {
+   597	    const marker = 'FIX_THE_THING_MARKER';
+   598	    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+   599	    const io = makeLoopRepo({ spec, runner: undefined });
+   600	    io.superviseChild = fakeRunner(io, [
+   601	      { verdict: 'BLOCKED', findings: marker },
+   602	      { verdict: 'APPROVED' },
+   603	    ]);
+   604	    io.__runner = io.superviseChild;
+   605	    const code = await cmdLoop(['run'], io);
+   606	    assert.equal(code, 0, `the gate completes after the APPROVED; stderr: ${io.stderrText()}`);
+   607	    const runId = (await loadLoopState('/repo', io)).state.runId;
+   608	    const base = `/repo/reviews/${runId}/gate-1`;
+   609	    const f = (rel) => io.files()[`${base}/${rel}`];
+   610	
+   611	    // iteration-01 — the BLOCKED attempt (01-based iteration count at parse time).
+   612	    assert.ok(f('iteration-01/prompt.md'), 'iteration-01/prompt.md written');
+   613	    assert.ok(f('iteration-01/verdict.md'), 'iteration-01/verdict.md written');
+   614	    // prompt.md is EXACTLY the child prompt, verbatim.
+   615	    assert.equal(f('iteration-01/prompt.md'), promptOf(io.__runner.calls[0]), 'iteration-01 prompt.md === the child prompt verbatim');
+   616	    // verdict.md carries the FULL header contract + parsed verdict + findings.
+   617	    const v1 = parseVerdictMd(f('iteration-01/verdict.md'));
+   618	    assert.equal(v1.header.role, 'plan-reviewer', 'verdict header: exact role');
+   619	    assert.match(v1.header.model ?? '', /gpt-5\.6-sol/, 'verdict header: concrete model');
+   620	    assert.match(v1.header.model ?? '', /xhigh/, 'verdict header: the effort actually used');
+   621	    assert.match(`${v1.header.harness ?? ''}${v1.header.platform ?? ''}`, /codex/i, 'verdict header: harness/platform');
+   622	    assert.equal(v1.header.date, '2026-07-19', 'verdict header: date (YYYY-MM-DD from io.now())');
+   623	    assert.equal(v1.header.verdict, 'BLOCKED', 'verdict header: exact verdict');
+   624	    assert.ok('degraded' in v1.header, 'verdict header: degraded field present');
+   625	    assert.equal(v1.body, marker, 'verdict.md body is the exact findings text');
+   626	
+   627	    // iteration-02 — the APPROVED attempt; its prompt embeds the prior findings.
+   628	    assert.ok(f('iteration-02/prompt.md'), 'iteration-02/prompt.md written');
+   629	    assert.equal(f('iteration-02/prompt.md'), promptOf(io.__runner.calls[1]), 'iteration-02 prompt.md === the second child prompt verbatim');
+   630	    assert.match(f('iteration-02/prompt.md'), new RegExp(marker), 'the second prompt embeds the prior findings');
+   631	    const v2 = parseVerdictMd(f('iteration-02/verdict.md'));
+   632	    assert.equal(v2.header.role, 'plan-reviewer', 'iteration-02 verdict header: exact role');
+   633	    assert.match(v2.header.model ?? '', /gpt-5\.6-sol/, 'iteration-02 verdict header: concrete model');
+   634	    assert.match(v2.header.model ?? '', /xhigh/, 'iteration-02 verdict header: the effort actually used');
+   635	    assert.match(`${v2.header.harness ?? ''}${v2.header.platform ?? ''}`, /codex/i, 'iteration-02 verdict header: harness/platform');
+   636	    assert.equal(v2.header.date, '2026-07-19', 'iteration-02 verdict header: exact date');
+   637	    assert.equal(v2.header.verdict, 'APPROVED', 'iteration-02 verdict header: exact verdict');
+   638	    assert.ok('degraded' in v2.header, 'iteration-02 verdict header: degraded field present');
+   639	    assert.equal(v2.body, '', 'iteration-02 verdict.md body is the exact findings (empty for a clean APPROVED)');
+   640	  });
+   641	
+   642	  it('RED (4b-2, fail-open): an artifact write error WARNS but never fails the run', async () => {
+   643	    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+   644	    const io = makeLoopRepo({ spec, runner: undefined });
+   645	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+   646	    io.__runner = io.superviseChild;
+   647	    // Every write under reviews/ throws — the run must not be failed by it.
+   648	    const realWrite = io.fs.writeFileSync.bind(io.fs);
+   649	    io.fs.writeFileSync = (/** @type {any} */ pth, /** @type {any} */ data, /** @type {any} */ o) => {
+   650	      if (String(pth).includes('/reviews/')) throw Object.assign(new Error('EACCES: reviews/ not writable'), { code: 'EACCES' });
+   651	      return realWrite(pth, data, o);
+   652	    };
+   653	    const code = await cmdLoop(['run'], io);
+   654	    assert.equal(code, 0, 'an artifact write error does NOT fail the run (fail-open)');
+   655	    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run still completed');
+   656	    const runId = (await loadLoopState('/repo', io)).state.runId;
+   657	    assert.match(io.stderrText(), new RegExp(`reviews/${runId}/gate-1/iteration-01/(prompt|verdict)\\.md`), 'the warning names the CONCRETE failed artifact path');
+   658	  });
+   659	
+   660	  it('GUARD (4b): a DEAD (failover) gate child writes NO verdict.md — only parsed verdicts leave artifacts', async () => {
+   661	    const cfg = JSON.parse(JSON.stringify(CONFIG));
+   662	    cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh']; // single entry — a model death parks
+   663	    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'solo-codex' }] });
+   664	    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2), '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n' }, runner: undefined });
+   665	    io.superviseChild = fakeRunner(io, [{ verdict: 'BLOCKED', exitCode: 1, logContent: `child died: ${MODEL_UNAVAIL}\n` }]);
+   666	    io.__runner = io.superviseChild;
+   667	    const code = await cmdLoop(['run'], io);
+   668	    assert.equal(code, 4, 'the model-unavailable death parks');
+   669	    const verdictArtifacts = Object.keys(io.files()).filter((k) => /\/reviews\/.*\/verdict\.md$/.test(k));
+   670	    assert.deepEqual(verdictArtifacts, [], 'a child that produced no parsed verdict leaves no verdict.md');
+   671	  });
+   672	});
+   673	
+   674	// ===========================================================================
+   675	describe('loop run — failover integration', () => {
+   676	  it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
+   677	    // implementer chain: [claude-code, codex, cursor]; the claude-code child hits
+   678	    // a session limit -> failover avoids claude-code -> relaunch on codex.
+   679	    const spec = loopSpec({ phases: [{ id: 'subtask-implement', role: 'implementer' }] });
+   680	    const io = makeLoopRepo({ spec, files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' }, runner: undefined });
+
+exec
+/bin/zsh -lc "nl -ba tests/integration/loop-children-spawn.test.mjs | sed -n '140,230p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   140	    assert.equal(result.logPath, logPath, 'the result reports the exact log path it was given');
+   141	    assert.ok(existsSync(logPath), 'the child output landed at the log path');
+   142	    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= 1000 + 256, 'the log is capped to maxLogBytes (+ marker slack)');
+   143	  });
+   144	});
+   145	
+   146	// ===========================================================================
+   147	// ITEM 5 (v1.1) — streaming log caps. superviseChild must route its log writes
+   148	// through an injectable fs (opts.fs, default node:fs) and cap DURING capture, so
+   149	// a runaway child cannot balloon the supervisor. Memory boundedness is observed
+   150	// per the plan's acceptance — a recording-fake byte counter — plus the capped
+   151	// file staying ≤ cap and the verdict tail surviving.
+   152	//
+   153	// NOTE (test-author): the plan named tests/unit/loop-children.test.mjs, but that
+   154	// file holds only the PURE helpers; superviseChild's real-process coverage and
+   155	// the fake-process pattern live HERE, so these pins land in the integration file
+   156	// (nothing existing is modified). Flagged for the verifier.
+   157	describe('superviseChild — streaming log cap (item 5)', () => {
+   158	  // A recording fs that DELEGATES to real node:fs (so the file still lands on
+   159	  // disk) and records every write's path + byte size — the sanctioned
+   160	  // recording-fake byte counter.
+   161	  function recordingFs() {
+   162	    const writes = /** @type {Array<{method: string, path: string, bytes: number}>} */ ([]);
+   163	    return {
+   164	      writes,
+   165	      writeFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'writeFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return writeFileSync(p, d, o); },
+   166	      appendFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'appendFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return appendFileSync(p, d, o); },
+   167	      mkdirSync: (/** @type {any} */ p, /** @type {any} */ o) => mkdirSync(p, o),
+   168	    };
+   169	  }
+   170	
+   171	  it('RED (5-1): a >>cap child routes its log through the injected fs, caps the file, and keeps the verdict tail', { skip: SKIP_WIN }, async () => {
+   172	    const { superviseChild } = M();
+   173	    const dir = scratch();
+   174	    const cap = 2000;
+   175	    const script = join(dir, 'flood.cjs');
+   176	    // ~5x the cap of body, then the verdict tail at the very END.
+   177	    writeFileSync(
+   178	      script,
+   179	      [
+   180	        'process.stdout.write("SYSTEM: end with VERDICT\\n");',
+   181	        'for (let i = 0; i < 100; i++) process.stdout.write("X".repeat(100) + "\\n"); // ~10 KB body in chunks',
+   182	        'process.stdout.write("tokens used: 9\\n");',
+   183	        'process.stdout.write("VERDICT: APPROVED\\n");',
+   184	        'process.stdout.write("FINDINGS: none\\n");',
+   185	        'process.exit(0);',
+   186	      ].join('\n'),
+   187	    );
+   188	    const logPath = join(dir, 'flood.log');
+   189	    const rec = recordingFs();
+   190	
+   191	    const result = await superviseChild(
+   192	      { command: process.execPath, args: [script], cwd: dir },
+   193	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex', fs: rec },
+   194	    );
+   195	
+   196	    const logWrites = rec.writes.filter((w) => w.path === logPath);
+   197	    assert.ok(logWrites.length >= 1, 'the log is written through the INJECTED fs (opts.fs), not node:fs directly');
+   198	    const peak = Math.max(...logWrites.map((w) => w.bytes));
+   199	    assert.ok(peak <= cap + 512, `no single log write dumps more than the cap (+slack); peak=${peak}`);
+   200	    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= cap + 512, 'the final log respects maxLogBytes (+ marker slack)');
+   201	    assert.equal(result.verdict, 'APPROVED', 'the verdict tail survives capping (parsed from the capped transcript)');
+   202	  });
+   203	
+   204	  it('GUARD (5-2): a small-output child’s log is byte-identical to today (default fs, no regression)', { skip: SKIP_WIN }, async () => {
+   205	    const { superviseChild } = M();
+   206	    const dir = scratch();
+   207	    const script = join(dir, 'small.cjs');
+   208	    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
+   209	    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
+   210	    const logPath = join(dir, 'small.log');
+   211	
+   212	    const result = await superviseChild(
+   213	      { command: process.execPath, args: [script], cwd: dir },
+   214	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' }, // default fs — no injection
+   215	    );
+   216	    assert.equal(result.exitCode, 0);
+   217	    assert.equal(readFileSync(logPath, 'utf8'), body, 'a sub-cap child log is written verbatim (no truncation marker, no regression)');
+   218	  });
+   219	});
+   220	
+   221	// ===========================================================================
+   222	describe('superviseChild — stdin is genuinely closed', () => {
+   223	  it('a child that reads stdin does not hang — it gets EOF and exits promptly', { skip: SKIP_WIN }, async () => {
+   224	    const { superviseChild } = M();
+   225	    const dir = scratch();
+   226	    const script = join(dir, 'reader.cjs');
+   227	    // Reading fd 0 must return immediately (stdin closed/ignored), not block.
+   228	    writeFileSync(
+   229	      script,
+   230	      [
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1273,1335p'" in /Users/saksham/baton
+ succeeded in 0ms:
+  1273	  });
+  1274	});
+  1275	
+  1276	// ===========================================================================
+  1277	// ITEM 4b (v1.1) — review artifacts, pipeline half. Multi-child gates encode the
+  1278	// child ROLE in the filename: reviews/<runId>/subtask-<id>-review/iteration-NN/
+  1279	// <role>.prompt.md + <role>.verdict.md, role ∈ writer|reviewer|merger (the
+  1280	// writer self-check verdict included). NN = the gate iteration count at the
+  1281	// WRITER spawn of the cycle (01-based) — all three children share it.
+  1282	describe('pipeline — review artifacts (item 4b)', () => {
+  1283	  const promptOf = (call) => (argsOf(call) ?? []).find((a) => a.includes('You are the')) ?? '';
+  1284	  const parseVerdictMd = (text) => {
+  1285	    const lines = String(text ?? '').split('\n');
+  1286	    const header = /** @type {Record<string,string>} */ ({});
+  1287	    let i = 0;
+  1288	    for (; i < lines.length; i += 1) {
+  1289	      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
+  1290	      if (!m) break;
+  1291	      header[m[1].toLowerCase()] = m[2].trim();
+  1292	    }
+  1293	    return { header, body: lines.slice(i).join('\n').trim() };
+  1294	  };
+  1295	
+  1296	  it('RED (4b pipeline): a clean subtask cycle writes writer/reviewer/merger prompt+verdict artifacts under iteration-01', async () => {
+  1297	    const subtasks = [{ id: 't1', title: 'only' }];
+  1298	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+  1299	    io.superviseChild = fakeRunner(io, cleanSubtask()); // writer, reviewer, merger — all APPROVED
+  1300	    io.__runner = io.superviseChild;
+  1301	    const code = await run(['pipeline', 'run'], io);
+  1302	    assert.equal(code, 0, `the subtask completes; stderr: ${io.stderrText()}`);
+  1303	    const runId = (await loadLoopState('/repo', io)).state.runId;
+  1304	    const base = `/repo/reviews/${runId}/subtask-t1-review/iteration-01`;
+  1305	    const f = (rel) => io.files()[`${base}/${rel}`];
+  1306	
+  1307	    const writerCall = writersOf(io.__runner)[0];
+  1308	    const reviewerCall = reviewersOf(io.__runner)[0];
+  1309	    const mergerCall = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
+  1310	    for (const [role, call, model] of [['writer', writerCall, 'wa-model'], ['reviewer', reviewerCall, 'wb-model'], ['merger', mergerCall, 'mg-model']]) {
+  1311	      assert.ok(call, `${role} child ran`);
+  1312	      assert.ok(f(`${role}.prompt.md`), `${role}.prompt.md written under iteration-01`);
+  1313	      assert.ok(f(`${role}.verdict.md`), `${role}.verdict.md written under iteration-01`);
+  1314	      assert.equal(f(`${role}.prompt.md`), promptOf(call), `${role}.prompt.md === the ${role} prompt verbatim`);
+  1315	      const v = parseVerdictMd(f(`${role}.verdict.md`));
+  1316	      assert.equal(v.header.verdict, 'APPROVED', `${role} verdict header: exact verdict`);
+  1317	      assert.match(v.header.model ?? '', new RegExp(model), `${role} verdict header: concrete model`);
+  1318	      assert.match(v.header.date ?? '', /^\d{4}-\d{2}-\d{2}$/, `${role} verdict header: date`);
+  1319	      assert.ok('degraded' in v.header, `${role} verdict header: degraded field present`);
+  1320	    }
+  1321	  });
+  1322	});
+  1323	
+  1324	// ===========================================================================
+  1325	// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+  1326	// actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
+  1327	// rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
+  1328	// re-derived mid-run. Pinned in a MASTER-trunk fake repo — the observable is
+  1329	// "master used everywhere; one derivation", not the exact command.
+  1330	
+  1331	// A fake git modeling a MASTER-trunk repo: the default branch is 'master'
+  1332	// (symbolic-ref refs/remotes/origin/HEAD → origin/master; fallback rev-parse
+  1333	// --abbrev-ref HEAD at the ROOT → master). It answers 'main' refs LENIENTLY
+  1334	// (same sha/ranges) so a main-hardcoded impl still runs end to end — the pin's
+  1335	// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
+
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt | sed -n '1,220p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	Reading additional input from stdin...
+     2	2026-07-20T06:06:43.420849Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+     3	OpenAI Codex v0.144.1
+     4	--------
+     5	workdir: /Users/saksham/baton
+     6	model: gpt-5.5
+     7	provider: openai
+     8	approval: never
+     9	sandbox: read-only
+    10	reasoning effort: xhigh
+    11	reasoning summaries: none
+    12	session id: 019f7e22-48b0-78f2-96ef-27552b5c8f70
+    13	--------
+    14	user
+    15	<task>
+    16	
+    17	> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+    18	You are the test-verifier for the baton repo, items-4b-5 series iteration 2 of 5, re-auditing after your iteration-1 BLOCKED verdict (3 findings; report: reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/raw-output.txt). Uncommitted, tests-only; baseline db13a92. Item-5 placement + seam already accepted at iteration 1.
+    19	
+    20	Claimed closures:
+    21	1. 4b-1: prompt.md asserted verbatim (=== the recorded child prompt); both verdict.md files parsed and asserted against the full reviews/README.md header contract (role, concrete model + effort, harness/platform, date, exact verdict, degraded field, body === exact findings).
+    22	2. 4b-2: warning matched against the concrete path reviews/<runId>/gate-1/iteration-01/(prompt|verdict).md with runId read from persisted state.
+    23	3. Pipeline 4b (per the coordinator's scope ruling): one clean single-iteration subtask leaves reviews/<runId>/subtask-t1-review/iteration-01/ with writer.*, reviewer.*, merger.* prompt+verdict pairs — verbatim prompts, APPROVED verdicts, concrete models, date, degraded field; NN shared at writer spawn.
+    24	
+    25	Claimed totals: suite 1231, 1227 pass / 4 red (4b-1, 4b-2, 4b-pipeline, 5-1), guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — the item-5 integration test is judged by reading only.
+    26	
+    27	Scope: verify the 3 closures genuine, red-phase integrity, no weakening, no regressions. Raise only NEW defects or defective closures — distinguish blocking from implementation-absorbable refinements.
+    28	
+    29	You may run: node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+    30	</task>
+    31	<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+    32	<structured_output_contract>
+    33	End with exactly:
+    34	VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+    35	FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+    36	(FINDINGS may be empty only with APPROVED.)
+    37	</structured_output_contract>
+    38	codex
+    39	Phase: test verification. I’m going to audit the changed tests against the prior blocked findings, then run only the allowed validation where the read-only sandbox permits it.
+    40	  → Inspect prior verdict and changed files
+    41	  • Audit claimed closures in test code
+    42	  • Run allowed validation commands
+    43	  • Issue gate verdict with file-line findings
+    44	exec
+    45	/bin/zsh -lc 'git diff --stat db13a92' in /Users/saksham/baton
+    46	exec
+    47	/bin/zsh -lc "sed -n '1,240p' reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/raw-output.txt" in /Users/saksham/baton
+    48	exec
+    49	/bin/zsh -lc 'git diff --name-only db13a92' in /Users/saksham/baton
+    50	 succeeded in 0ms:
+    51	 tests/commands/loop-run.test.mjs               | 97 ++++++++++++++++++++++++++
+    52	 tests/commands/pipeline-run.test.mjs           | 48 +++++++++++++
+    53	 tests/integration/loop-children-spawn.test.mjs | 77 +++++++++++++++++++-
+    54	 3 files changed, 221 insertions(+), 1 deletion(-)
+    55	
+    56	 succeeded in 0ms:
+    57	tests/commands/loop-run.test.mjs
+    58	tests/commands/pipeline-run.test.mjs
+    59	tests/integration/loop-children-spawn.test.mjs
+    60	
+    61	 succeeded in 0ms:
+    62	Reading additional input from stdin...
+    63	2026-07-20T05:57:48.047955Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+    64	OpenAI Codex v0.144.1
+    65	--------
+    66	workdir: /Users/saksham/baton
+    67	model: gpt-5.5
+    68	provider: openai
+    69	approval: never
+    70	sandbox: read-only
+    71	reasoning effort: xhigh
+    72	reasoning summaries: none
+    73	session id: 019f7e1a-1e4d-7aa3-a4eb-30b0284bd4aa
+    74	--------
+    75	user
+    76	<task>
+    77	
+    78	> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+    79	You are the test-verifier for the baton repo, items-4b-5 series iteration 1 of 5, auditing the Milestone-D build pins for plan items 4b (review artifacts from gate children) and 5 (streaming log caps) BEFORE implementation. Authority: docs/plans/2026-07-20-v1.1-hardening.md (Gate-1 approved). Baseline db13a92 (items 1-4 landed; suite 1225 green). Uncommitted, tests-only: tests/commands/loop-run.test.mjs (4b block) + tests/integration/loop-children-spawn.test.mjs (item 5). Claimed totals: suite 1230, 1227 pass / 3 red, guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — the INTEGRATION file (where item 5 lives) will not run FOR YOU; judge item 5 entirely by reading, and validate red/guard claims from the test code itself.
+    80	
+    81	The pins:
+    82	- 4b-1 (RED): two-iteration gate (BLOCKED→APPROVED) leaves reviews/<runId>/gate-1/iteration-01..02/ with prompt.md verbatim (2nd embeds prior findings) and verdict.md (verdict + findings + role/model header). NN = gate iteration at parse, 01-based.
+    83	- 4b-2 (RED): reviews/-writes-throw io.fs still completes exit 0/DONE with a stderr warning naming the artifact path (fail-open).
+    84	- 4b GUARD (green): a dead (model-unavailable) gate child with no parsed verdict writes no verdict.md.
+    85	- SCOPING to judge: no pipeline 4b case — a pipeline gate has multiple children per iteration (writer self-check/reviewer/merger) making iteration-NN→child mapping ambiguous; loop-side pinned as the core. Acceptable against plan item 4b, or must a pipeline artifact pin exist now?
+    86	- 5-1 (RED): a fixture child emitting ~5x maxLogBytes through a recording-fake opts.fs — log routed through the injected fs, no single write exceeds cap+slack, final file ≤ cap+slack, verdict tail survives capping. (True in-memory boundedness has no honest observable with current seams; the recording-fs + peak-write-bound + final-cap + tail-correctness set was the sanctioned fallback — judge its sufficiency.)
+    87	- 5-2 GUARD (green): sub-cap child byte-identical via default fs.
+    88	- PLACEMENT to judge: item 5 pinned in the integration file (real superviseChild lives there; the unit file holds only pure helpers) — acceptable?
+    89	
+    90	Audit adversarially:
+    91	1. Would a WRONG implementation pass? (a) 4b-1 — headers/prompts asserted with real content (verbatim prompt equality or distinctive substrings), NN semantics unambiguous? (b) 4b-2 — does the throwing fs only throw for reviews/ paths (so the run's own state writes still work), and is the warning assertion path-specific? (c) 5-1 — could an impl satisfy "final ≤ cap" by post-mortem truncation while still buffering unbounded in memory AND passing the peak-write-bound (i.e. is the peak-write bound genuinely evidence of streaming)? Be honest about the seam limits and say whether the pin set is the strongest available.
+    92	2. Red-phase integrity (4b reds runnable for you; item 5 by reading): behavioral failures, guards meaningful, baseline 1225 unaffected.
+    93	3. Coverage vs plan items 4b/5: unpinned sub-items? Judge both scoping questions explicitly.
+    94	
+    95	You may run: node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+    96	</task>
+    97	<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+    98	<structured_output_contract>
+    99	End with exactly:
+   100	VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+   101	FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+   102	(FINDINGS may be empty only with APPROVED.)
+   103	</structured_output_contract>
+   104	codex
+   105	I’m in test-verification/review phase. I’ll read the approved plan and the two test files first, then run the runnable checks the task permits and judge item 5 from source because of the stated sandbox limitation.
+   106	exec
+   107	/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+   108	 succeeded in 0ms:
+   109	     1	import { describe, it } from 'node:test';
+   110	     2	import assert from 'node:assert/strict';
+   111	     3	import * as nodeFs from 'node:fs';
+   112	     4	import { fileURLToPath } from 'node:url';
+   113	     5	import { join, dirname } from 'node:path';
+   114	     6	import { makeIo } from '../helpers/fakeio.mjs';
+   115	     7	import { cmdLoop } from '../../core/src/commands/loop.mjs';
+   116	     8	import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+   117	     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+   118	    10	
+   119	    11	// ---------------------------------------------------------------------------
+   120	    12	// RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
+   121	    13	// core/src/commands/loop.mjs with the `run` subcommand that COMPOSES the loop
+   122	    14	// modules (spec/state/children/failover) over the real command machinery.
+   123	    15	// Source: docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop
+   124	    16	// (Layer 2)", §"Smoke gate", §"Caps", §"Supervisor lifetime and recovery".
+   125	    17	//
+   126	    18	// INJECTION SEAM (pinned): the command runs children via
+   127	    19	//   io.superviseChild ?? superviseChild
+   128	    20	// so tests inject a scripted fake runner that returns the next queued result
+   129	    21	// and records the {command, args, env} it was invoked with. Everything else
+   130	    22	// drives the real modules over memfs.
+   131	    23	//
+   132	    24	// The `run` subcommand does not exist yet: `loop run` currently exits 2
+   133	    25	// ("unknown subcommand 'run'"). Reds assert TARGET behavior (exit codes, spawn
+   134	    26	// counts, persisted state, ESCALATION/SMOKE-REVIEW files) — distinguished from
+   135	    27	// today's generic exit 2. --detach is OUT of unit scope (deferred to e2e).
+   136	    28	//
+   137	    29	// PINNED EXIT CODES: done 0 · awaiting-smoke-approval 0 · escalated 3 ·
+   138	    30	// parked 4 · live-lock refusal 1 · usage error 2.
+   139	    31	// ---------------------------------------------------------------------------
+   140	    32	
+   141	    33	const here = dirname(fileURLToPath(import.meta.url));
+   142	    34	const repoRoot = join(here, '..', '..');
+   143	    35	const SIG_ABS = join(repoRoot, 'core', 'data', 'signatures.v1.json');
+   144	    36	const SIG_CONTENT = nodeFs.readFileSync(SIG_ABS, 'utf8');
+   145	    37	
+   146	    38	const T0 = '2026-07-19T00:00:00.000Z';
+   147	    39	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+   148	    40	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account';
+   149	    41	
+   150	    42	const CONFIG = {
+   151	    43	  schema: 'baton/config@1',
+   152	    44	  roles: {
+   153	    45	    planner: ['claude-code/claude-fable-5'],
+   154	    46	    'plan-reviewer': ['codex/gpt-5.6-sol@xhigh', 'claude-code/claude-fable-5@xhigh'],
+   155	    47	    'test-author': ['claude-code/claude-opus-4-8', 'codex/gpt-5.5@xhigh'],
+   156	    48	    'test-verifier': ['codex/gpt-5.5@xhigh', 'claude-code/claude-opus-4-8'],
+   157	    49	    implementer: ['claude-code/claude-fable-5', 'codex/gpt-5.6-sol@xhigh', 'cursor/composer'],
+   158	    50	    'final-reviewer-a': ['codex/gpt-5.6-sol@xhigh', 'codex/gpt-5.5@xhigh'],
+   159	    51	    'final-reviewer-b': ['claude-code/claude-fable-5@xhigh', 'claude-code/claude-opus-4-8'],
+   160	    52	  },
+   161	    53	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+   162	    54	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+   163	    55	};
+   164	    56	
+   165	    57	const loopSpec = (over = {}) => ({
+   166	    58	  schema: 'baton/loop@1',
+   167	    59	  goal: 'Ship the loop',
+   168	    60	  constraints: [],
+   169	    61	  smoke: { cmd: null, expect: null },
+   170	    62	  phases: [
+   171	    63	    { id: 'plan', role: 'planner' },
+   172	    64	    { id: 'gate-1', role: 'plan-reviewer' },
+   173	    65	  ],
+   174	    66	  budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 },
+   175	    67	  ...over,
+   176	    68	});
+   177	    69	
+   178	    70	function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+   179	    71	  return {
+   180	    72	    schema: 'baton/bundle@1',
+   181	    73	    bundleId: 'b_looprun00000000',
+   182	    74	    generation: 1,
+   183	    75	    createdAt: T0,
+   184	    76	    updatedAt: T0,
+   185	    77	    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+   186	    78	    task: { goal: 'Ship the loop', constraints: [], acceptance: [] },
+   187	    79	    plan: { steps: [] },
+   188	    80	    decisions: [],
+   189	    81	    files: { touched: [] },
+   190	    82	    roles: { assignments: {} },
+   191	    83	    git: null,
+   192	    84	    handoff:
+   193	    85	      status === 'sealed'
+   194	    86	        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+   195	    87	        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+   196	    88	    journalSeq: 0,
+   197	    89	    compaction: { droppedDecisions: 0, note: null },
+   198	    90	    dedupeRing: [],
+   199	    91	  };
+   200	    92	}
+   201	    93	
+   202	    94	/**
+   203	    95	 * Scripted fake child runner honoring the injection seam. Each call shifts the
+   204	    96	 * next result off the queue, writes its logContent to opts.logPath (so the
+   205	    97	 * command reads the transcript from the child's LOG file), and records the
+   206	    98	 * spawn spec.
+   207	    99	 */
+   208	   100	function fakeRunner(io, script) {
+   209	   101	  const queue = [...script];
+   210	   102	  const calls = /** @type {any[]} */ ([]);
+   211	   103	  const fn = (/** @type {any} */ spec, /** @type {any} */ opts = {}) => {
+   212	   104	    calls.push({ spec, opts, args: spec?.args ?? [], command: spec?.command, env: spec?.env });
+   213	   105	    const r = queue.shift() ?? { timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '' };
+   214	   106	    // No fallback: the command MUST pass a real logPath (asserted below).
+   215	   107	    const logPath = opts.logPath;
+   216	   108	    if (typeof r.logContent === 'string') {
+   217	   109	      const dir = logPath.slice(0, logPath.lastIndexOf('/'));
+   218	   110	      io.fs.mkdirSync(dir, { recursive: true });
+   219	   111	      io.fs.writeFileSync(logPath, r.logContent);
+   220	   112	    }
+
+2026-07-20T06:11:44.503896Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt | sed -n '220,520p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   220	   112	    }
+   221	   113	    return Promise.resolve({ timedOut: r.timedOut ?? false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath });
+   222	   114	  };
+   223	   115	  fn.calls = calls;
+   224	   116	  return fn;
+   225	   117	}
+   226	   118	
+   227	   119	function makeLoopRepo({ spec = loopSpec(), files = {}, runner, execFile, env = {} } = {}) {
+   228	   120	  const io = makeIo({
+   229	   121	    now: T0,
+   230	   122	    host: 'loop-host',
+   231	   123	    pid: 4242,
+   232	   124	    startTime: 111000,
+   233	   125	    fencingSeed: 1,
+   234	   126	    env,
+   235	   127	    files: {
+   236	   128	      [SIG_ABS]: SIG_CONTENT,
+   237	   129	      '/repo/baton.config.json': JSON.stringify(CONFIG, null, 2),
+   238	   130	      ...(spec ? { '/repo/loop.json': JSON.stringify(spec, null, 2) + '\n' } : {}),
+   239	   131	      ...files,
+   240	   132	    },
+   241	   133	  });
+   242	   134	  if (execFile) io.execFile = execFile;
+   243	   135	  const fake = runner ?? fakeRunner(io, []);
+   244	   136	  io.superviseChild = fake;
+   245	   137	  io.__runner = fake;
+   246	   138	  return io;
+   247	   139	}
+   248	   140	
+   249	   141	const argsOf = (io, i) => (io.__runner.calls[i]?.args ?? []).map(String);
+   250	   142	const serialize = (io, i) => argsOf(io, i).join(' ');
+   251	   143	const valAfter = (arr, flag) => { const i = arr.indexOf(flag); return i >= 0 ? arr[i + 1] : undefined; };
+   252	   144	const loopFile = (io, name) => io.files()[`${loopPaths('/repo').dir}/${name}`];
+   253	   145	
+   254	   146	// ===========================================================================
+   255	   147	describe('loop run — preconditions', () => {
+   256	   148	  it('no loop.json -> usage error (exit 2) naming loop.json / loop init, ZERO children spawned', async () => {
+   257	   149	    const io = makeLoopRepo({ spec: null }); // no loop.json seeded
+   258	   150	    const code = await cmdLoop(['run'], io);
+   259	   151	    assert.equal(code, 2);
+   260	   152	    assert.match(io.stderrText() + io.stdoutText(), /loop\.json|loop init/i, 'the error points at the missing spec, not a generic unknown-subcommand');
+   261	   153	    assert.equal(io.__runner.calls.length, 0, 'no child spawned when preconditions fail');
+   262	   154	  });
+   263	   155	
+   264	   156	  it('an invalid spec (unknown role) -> exit 2 surfacing validateLoopSpec errors, ZERO children spawned', async () => {
+   265	   157	    // Config MISSING plan-reviewer -> the spec references an unknown role.
+   266	   158	    const cfg = JSON.parse(JSON.stringify(CONFIG));
+   267	   159	    delete cfg.roles['plan-reviewer'];
+   268	   160	    const io = makeLoopRepo({ files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2) } });
+   269	   161	    const code = await cmdLoop(['run'], io);
+   270	   162	    assert.equal(code, 2);
+   271	   163	    assert.match(io.stderrText() + io.stdoutText(), /unknown role 'plan-reviewer'/, 'the validateLoopSpec error is surfaced');
+   272	   164	    assert.equal(io.__runner.calls.length, 0, 'no child spawned for an invalid spec');
+   273	   165	  });
+   274	   166	});
+   275	   167	
+   276	   168	// ===========================================================================
+   277	   169	describe('loop run — supervisor run lock', () => {
+   278	   170	  it('a LIVE supervisor.lock refuses a second run (exit 1) naming the live pid', async () => {
+   279	   171	    const io = makeLoopRepo({ execFile: undefined });
+   280	   172	    // A different, ALIVE supervisor already holds the lock.
+   281	   173	    io.processAlive = (p) => p === 55555;
+   282	   174	    const p = loopPaths('/repo');
+   283	   175	    io.fs.mkdirSync(p.dir, { recursive: true });
+   284	   176	    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 55555, startTime: 222, runId: 'loop-other' }));
+   285	   177	
+   286	   178	    const code = await cmdLoop(['run'], io);
+   287	   179	    assert.equal(code, 1, 'a live supervisor blocks a second run');
+   288	   180	    assert.match(io.stderrText() + io.stdoutText(), /55555/, 'the refusal names the live supervisor pid');
+   289	   181	    assert.equal(io.__runner.calls.length, 0, 'no child spawned while another supervisor is live');
+   290	   182	  });
+   291	   183	
+   292	   184	  it('a provably-DEAD supervisor.lock is recovered and the run proceeds', async () => {
+   293	   185	    const io = makeLoopRepo({ runner: undefined });
+   294	   186	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   295	   187	    io.__runner = io.superviseChild;
+   296	   188	    // Default processAlive: only this io's own pid is alive; 999999 is dead.
+   297	   189	    const p = loopPaths('/repo');
+   298	   190	    io.fs.mkdirSync(p.dir, { recursive: true });
+   299	   191	    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'loop-dead' }));
+   300	   192	
+   301	   193	    const code = await cmdLoop(['run'], io);
+   302	
+   303	exec
+   304	/bin/zsh -lc 'git status --short' in /Users/saksham/baton
+   305	 succeeded in 0ms:
+   306	 M tests/commands/loop-run.test.mjs
+   307	 M tests/commands/pipeline-run.test.mjs
+   308	 M tests/integration/loop-children-spawn.test.mjs
+   309	?? reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/
+   310	
+   311	codex
+   312	The diff is tests-only against `db13a92`: the modified files are the two command test files plus the item-5 integration test. I’m reading the previous BLOCKED report now so I can separate true closures from newly introduced defects.
+   313	exec
+   314	/bin/zsh -lc 'tail -n 160 reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/raw-output.txt' in /Users/saksham/baton
+   315	 succeeded in 0ms:
+   316	   121	
+   317	   122	// ===========================================================================
+   318	   123	describe('buildChildArgv — codex roles', () => {
+   319	   124	  it('an implementer gets codex exec with a WRITE sandbox, model + effort, root, prompt', () => {
+   320	   125	    const { buildChildArgv } = M();
+   321	   126	    const r = buildChildArgv(asg('codex', 'implementer', 'gpt-5.6-sol', 'xhigh'), 'PROMPT-TEXT', { root: '/repo' });
+   322	   127	    assert.equal(r.command, 'codex');
+   323	   128	    assert.ok(r.args.includes('exec'));
+   324	   129	    assert.equal(valAfter(r.args, '-C'), '/repo', 'the working root is passed with -C');
+   325	   130	    assert.equal(valAfter(r.args, '--model'), 'gpt-5.6-sol');
+   326	   131	    assert.ok(r.args.includes('-c') && r.args.includes('model_reasoning_effort=xhigh'), 'effort is passed via -c');
+   327	   132	    assert.ok(r.args.includes('PROMPT-TEXT'));
+   328	   133	    assert.match(String(valAfter(r.args, '-s')), /write/, 'implementer runs in a write sandbox');
+   329	   134	  });
+   330	   135	
+   331	   136	  it('EVERY reviewer role runs codex in a READ-ONLY sandbox', () => {
+   332	   137	    const { buildChildArgv } = M();
+   333	   138	    for (const role of REVIEWER_ROLES) {
+   334	   139	      const r = buildChildArgv(asg('codex', role, 'gpt-5.6-sol', 'xhigh'), 'P', { root: '/repo' });
+   335	   140	      assert.equal(valAfter(r.args, '-s'), 'read-only', `${role} gets the read-only sandbox`);
+   336	   141	    }
+   337	   142	  });
+   338	   143	});
+   339	   144	
+   340	   145	// ===========================================================================
+   341	   146	// D2 (dogfood milestone C) — a codex WRITE-capable child in a LINKED worktree
+   342	   147	// cannot commit unless the MAIN repo's .git dir is an extra sandbox writable
+   343	   148	// root: a linked worktree's index/lock lives under <mainRoot>/.git/worktrees/
+   344	   149	// <seat>, OUTSIDE the seat-cwd sandbox (live child 002: "sandbox only has read
+   345	   150	// access to .git/worktrees/wt-a/index.lock"). The caller passes the main .git
+   346	   151	// path via opts.gitDir; buildChildArgv adds it to sandbox_workspace_write.
+   347	   152	// writable_roots for write-capable codex children only.
+   348	   153	describe('buildChildArgv — codex write children get the main .git as an extra writable root (D2)', () => {
+   349	   154	  // Collect every value that follows a `-c` flag (codex config args).
+   350	   155	  const configArgs = (/** @type {string[]} */ args) =>
+   351	   156	    args.map((a, i) => (a === '-c' ? args[i + 1] : null)).filter((v) => typeof v === 'string');
+   352	   157	  const writableRootsArg = (/** @type {string[]} */ args) =>
+   353	   158	    configArgs(args).find((v) => /sandbox_workspace_write\.writable_roots/.test(String(v)));
+   354	   159	
+   355	   160	  it('RED (D2): a WRITE-capable codex child adds the passed main .git dir to sandbox_workspace_write.writable_roots', () => {
+   356	   161	    const { buildChildArgv } = M();
+   357	   162	    // The seat cwd is a linked worktree; the main repo .git is elsewhere.
+   358	   163	    const r = buildChildArgv(
+   359	   164	      asg('codex', 'implementer', 'gpt-5.6-sol', 'xhigh'),
+   360	   165	      'P',
+   361	   166	      { root: '/repo/.worktrees/wt-a', gitDir: '/repo/.git' },
+   362	   167	    );
+   363	   168	    assert.equal(valAfter(r.args, '-s'), 'workspace-write', 'precondition: the implementer is write-capable');
+   364	   169	    const wr = writableRootsArg(r.args);
+   365	   170	    assert.ok(wr, 'a -c sandbox_workspace_write.writable_roots config arg is present for a write child with a gitDir');
+   366	   171	    assert.match(String(wr), /\/repo\/\.git/, 'the writable_roots names the MAIN repo .git dir (where the linked worktree index/lock live)');
+   367	   172	  });
+   368	   173	
+   369	   174	  it('GUARD (D2): a READ-ONLY codex child gets NO extra writable root, even when a gitDir is passed', () => {
+   370	   175	    const { buildChildArgv } = M();
+   371	   176	    for (const role of REVIEWER_ROLES) {
+   372	   177	      const r = buildChildArgv(asg('codex', role, 'gpt-5.6-sol', 'xhigh'), 'P', { root: '/repo/.worktrees/wt-b', gitDir: '/repo/.git' });
+   373	   178	      assert.equal(valAfter(r.args, '-s'), 'read-only', `${role} stays read-only`);
+   374	   179	      assert.equal(writableRootsArg(r.args), undefined, `${role} never receives a sandbox_workspace_write.writable_roots grant`);
+   375	   180	    }
+   376	   181	  });
+   377	   182	});
+   378	   183	
+   379	   184	// ===========================================================================
+   380	   185	describe('buildChildArgv — every child: guard env, sole-author identity, closed stdin', () => {
+   381	   186	  for (const spec of [
+   382	   187	    ['claude-code', 'implementer', 'claude-fable-5', null],
+   383	   188	    ['codex', 'implementer', 'gpt-5.6-sol', 'xhigh'],
+   384	   189	  ]) {
+   385	   190	    it(`${spec[0]}: BATON_SUPERVISED_CHILD='1' + sole-author git identity + stdin closed`, () => {
+   386	   191	      const { buildChildArgv } = M();
+   387	   192	      const r = buildChildArgv(asg(spec[0], spec[1], spec[2], spec[3]), 'P', { root: '/repo' });
+   388	   193	      assert.equal(r.env.BATON_SUPERVISED_CHILD, '1', 'children are marked supervised so their own hooks no-op');
+   389	   194	      // AGENTS.md §9: sole author, zero AI attribution — pinned on BOTH author and committer.
+   390	   195	      assert.equal(r.env.GIT_AUTHOR_NAME, 'SakshamUboweja');
+   391	   196	      assert.equal(r.env.GIT_AUTHOR_EMAIL, 'ssakshamu@gmail.com');
+   392	   197	      assert.equal(r.env.GIT_COMMITTER_NAME, 'SakshamUboweja');
+   393	   198	      assert.equal(r.env.GIT_COMMITTER_EMAIL, 'ssakshamu@gmail.com');
+   394	   199	      // stdin closed (the codex-exec stdin-hang field failure): stdio[0] === 'ignore'.
+   395	   200	      assert.ok(Array.isArray(r.stdio), 'stdio is declared');
+   396	   201	      assert.equal(r.stdio[0], 'ignore', "the child's stdin is closed at spawn");
+   397	   202	    });
+   398	   203	  }
+   399	   204	});
+   400	   205	
+   401	   206	// ===========================================================================
+   402	   207	describe('parseVerdict — codex: region-bounded after the LAST "tokens used" marker', () => {
+   403	   208	  it('prompt-echo defense: an APPROVED quoted in the PROMPT region loses to a BLOCKED in the final region', () => {
+   404	   209	    const { parseVerdict } = M();
+   405	   210	    const transcript = [
+   406	   211	      'SYSTEM: you must end with exactly "VERDICT: APPROVED" when done', // prompt echo (pre-marker)
+   407	   212	      'working...',
+   408	   213	      'tokens used: 5123',
+   409	   214	      'On review the tests are weak.',
+   410	   215	      'VERDICT: BLOCKED',
+   411	   216	      'FINDINGS:',
+   412	   217	      '1. [high] the assertion is tautological',
+   413	   218	    ].join('\n');
+   414	   219	    const r = parseVerdict(transcript, { platform: 'codex' });
+   415	   220	    assert.equal(r.verdict, 'BLOCKED', 'only the region AFTER the last tokens-used marker is scanned');
+   416	
+   417	exec
+   418	/bin/zsh -lc "rg -n \"superviseChild — streaming log cap|RED \\(5-1\\)|GUARD \\(5-2\\)|mkdtempSync|scratch\\(\" tests/integration/loop-children-spawn.test.mjs" in /Users/saksham/baton
+   419	exec
+   420	/bin/zsh -lc 'rg -n "reviews/<runId>|Each gate|pipeline run|loop run|BOTH|two-iteration gate|recording-fake" docs/plans/2026-07-20-v1.1-hardening.md reviews/README.md' in /Users/saksham/baton
+   421	 succeeded in 0ms:
+   422	docs/plans/2026-07-20-v1.1-hardening.md:37:   `running` — re-prompts with the persisted findings, pinned for BOTH
+   423	docs/plans/2026-07-20-v1.1-hardening.md:38:   `loop run` and `pipeline run`; (c) escalations embed the latest
+   424	docs/plans/2026-07-20-v1.1-hardening.md:40:4b. **Review artifacts from gate children (G9 deferral).** Each gate
+   425	docs/plans/2026-07-20-v1.1-hardening.md:42:   `reviews/<runId>/<gate>/iteration-NN/{prompt.md, verdict.md}` in the
+   426	docs/plans/2026-07-20-v1.1-hardening.md:44:   supervisor after each verdict parse. Accept: a two-iteration gate leaves
+   427	docs/plans/2026-07-20-v1.1-hardening.md:52:   (observable via the capped file plus a recording-fake byte counter).
+   428	docs/plans/2026-07-20-v1.1-hardening.md:63:8. **Probe integration.** `loop run`/`pipeline run` currently resolve with
+   429	docs/plans/2026-07-20-v1.1-hardening.md:78:10. **`--detach` (last — largest surface).** `baton loop run --detach` and
+   430	docs/plans/2026-07-20-v1.1-hardening.md:79:    `baton pipeline run --detach`: fork the supervisor into a background
+   431	
+   432	 succeeded in 0ms:
+   433	3:import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+   434	10:// (mkdtempSync scratch dirs, real node child scripts). Source of truth:
+   435	37:function scratch() {
+   436	38:  const d = mkdtempSync(join(tmpdir(), 'baton-loop-child-'));
+   437	74:    const dir = scratch();
+   438	115:    const dir = scratch();
+   439	157:describe('superviseChild — streaming log cap (item 5)', () => {
+   440	171:  it('RED (5-1): a >>cap child routes its log through the injected fs, caps the file, and keeps the verdict tail', { skip: SKIP_WIN }, async () => {
+   441	173:    const dir = scratch();
+   442	204:  it('GUARD (5-2): a small-output child’s log is byte-identical to today (default fs, no regression)', { skip: SKIP_WIN }, async () => {
+   443	206:    const dir = scratch();
+   444	225:    const dir = scratch();
+   445	
+   446	2026-07-20T06:00:26.022647Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+   447	codex
+   448	**Audit Summary**
+   449	
+   450	Verified the runnable slice with `node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs`: only the two new loop 4b reds failed, at the artifact existence assertion and warning assertion sites [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:599), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:628). `npm run typecheck` passed.
+   451	
+   452	Item 5 is a real red by reading: the test records only injected `opts.fs` writes [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:161), [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196), while current `superviseChild` imports and calls node `writeFileSync` directly and accumulates `out` in memory [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:11), [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:187), [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:215). Placement in the integration file is acceptable: the unit file explicitly leaves `superviseChild` to integration coverage [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:20), and this file already uses real child scripts with `mkdtempSync` [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:37).
+   453	
+   454	The item 5 pin is not honest proof of bounded memory: a post-mortem implementation could still buffer `out` fully, then write one capped chunk through `opts.fs` and pass the peak-write/final-cap/tail assertions [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196). Given the plan’s own observable is “capped file plus recording-fake byte counter” [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:50), I treat that as an accepted seam limitation, not a blocker.
+   455	
+   456	VERDICT: BLOCKED
+   457	FINDINGS:
+   458	1. [high] 4b-1 would allow non-verbatim or malformed artifacts to pass: `prompt.md` is checked with `.includes(...)` instead of equality, and `verdict.md` only needs loose substrings rather than the required header block and exact parsed findings [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:601), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:609), [reviews/README.md](/Users/saksham/baton/reviews/README.md:21), [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:44) — Fix: assert exact prompt equality, and parse/assert both verdict files for exact verdict, exact findings, role, concrete model, harness, date, and degraded fields.
+   459	2. [medium] 4b-2’s warning assertion is not path-specific enough: the fake throws only for `/reviews/`, which is good, but the assertion accepts any stderr containing `reviews/` instead of the failed artifact path [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:621), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:628) — Fix: assert the warning names a concrete path like `reviews/<runId>/gate-1/iteration-01/prompt.md` or `verdict.md`.
+   460	3. [medium] 4b has no pipeline artifact pin even though the approved plan says “Each gate child” and the reviews layout includes subtask gate artifacts [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:40), [reviews/README.md](/Users/saksham/baton/reviews/README.md:11); pipeline has distinct writer, reviewer, and merger verdict children, making loop-only implementation pass while pipeline artifacts remain absent [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:475), [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:552), [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:582) — Fix: add a pipeline 4b test with an explicit child-to-artifact mapping, or record an approved scope decision deferring pipeline artifacts.
+   461	tokens used
+   462	92,218
+   463	**Audit Summary**
+   464	
+   465	Verified the runnable slice with `node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs`: only the two new loop 4b reds failed, at the artifact existence assertion and warning assertion sites [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:599), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:628). `npm run typecheck` passed.
+   466	
+   467	Item 5 is a real red by reading: the test records only injected `opts.fs` writes [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:161), [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196), while current `superviseChild` imports and calls node `writeFileSync` directly and accumulates `out` in memory [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:11), [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:187), [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:215). Placement in the integration file is acceptable: the unit file explicitly leaves `superviseChild` to integration coverage [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:20), and this file already uses real child scripts with `mkdtempSync` [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:37).
+   468	
+   469	The item 5 pin is not honest proof of bounded memory: a post-mortem implementation could still buffer `out` fully, then write one capped chunk through `opts.fs` and pass the peak-write/final-cap/tail assertions [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196). Given the plan’s own observable is “capped file plus recording-fake byte counter” [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:50), I treat that as an accepted seam limitation, not a blocker.
+   470	
+   471	VERDICT: BLOCKED
+   472	FINDINGS:
+   473	1. [high] 4b-1 would allow non-verbatim or malformed artifacts to pass: `prompt.md` is checked with `.includes(...)` instead of equality, and `verdict.md` only needs loose substrings rather than the required header block and exact parsed findings [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:601), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:609), [reviews/README.md](/Users/saksham/baton/reviews/README.md:21), [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:44) — Fix: assert exact prompt equality, and parse/assert both verdict files for exact verdict, exact findings, role, concrete model, harness, date, and degraded fields.
+   474	2. [medium] 4b-2’s warning assertion is not path-specific enough: the fake throws only for `/reviews/`, which is good, but the assertion accepts any stderr containing `reviews/` instead of the failed artifact path [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:621), [tests/commands/loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:628) — Fix: assert the warning names a concrete path like `reviews/<runId>/gate-1/iteration-01/prompt.md` or `verdict.md`.
+   475	3. [medium] 4b has no pipeline artifact pin even though the approved plan says “Each gate child” and the reviews layout includes subtask gate artifacts [docs/plans/2026-07-20-v1.1-hardening.md](/Users/saksham/baton/docs/plans/2026-07-20-v1.1-hardening.md:40), [reviews/README.md](/Users/saksham/baton/reviews/README.md:11); pipeline has distinct writer, reviewer, and merger verdict children, making loop-only implementation pass while pipeline artifacts remain absent [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:475), [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:552), [core/src/commands/pipeline.mjs](/Users/saksham/baton/core/src/commands/pipeline.mjs:582) — Fix: add a pipeline 4b test with an explicit child-to-artifact mapping, or record an approved scope decision deferring pipeline artifacts.
+   476	
+   477	exec
+   478	/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '240,520p'" in /Users/saksham/baton
+   479	 succeeded in 0ms:
+   480	   240	  it('BLOCKED re-runs with findings in the retry prompt; the 6th attempt NEVER spawns; escalated + ESCALATION.md; exit 3', async () => {
+   481	   241	    const io = makeLoopRepo({ spec: gateSpec, runner: undefined });
+   482	   242	    // Six BLOCKED results queued; only five may ever be consumed.
+   483	   243	    io.superviseChild = fakeRunner(io, [
+   484	   244	      { verdict: 'BLOCKED', findings: 'FINDING-ALPHA-1' },
+   485	   245	      { verdict: 'BLOCKED', findings: 'FINDING-BETA-2' },
+   486	   246	      { verdict: 'BLOCKED', findings: 'f3' },
+   487	   247	      { verdict: 'BLOCKED', findings: 'f4' },
+   488	   248	      { verdict: 'BLOCKED', findings: 'f5' },
+   489	   249	      { verdict: 'BLOCKED', findings: 'f6' },
+   490	   250	    ]);
+   491	   251	    io.__runner = io.superviseChild;
+   492	   252	
+   493	   253	    const code = await cmdLoop(['run'], io);
+   494	   254	    assert.equal(code, 3, 'escalation exits 3 (defined nonzero)');
+   495	   255	    assert.equal(io.__runner.calls.length, 5, 'exactly five gate attempts — a 6th is never spawned');
+   496	   256	    // Each retry carries the PRECEDING attempt's findings — later findings are
+   497	   257	    // not dropped in favor of the first.
+   498	   258	    assert.match(serialize(io, 1), /FINDING-ALPHA-1/, "the 2nd attempt's prompt carries the 1st attempt's findings");
+   499	   259	    assert.match(serialize(io, 2), /FINDING-BETA-2/, "the 3rd attempt's prompt carries the 2nd attempt's findings (continuity, not just the first)");
+   500	   260	
+   501	   261	    const { state } = await loadLoopState('/repo', io);
+   502	   262	    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the run escalated at the cap');
+   503	   263	    const esc = loopFile(io, 'ESCALATION.md');
+   504	   264	    assert.ok(esc, 'an ESCALATION.md was written under .handoff/loop');
+   505	   265	    assert.match(esc, /gate-1/, 'the escalation names the exhausted gate');
+   506	   266	  });
+   507	   267	});
+   508	   268	
+   509	   269	// ===========================================================================
+   510	   270	describe('loop run — smoke gate', () => {
+   511	   271	  const smokeSpec = loopSpec({
+   512	   272	    smoke: { cmd: 'npm run smoke', expect: 'ok' },
+   513	   273	    phases: [
+   514	   274	      { id: 'smoke-tests', role: 'test-author' },
+   515	   275	      { id: 'smoke-verify', role: 'test-verifier' },
+   516	   276	      { id: 'smoke-build', role: 'implementer' },
+   517	   277	      { id: 'subtask-implement', role: 'implementer' },
+   518	   278	    ],
+   519	   279	  });
+   520	   280	
+
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-01/raw-output.txt | sed -n '1,220p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	Reading additional input from stdin...
+     2	2026-07-20T05:57:48.047955Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+     3	OpenAI Codex v0.144.1
+     4	--------
+     5	workdir: /Users/saksham/baton
+     6	model: gpt-5.5
+     7	provider: openai
+     8	approval: never
+     9	sandbox: read-only
+    10	reasoning effort: xhigh
+    11	reasoning summaries: none
+    12	session id: 019f7e1a-1e4d-7aa3-a4eb-30b0284bd4aa
+    13	--------
+    14	user
+    15	<task>
+    16	
+    17	> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+    18	You are the test-verifier for the baton repo, items-4b-5 series iteration 1 of 5, auditing the Milestone-D build pins for plan items 4b (review artifacts from gate children) and 5 (streaming log caps) BEFORE implementation. Authority: docs/plans/2026-07-20-v1.1-hardening.md (Gate-1 approved). Baseline db13a92 (items 1-4 landed; suite 1225 green). Uncommitted, tests-only: tests/commands/loop-run.test.mjs (4b block) + tests/integration/loop-children-spawn.test.mjs (item 5). Claimed totals: suite 1230, 1227 pass / 3 red, guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — the INTEGRATION file (where item 5 lives) will not run FOR YOU; judge item 5 entirely by reading, and validate red/guard claims from the test code itself.
+    19	
+    20	The pins:
+    21	- 4b-1 (RED): two-iteration gate (BLOCKED→APPROVED) leaves reviews/<runId>/gate-1/iteration-01..02/ with prompt.md verbatim (2nd embeds prior findings) and verdict.md (verdict + findings + role/model header). NN = gate iteration at parse, 01-based.
+    22	- 4b-2 (RED): reviews/-writes-throw io.fs still completes exit 0/DONE with a stderr warning naming the artifact path (fail-open).
+    23	- 4b GUARD (green): a dead (model-unavailable) gate child with no parsed verdict writes no verdict.md.
+    24	- SCOPING to judge: no pipeline 4b case — a pipeline gate has multiple children per iteration (writer self-check/reviewer/merger) making iteration-NN→child mapping ambiguous; loop-side pinned as the core. Acceptable against plan item 4b, or must a pipeline artifact pin exist now?
+    25	- 5-1 (RED): a fixture child emitting ~5x maxLogBytes through a recording-fake opts.fs — log routed through the injected fs, no single write exceeds cap+slack, final file ≤ cap+slack, verdict tail survives capping. (True in-memory boundedness has no honest observable with current seams; the recording-fs + peak-write-bound + final-cap + tail-correctness set was the sanctioned fallback — judge its sufficiency.)
+    26	- 5-2 GUARD (green): sub-cap child byte-identical via default fs.
+    27	- PLACEMENT to judge: item 5 pinned in the integration file (real superviseChild lives there; the unit file holds only pure helpers) — acceptable?
+    28	
+    29	Audit adversarially:
+    30	1. Would a WRONG implementation pass? (a) 4b-1 — headers/prompts asserted with real content (verbatim prompt equality or distinctive substrings), NN semantics unambiguous? (b) 4b-2 — does the throwing fs only throw for reviews/ paths (so the run's own state writes still work), and is the warning assertion path-specific? (c) 5-1 — could an impl satisfy "final ≤ cap" by post-mortem truncation while still buffering unbounded in memory AND passing the peak-write-bound (i.e. is the peak-write bound genuinely evidence of streaming)? Be honest about the seam limits and say whether the pin set is the strongest available.
+    31	2. Red-phase integrity (4b reds runnable for you; item 5 by reading): behavioral failures, guards meaningful, baseline 1225 unaffected.
+    32	3. Coverage vs plan items 4b/5: unpinned sub-items? Judge both scoping questions explicitly.
+    33	
+    34	You may run: node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+    35	</task>
+    36	<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+    37	<structured_output_contract>
+    38	End with exactly:
+    39	VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+    40	FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+    41	(FINDINGS may be empty only with APPROVED.)
+    42	</structured_output_contract>
+    43	codex
+    44	I’m in test-verification/review phase. I’ll read the approved plan and the two test files first, then run the runnable checks the task permits and judge item 5 from source because of the stated sandbox limitation.
+    45	exec
+    46	/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+    47	 succeeded in 0ms:
+    48	     1	import { describe, it } from 'node:test';
+    49	     2	import assert from 'node:assert/strict';
+    50	     3	import * as nodeFs from 'node:fs';
+    51	     4	import { fileURLToPath } from 'node:url';
+    52	     5	import { join, dirname } from 'node:path';
+    53	     6	import { makeIo } from '../helpers/fakeio.mjs';
+    54	     7	import { cmdLoop } from '../../core/src/commands/loop.mjs';
+    55	     8	import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+    56	     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+    57	    10	
+    58	    11	// ---------------------------------------------------------------------------
+    59	    12	// RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
+    60	    13	// core/src/commands/loop.mjs with the `run` subcommand that COMPOSES the loop
+    61	    14	// modules (spec/state/children/failover) over the real command machinery.
+    62	    15	// Source: docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop
+    63	    16	// (Layer 2)", §"Smoke gate", §"Caps", §"Supervisor lifetime and recovery".
+    64	    17	//
+    65	    18	// INJECTION SEAM (pinned): the command runs children via
+    66	    19	//   io.superviseChild ?? superviseChild
+    67	    20	// so tests inject a scripted fake runner that returns the next queued result
+    68	    21	// and records the {command, args, env} it was invoked with. Everything else
+    69	    22	// drives the real modules over memfs.
+    70	    23	//
+    71	    24	// The `run` subcommand does not exist yet: `loop run` currently exits 2
+    72	    25	// ("unknown subcommand 'run'"). Reds assert TARGET behavior (exit codes, spawn
+    73	    26	// counts, persisted state, ESCALATION/SMOKE-REVIEW files) — distinguished from
+    74	    27	// today's generic exit 2. --detach is OUT of unit scope (deferred to e2e).
+    75	    28	//
+    76	    29	// PINNED EXIT CODES: done 0 · awaiting-smoke-approval 0 · escalated 3 ·
+    77	    30	// parked 4 · live-lock refusal 1 · usage error 2.
+    78	    31	// ---------------------------------------------------------------------------
+    79	    32	
+    80	    33	const here = dirname(fileURLToPath(import.meta.url));
+    81	    34	const repoRoot = join(here, '..', '..');
+    82	    35	const SIG_ABS = join(repoRoot, 'core', 'data', 'signatures.v1.json');
+    83	    36	const SIG_CONTENT = nodeFs.readFileSync(SIG_ABS, 'utf8');
+    84	    37	
+    85	    38	const T0 = '2026-07-19T00:00:00.000Z';
+    86	    39	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+    87	    40	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account';
+    88	    41	
+    89	    42	const CONFIG = {
+    90	    43	  schema: 'baton/config@1',
+    91	    44	  roles: {
+    92	    45	    planner: ['claude-code/claude-fable-5'],
+    93	    46	    'plan-reviewer': ['codex/gpt-5.6-sol@xhigh', 'claude-code/claude-fable-5@xhigh'],
+    94	    47	    'test-author': ['claude-code/claude-opus-4-8', 'codex/gpt-5.5@xhigh'],
+    95	    48	    'test-verifier': ['codex/gpt-5.5@xhigh', 'claude-code/claude-opus-4-8'],
+    96	    49	    implementer: ['claude-code/claude-fable-5', 'codex/gpt-5.6-sol@xhigh', 'cursor/composer'],
+    97	    50	    'final-reviewer-a': ['codex/gpt-5.6-sol@xhigh', 'codex/gpt-5.5@xhigh'],
+    98	    51	    'final-reviewer-b': ['claude-code/claude-fable-5@xhigh', 'claude-code/claude-opus-4-8'],
+    99	    52	  },
+   100	    53	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+   101	    54	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+   102	    55	};
+   103	    56	
+   104	    57	const loopSpec = (over = {}) => ({
+   105	    58	  schema: 'baton/loop@1',
+   106	    59	  goal: 'Ship the loop',
+   107	    60	  constraints: [],
+   108	    61	  smoke: { cmd: null, expect: null },
+   109	    62	  phases: [
+   110	    63	    { id: 'plan', role: 'planner' },
+   111	    64	    { id: 'gate-1', role: 'plan-reviewer' },
+   112	    65	  ],
+   113	    66	  budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 },
+   114	    67	  ...over,
+   115	    68	});
+   116	    69	
+   117	    70	function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+   118	    71	  return {
+   119	    72	    schema: 'baton/bundle@1',
+   120	    73	    bundleId: 'b_looprun00000000',
+   121	    74	    generation: 1,
+   122	    75	    createdAt: T0,
+   123	    76	    updatedAt: T0,
+   124	    77	    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+   125	    78	    task: { goal: 'Ship the loop', constraints: [], acceptance: [] },
+   126	    79	    plan: { steps: [] },
+   127	    80	    decisions: [],
+   128	    81	    files: { touched: [] },
+   129	    82	    roles: { assignments: {} },
+   130	    83	    git: null,
+   131	    84	    handoff:
+   132	    85	      status === 'sealed'
+   133	    86	        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+   134	    87	        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+   135	    88	    journalSeq: 0,
+   136	    89	    compaction: { droppedDecisions: 0, note: null },
+   137	    90	    dedupeRing: [],
+   138	    91	  };
+   139	    92	}
+   140	    93	
+   141	    94	/**
+   142	    95	 * Scripted fake child runner honoring the injection seam. Each call shifts the
+   143	    96	 * next result off the queue, writes its logContent to opts.logPath (so the
+   144	    97	 * command reads the transcript from the child's LOG file), and records the
+   145	    98	 * spawn spec.
+   146	    99	 */
+   147	   100	function fakeRunner(io, script) {
+   148	   101	  const queue = [...script];
+   149	   102	  const calls = /** @type {any[]} */ ([]);
+   150	   103	  const fn = (/** @type {any} */ spec, /** @type {any} */ opts = {}) => {
+   151	   104	    calls.push({ spec, opts, args: spec?.args ?? [], command: spec?.command, env: spec?.env });
+   152	   105	    const r = queue.shift() ?? { timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '' };
+   153	   106	    // No fallback: the command MUST pass a real logPath (asserted below).
+   154	   107	    const logPath = opts.logPath;
+   155	   108	    if (typeof r.logContent === 'string') {
+   156	   109	      const dir = logPath.slice(0, logPath.lastIndexOf('/'));
+   157	   110	      io.fs.mkdirSync(dir, { recursive: true });
+   158	   111	      io.fs.writeFileSync(logPath, r.logContent);
+   159	   112	    }
+   160	   113	    return Promise.resolve({ timedOut: r.timedOut ?? false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath });
+   161	   114	  };
+   162	   115	  fn.calls = calls;
+   163	   116	  return fn;
+   164	   117	}
+   165	   118	
+   166	   119	function makeLoopRepo({ spec = loopSpec(), files = {}, runner, execFile, env = {} } = {}) {
+   167	   120	  const io = makeIo({
+   168	   121	    now: T0,
+   169	   122	    host: 'loop-host',
+   170	   123	    pid: 4242,
+   171	   124	    startTime: 111000,
+   172	   125	    fencingSeed: 1,
+   173	   126	    env,
+   174	   127	    files: {
+   175	   128	      [SIG_ABS]: SIG_CONTENT,
+   176	   129	      '/repo/baton.config.json': JSON.stringify(CONFIG, null, 2),
+   177	   130	      ...(spec ? { '/repo/loop.json': JSON.stringify(spec, null, 2) + '\n' } : {}),
+   178	   131	      ...files,
+   179	   132	    },
+   180	   133	  });
+   181	   134	  if (execFile) io.execFile = execFile;
+   182	   135	  const fake = runner ?? fakeRunner(io, []);
+   183	   136	  io.superviseChild = fake;
+   184	   137	  io.__runner = fake;
+   185	   138	  return io;
+   186	   139	}
+   187	   140	
+   188	   141	const argsOf = (io, i) => (io.__runner.calls[i]?.args ?? []).map(String);
+   189	   142	const serialize = (io, i) => argsOf(io, i).join(' ');
+   190	   143	const valAfter = (arr, flag) => { const i = arr.indexOf(flag); return i >= 0 ? arr[i + 1] : undefined; };
+   191	   144	const loopFile = (io, name) => io.files()[`${loopPaths('/repo').dir}/${name}`];
+   192	   145	
+   193	   146	// ===========================================================================
+   194	   147	describe('loop run — preconditions', () => {
+   195	   148	  it('no loop.json -> usage error (exit 2) naming loop.json / loop init, ZERO children spawned', async () => {
+   196	   149	    const io = makeLoopRepo({ spec: null }); // no loop.json seeded
+   197	   150	    const code = await cmdLoop(['run'], io);
+   198	   151	    assert.equal(code, 2);
+   199	   152	    assert.match(io.stderrText() + io.stdoutText(), /loop\.json|loop init/i, 'the error points at the missing spec, not a generic unknown-subcommand');
+   200	   153	    assert.equal(io.__runner.calls.length, 0, 'no child spawned when preconditions fail');
+   201	   154	  });
+   202	   155	
+   203	   156	  it('an invalid spec (unknown role) -> exit 2 surfacing validateLoopSpec errors, ZERO children spawned', async () => {
+   204	   157	    // Config MISSING plan-reviewer -> the spec references an unknown role.
+   205	   158	    const cfg = JSON.parse(JSON.stringify(CONFIG));
+   206	   159	    delete cfg.roles['plan-reviewer'];
+   207	   160	    const io = makeLoopRepo({ files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2) } });
+   208	   161	    const code = await cmdLoop(['run'], io);
+   209	   162	    assert.equal(code, 2);
+   210	   163	    assert.match(io.stderrText() + io.stdoutText(), /unknown role 'plan-reviewer'/, 'the validateLoopSpec error is surfaced');
+   211	   164	    assert.equal(io.__runner.calls.length, 0, 'no child spawned for an invalid spec');
+   212	   165	  });
+   213	   166	});
+   214	   167	
+   215	   168	// ===========================================================================
+   216	   169	describe('loop run — supervisor run lock', () => {
+   217	   170	  it('a LIVE supervisor.lock refuses a second run (exit 1) naming the live pid', async () => {
+   218	   171	    const io = makeLoopRepo({ execFile: undefined });
+   219	   172	    // A different, ALIVE supervisor already holds the lock.
+   220	   173	    io.processAlive = (p) => p === 55555;
+
+exec
+/bin/zsh -lc "nl -ba reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-03/prompt.md | sed -n '1,180p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	<task>
+     2	
+     3	> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+     4	You are the test-verifier for the baton repo, items-4b-5 series iteration 3 of 5, re-auditing after your iteration-2 BLOCKED verdict (1 finding: 4b-1's iteration-02 verdict.md assertions thinner than iteration-01's; report: reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt). Uncommitted, tests-only; baseline db13a92.
+     5	
+     6	Claimed closure: iteration-02's verdict.md now asserts the full contract — effort (xhigh), harness/platform (codex), exact date (2026-07-19), degraded presence, exact verdict (APPROVED), exact body (v2.body === '', the clean-APPROVED fixture has no findings) — alongside role and model.
+     7	
+     8	Claimed totals: suite 1231, 1227 pass / 4 red (4b-1, 4b-2, 4b-pipeline, 5-1), guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — the item-5 integration test is judged by reading only (already accepted at iterations 1–2).
+     9	
+    10	Scope: verify the closure is genuine, red-phase integrity, no weakening, no regressions. Raise only NEW defects or a defective closure.
+    11	
+    12	You may run: node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs, npm run typecheck.
+    13	</task>
+    14	<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+    15	<structured_output_contract>
+    16	End with exactly:
+    17	VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+    18	FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+    19	(FINDINGS may be empty only with APPROVED.)
+    20	</structured_output_contract>
+
+exec
+/bin/zsh -lc 'git diff --check' in /Users/saksham/baton
+ succeeded in 0ms:
+2026-07-20T06:11:52.243774Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+exec
+/bin/zsh -lc "nl -ba docs/plans/2026-07-20-v1.1-hardening.md | sed -n '35,55p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    35	   child prompt; (b) the actual deferred failure mode — a supervisor
+    36	   crash/re-invoke after a BLOCKED gate iteration with status still
+    37	   `running` — re-prompts with the persisted findings, pinned for BOTH
+    38	   `loop run` and `pipeline run`; (c) escalations embed the latest
+    39	   persisted findings.
+    40	4b. **Review artifacts from gate children (G9 deferral).** Each gate
+    41	   child's prompt and verdict land under
+    42	   `reviews/<runId>/<gate>/iteration-NN/{prompt.md, verdict.md}` in the
+    43	   repo (the wt-* convention the methodology already uses), written by the
+    44	   supervisor after each verdict parse. Accept: a two-iteration gate leaves
+    45	   two iteration directories whose verdict.md matches the parsed verdict
+    46	   and findings; artifact writes never block the run (fail-open with a
+    47	   warning); the layout matches reviews/README.md.
+    48	5. **Streaming log caps.** superviseChild buffers child output in memory
+    49	   before the capped write; stream to the log with the cap enforced during
+    50	   capture so a runaway child cannot balloon the supervisor. Accept: a
+    51	   fixture child emitting >cap output holds supervisor memory bounded
+    52	   (observable via the capped file plus a recording-fake byte counter).
+    53	6. **Child-log redaction + purge.** Child logs under `.handoff/loop/children/`
+    54	   bypass the secret-redaction filter and the purge walk. Route the capped
+    55	   log write through the existing redaction pass and include the loop tree
+
+exec
+/bin/zsh -lc "nl -ba reviews/README.md | sed -n '1,45p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	# Review artifacts
+     2	
+     3	Every review gate leaves an auditable trail here. Layout:
+     4	
+     5	```
+     6	reviews/
+     7	  _templates/               # prompt templates per gate type
+     8	  <task-id>/                # YYYY-MM-DD-slug
+     9	    gate-1-plan/
+    10	      iteration-NN/{prompt.md, verdict.md}
+    11	    subtask-<name>-tests/
+    12	      iteration-NN/{prompt.md, verdict.md}
+    13	    gate-2-final/
+    14	      reviewer-a/iteration-NN/{prompt.md, verdict.md}
+    15	      reviewer-b/iteration-NN/{prompt.md, verdict.md}
+    16	      findings.md           # collated blocking / non-blocking items
+    17	```
+    18	
+    19	Verdicts: `APPROVED` / `APPROVED_WITH_NOTES` / `BLOCKED`. Notes are folded in; BLOCKED means revise and re-review.
+    20	
+    21	Every `verdict.md` starts with a header block:
+    22	
+    23	```
+    24	role: <plan-reviewer | test-verifier | final-reviewer-a | final-reviewer-b>
+    25	model: <concrete model @ effort actually used>
+    26	harness: <how it was invoked>
+    27	date: <YYYY-MM-DD>
+    28	verdict: <APPROVED | APPROVED_WITH_NOTES | BLOCKED>
+    29	degraded: <none | single-vendor | model-fallback | ...>
+    30	```
+    31	
+    32	Iteration budget: a gate loops at most **5** times. After the 5th iteration the gate closes; outstanding findings escalate to Saksham for a decision.
+
+exec
+/bin/zsh -lc 'nl -ba reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt | tail -n 100' in /Users/saksham/baton
+ succeeded in 0ms:
+  2924	     7	// NEW module; these tests DEFINE the API. Source of truth:
+  2925	     8	// docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"Child supervision
+  2926	     9	// contract" + §"baton loop (Layer 2)" child bullets; AGENTS.md §9 (sole-author
+  2927	    10	// attribution). This is the reliability surface — every pin is a field-failure
+  2928	    11	// class (stdin-hang, prompt-echo, zombie grandchild, unparseable-as-APPROVED).
+  2929	    12	//
+  2930	    13	// TARGET MODULE: core/src/loop/children.mjs.
+  2931	    14	//
+  2932	    15	// PINNED EXPORTS (the implementer follows these names):
+  2933	    16	//   buildChildArgv(assignment, prompt, opts) -> {command, args, env, stdio}
+  2934	    17	//   parseVerdict(transcript, {platform})     -> {verdict, findings, reason?}
+  2935	    18	//   capLog(text, maxBytes)                   -> string
+  2936	    19	//   classifyChildExit(transcript, exitCode, platform, table) -> class string
+  2937	    20	//   superviseChild(spec, opts)               -> Promise<result> (integration file)
+  2938	    21	//
+  2939	    22	// RED MECHANISM: dynamic-import-with-catch + M() guard (meaningful reds).
+  2940	    23	// ---------------------------------------------------------------------------
+  2941	    24	
+  2942	    25	let mod = /** @type {any} */ (null);
+  2943	    26	let importError = /** @type {any} */ (null);
+  2944	    27	try {
+  2945	    28	  mod = await import('../../core/src/loop/children.mjs');
+  2946	    29	} catch (e) {
+  2947	    30	  importError = e;
+  2948	    31	}
+  2949	    32	function M() {
+  2950	    33	  assert.ok(mod, `core/src/loop/children.mjs must load (import error: ${importError?.message ?? 'none'})`);
+  2951	    34	  return mod;
+  2952	    35	}
+  2953	    36	
+  2954	    37	// Resolver-shaped assignment (mirrors roles/resolve.mjs output + the role id).
+  2955	    38	const asg = (platform, role, model, effort = null) => ({ platform, role, model, effort, mode: platform === 'codex' ? 'native' : 'delegated' });
+  2956	    39	
+  2957	    40	// The full read-only review seat set (must ALL be read-only on both platforms —
+  2958	    41	// final-reviewer-b included; verifier iter-2 finding).
+  2959	    42	const REVIEWER_ROLES = ['plan-reviewer', 'test-verifier', 'subtask-reviewer', 'final-reviewer-a', 'final-reviewer-b'];
+  2960	    43	
+  2961	    44	const valAfter = (/** @type {string[]} */ args, /** @type {string} */ flag) => {
+  2962	    45	  const i = args.indexOf(flag);
+  2963	    46	  return i >= 0 ? args[i + 1] : undefined;
+  2964	    47	};
+  2965	    48	// A claude child is READ-ONLY only if EVERY allowed tool is in the known
+  2966	    49	// read-only set — Read/Grep/Glob or a scoped read-only git command
+  2967	    50	// (`Bash(git diff:*)` / `log` / `show` / `status`). Anything else (acceptEdits,
+  2968	    51	// Write/Edit, a bare or non-git Bash, an unknown tool, or a missing allowlist)
+  2969	    52	// is treated as WRITE-CAPABLE. Fail CLOSED (verifier finding 8): an unrecognized
+  2970	    53	// grant must never be assumed safe.
+  2971	    54	const READONLY_TOOLS = new Set(['Read', 'Grep', 'Glob']);
+  2972	    55	const READONLY_GIT_BASH = /^Bash\(git (diff|log|show|status)[):]/;
+  2973	    56	const claudeGrantsWrite = (/** @type {string[]} */ args) => {
+  2974	    57	  if (valAfter(args, '--permission-mode') === 'acceptEdits') return true;
+  2975	    58	  const tools = valAfter(args, '--allowedTools');
+  2976	    59	  if (typeof tools !== 'string') return true; // no explicit allowlist ⇒ not provably read-only
+  2977	    60	  const entries = tools.split(',').map((t) => t.trim()).filter(Boolean);
+  2978	    61	  if (entries.length === 0) return true;
+  2979	    62	  return entries.some((t) => !READONLY_TOOLS.has(t) && !READONLY_GIT_BASH.test(t));
+  2980	    63	};
+  2981	    64	
+  2982	    65	// ===========================================================================
+  2983	    66	describe('buildChildArgv — claude-code roles', () => {
+  2984	    67	  it('an implementer gets claude -p with edit permission (write-capable)', () => {
+  2985	    68	    const { buildChildArgv } = M();
+  2986	    69	    const r = buildChildArgv(asg('claude-code', 'implementer', 'claude-fable-5'), 'PROMPT-TEXT', { root: '/repo' });
+  2987	    70	    assert.equal(r.command, 'claude');
+  2988	
+  2989	exec
+  2990	/bin/zsh -lc "rg -n \"writeFileSync|appendFileSync|opts\\.fs|maxLogBytes|out \\+=|stdout|stderr\" core/src/loop/children.mjs" in /Users/saksham/baton
+  2991	 succeeded in 0ms:
+  2992	11:import { mkdirSync, writeFileSync } from 'node:fs';
+  2993	167: * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+  2994	172:    const maxLogBytes = opts.maxLogBytes ?? 1_000_000;
+  2995	193:      out += c.toString();
+  2996	195:    child.stdout?.on('data', onChunk);
+  2997	196:    child.stderr?.on('data', onChunk);
+  2998	215:        writeFileSync(opts.logPath, capLog(out, maxLogBytes));
+  2999	
+  3000	exec
+  3001	/bin/zsh -lc 'git diff --numstat db13a92' in /Users/saksham/baton
+  3002	 succeeded in 0ms:
+  3003	97	0	tests/commands/loop-run.test.mjs
+  3004	48	0	tests/commands/pipeline-run.test.mjs
+  3005	76	1	tests/integration/loop-children-spawn.test.mjs
+  3006	
+  3007	codex
+  3008	Verified the three claimed reds in the runnable command slice and read item 5 only, as requested. `loop-run` 4b-1 fails at the artifact existence assertion, 4b-2 fails at the concrete warning-path assertion, and pipeline 4b fails at the first writer artifact assertion [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:612), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:653), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1312). The 4b guard still asserts no `verdict.md` for an unparsed/dead child [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:656). Typecheck exited 0.
+  3009	
+  3010	Item 5 remains a genuine red by reading: the test requires writes through injected `opts.fs` [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:191), [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196), while current `superviseChild` buffers `out` and writes through direct `node:fs` imports [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:11), [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:187), [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:215).
+  3011	
+  3012	VERDICT: BLOCKED
+  3013	FINDINGS:
+  3014	1. [high] 4b-1 closure is incomplete: the test title claims both iterations get full-contract `verdict.md`, and `reviews/README.md` requires role, model, harness, date, verdict, and degraded headers, but iteration-02 only asserts role, model substring, verdict, and degraded; it does not assert effort, harness/platform, date, or exact empty findings body [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:596), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:631), [reviews/README.md](/Users/saksham/baton/reviews/README.md:21), [reviews/README.md](/Users/saksham/baton/reviews/README.md:29) — Fix: mirror the iteration-01 header/body assertions for `v2`, including effort, harness/platform, exact date, degraded presence, exact verdict, and `v2.body === ''` or the exact parsed findings.
+  3015	tokens used
+  3016	73,997
+  3017	Verified the three claimed reds in the runnable command slice and read item 5 only, as requested. `loop-run` 4b-1 fails at the artifact existence assertion, 4b-2 fails at the concrete warning-path assertion, and pipeline 4b fails at the first writer artifact assertion [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:612), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:653), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1312). The 4b guard still asserts no `verdict.md` for an unparsed/dead child [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:656). Typecheck exited 0.
+  3018	
+  3019	Item 5 remains a genuine red by reading: the test requires writes through injected `opts.fs` [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:191), [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:196), while current `superviseChild` buffers `out` and writes through direct `node:fs` imports [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:11), [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:187), [children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:215).
+  3020	
+  3021	VERDICT: BLOCKED
+  3022	FINDINGS:
+  3023	1. [high] 4b-1 closure is incomplete: the test title claims both iterations get full-contract `verdict.md`, and `reviews/README.md` requires role, model, harness, date, verdict, and degraded headers, but iteration-02 only asserts role, model substring, verdict, and degraded; it does not assert effort, harness/platform, date, or exact empty findings body [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:596), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:631), [reviews/README.md](/Users/saksham/baton/reviews/README.md:21), [reviews/README.md](/Users/saksham/baton/reviews/README.md:29) — Fix: mirror the iteration-01 header/body assertions for `v2`, including effort, harness/platform, exact date, degraded presence, exact verdict, and `v2.body === ''` or the exact parsed findings.
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '38,56p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    38	const T0 = '2026-07-19T00:00:00.000Z';
+    39	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+    40	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account';
+    41	
+    42	const CONFIG = {
+    43	  schema: 'baton/config@1',
+    44	  roles: {
+    45	    planner: ['claude-code/claude-fable-5'],
+    46	    'plan-reviewer': ['codex/gpt-5.6-sol@xhigh', 'claude-code/claude-fable-5@xhigh'],
+    47	    'test-author': ['claude-code/claude-opus-4-8', 'codex/gpt-5.5@xhigh'],
+    48	    'test-verifier': ['codex/gpt-5.5@xhigh', 'claude-code/claude-opus-4-8'],
+    49	    implementer: ['claude-code/claude-fable-5', 'codex/gpt-5.6-sol@xhigh', 'cursor/composer'],
+    50	    'final-reviewer-a': ['codex/gpt-5.6-sol@xhigh', 'codex/gpt-5.5@xhigh'],
+    51	    'final-reviewer-b': ['claude-code/claude-fable-5@xhigh', 'claude-code/claude-opus-4-8'],
+    52	  },
+    53	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+    54	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+    55	};
+    56	
+
+2026-07-20T06:11:59.611155Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+The previous blocker is visible in the iteration-02 report: `v2` lacked effort, harness/platform, exact date, and empty body assertions. Current `v2` now mirrors those fields, so I’m moving to validation and checking for any new defects introduced by the closure.
+exec
+/bin/zsh -lc 'node --test tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+2026-07-20T06:12:05.031452Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+ exited 1 in 152ms:
+✔ loop run — supervisor run lock (3.258125ms)
+▶ loop run — phase driving
+  ✔ a 2-phase run (plan -> gate-1), both APPROVED: children on the RESOLVED assignments, status done, state persisted (0.667542ms)
+✔ loop run — phase driving (0.74ms)
+▶ loop run — gate iteration + the 5-cap
+  ✔ BLOCKED re-runs with findings in the retry prompt; the 6th attempt NEVER spawns; escalated + ESCALATION.md; exit 3 (0.937667ms)
+✔ loop run — gate iteration + the 5-cap (1.0295ms)
+▶ loop run — smoke gate
+  ✔ after smoke-build: runs smoke.cmd, writes SMOKE-REVIEW.md + a smoke-approval token, awaits, exit 0, no further child (1.024291ms)
+  ✔ --approve-smoke <correct token> resumes into the next phase (a child spawns again) (1.531667ms)
+  ✔ --approve-smoke with the REAL issued token after a bound input drifted -> refused: exit 4, PARKED, zero spawns (0.86375ms)
+✔ loop run — smoke gate (3.531875ms)
+▶ loop run — D9: done-status persistence
+  ✔ RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done (0.777375ms)
+  ✔ GUARD (D9): re-running a completed (done) run still prints done and exits 0, no re-spawn (0.201041ms)
+✔ loop run — D9: done-status persistence (1.03ms)
+▶ loop run — per-phase child budgets (item 3)
+  ✔ RED (item 3): a phase exhausting its OWN child budget parks naming that phase (global product NOT exhausted) (0.376959ms)
+  ✔ GUARD (item 3): phases each UNDER their own budget complete even when the SUM exceeds one phase budget (0.857375ms)
+✔ loop run — per-phase child budgets (item 3) (1.277792ms)
+▶ loop run — findings persistence (item 4)
+  ✔ RED (4a): a BLOCKED gate then PARK then resume carries the persisted findings into the next child prompt (0.819375ms)
+  ✔ RED (4b loop): a re-invoke embeds the LATEST persisted findings in the FIRST child prompt (older superseded) (0.275375ms)
+  ✔ RED (4c loop): a fresh-invoke cap escalation embeds the LATEST persisted findings in ESCALATION.md (older superseded) (0.20725ms)
+  ✔ RED (4d): the findings file is append-only across iterations (two BLOCKED verdicts → two ordered lines) (0.277875ms)
+✔ loop run — findings persistence (item 4) (1.636833ms)
+▶ loop run — review artifacts from gate children (item 4b)
+  ✖ RED (4b-1): a two-iteration gate leaves iteration-01/02 with verbatim prompt.md + full-contract verdict.md (0.623209ms)
+  ✖ RED (4b-2, fail-open): an artifact write error WARNS but never fails the run (0.306125ms)
+  ✔ GUARD (4b): a DEAD (failover) gate child writes NO verdict.md — only parsed verdicts leave artifacts (0.668209ms)
+✖ loop run — review artifacts from gate children (item 4b) (1.676625ms)
+▶ loop run — failover integration
+  ✔ a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv) (5.004208ms)
+  ✔ a failover PARK decision stops the run parked (single-entry CODEX role, model-unavailable) (0.329208ms)
+✔ loop run — failover integration (5.386625ms)
+▶ loop run — D1: classification uses the transcript tail, not the body
+  ✔ RED (D1): a child whose LOG BODY carries a usage-limit signature but whose exit-0 TAIL is clean advances the phase (NO failover) (0.308542ms)
+  ✔ GUARD (D1): a death banner in the TAIL still classifies and routes to failover (parks a single-entry codex chain) (0.570083ms)
+✔ loop run — D1: classification uses the transcript tail, not the body (0.915542ms)
+▶ loop run — D5: failover sessionHint is the runId (no double loop- prefix)
+  ✔ RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId> (2.043042ms)
+✔ loop run — D5: failover sessionHint is the runId (no double loop- prefix) (2.070334ms)
+▶ loop run — recovery from a mid-run crash
+  ✔ resumes from the journal position: only the REMAINING phase spawns a child (0.263458ms)
+✔ loop run — recovery from a mid-run crash (0.292209ms)
+▶ loop run — strict flags & supervisor-side guard
+  ✔ a stray positional exits 2 (0.071125ms)
+  ✔ an unknown flag exits 2 (0.047583ms)
+  ✔ --approve-smoke with no value is a usage error (exit 2) naming the flag + value, NOT "unknown flag" (0.077041ms)
+  ✔ BATON_SUPERVISED_CHILD does NOT suppress loop run (supervisor-side) (0.244291ms)
+✔ loop run — strict flags & supervisor-side guard (0.492083ms)
+▶ loop run — atomic run-lock acquisition (B8)
+  ✔ RED (B8): implementation-neutral — the competitor materializes AT the exclusive-create; wx/mkdir-first refuses, check-then-write clobbers (RED) (0.205125ms)
+✔ loop run — atomic run-lock acquisition (B8) (0.230084ms)
+▶ loop run — child-group recording + kill-on-reclaim (G4)
+  ✔ RED (G4): a child-start record {childId, pid, pgid, startedAt} exists on disk WHILE the child is in flight (before completion) (0.348583ms)
+  ✔ RED (G5/G4): on dead-lock reclaim, a still-alive recorded orphan group is KILLED (io.processKill) BEFORE the first new spawn (0.341875ms)
+✔ loop run — child-group recording + kill-on-reclaim (G4) (0.725167ms)
+▶ loop run — resume (G6)
+  ✔ RED (G6): `baton loop resume` transitions a PARKED run back to running and continues (spawns the pending phase) (0.306ms)
+  ✔ RED (G6): resume on an ESCALATED run is REFUSED (escalation stays operator-only, no spawn) (0.201542ms)
+  ✔ RED (G6): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run (0.127083ms)
+  ✔ RED (G6): `baton loop run` on a PARKED run refuses (exit 4) AND points at `resume with: baton loop resume` (symmetry with pipeline) (0.190875ms)
+✔ loop run — resume (G6) (0.879167ms)
+▶ loop run — child registry retirement (H3)
+  ✔ RED (H3a): after a clean run, EVERY started child has a matching retire record ({childId, endedAt}) (0.377917ms)
+  ✔ RED (H3b): a dead-lock reclaim KILLS NOTHING for a RETIRED child, even when processAlive says its (recycled) pgid is alive (0.538125ms)
+✔ loop run — child registry retirement (H3) (0.94725ms)
+▶ loop run — state flavor binding (H5)
+  ✔ RED (H5): a state.json created by `pipeline run` (flavor pipeline) is REFUSED by loop run (exit 2), zero spawns (0.154709ms)
+  ✔ RED (H5): a resume whose specDigest was computed over DIFFERENT phases REFUSES (exit 2), zero spawns (0.133041ms)
+✔ loop run — state flavor binding (H5) (0.318958ms)
+▶ loop run — ESCALATION.md wording (H6)
+  ✔ RED (H6): a resume that is already at the cap escalates with operator wording, NOT "baton loop run" (0.187375ms)
+✔ loop run — ESCALATION.md wording (H6) (0.219958ms)
+▶ loop run — lock runId correlates with state runId (H8)
+  ✔ RED (H8): the supervisor.lock runId equals state.runId by the time the first child spawns (0.22475ms)
+✔ loop run — lock runId correlates with state runId (H8) (0.243917ms)
+▶ loop run — retire records never mask a resumed in-flight child (I2)
+  ✔ RED (I2a): run 1 retired childId X; run 2 has a FRESH in-flight X (no retire) + dead lock -> reclaim MUST kill X (0.258459ms)
+  ✔ RED (I2b): a NORMAL (non-reclaim) acquisition truncates prior-invocation records — a stale retire cannot linger to mask a future child (0.203333ms)
+✔ loop run — retire records never mask a resumed in-flight child (I2) (0.48975ms)
+▶ loop run — unstamped legacy state is refused (I3 + I4)
+  ✔ RED (I3/I4): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns, no leaked lock (0.117625ms)
+✔ loop run — unstamped legacy state is refused (I3 + I4) (0.137166ms)
+▶ loop run — lock reclaim uses pid+startTime (I5)
+  ✔ RED (I5): a lock whose pid is alive by a 1-arg check but fails the (pid, startTime) pair is treated as DEAD and reclaimed (0.221875ms)
+✔ loop run — lock reclaim uses pid+startTime (I5) (0.241583ms)
+▶ pipeline — CLI routing & flags
+  ✔ no subcommand -> usage error (exit 2) naming a subcommand, not "unknown command" (1.134375ms)
+  ✔ an unknown subcommand exits 2 naming it (0.150333ms)
+  ✔ a stray positional / unknown flag exits 2 with zero spawns (0.192458ms)
+  ✔ BATON_SUPERVISED_CHILD does NOT suppress pipeline run (supervisor-side) (5.265709ms)
+✔ pipeline — CLI routing & flags (7.338542ms)
+▶ pipeline — preconditions
+  ✔ no loop.json -> exit 2 naming loop.json, zero spawns (0.191083ms)
+  ✔ missing / empty subtasks -> exit 2 naming subtasks, zero spawns (0.199833ms)
+  ✔ malformed subtask items exit 2 naming the offender, with zero spawns (0.394333ms)
+  ✔ setupWorktrees runs before subtask 1 (worktree adds recorded) and only once (1.186708ms)
+✔ pipeline — preconditions (2.124042ms)
+▶ pipeline — seat alternation (writer)
+  ✔ subtask 1 writes in wt-a on baton/wt-a/subtask-t1 (worker-a model); subtask 2 writes in wt-b on baton/wt-b/subtask-t2 (worker-b model) (1.005083ms)
+✔ pipeline — seat alternation (writer) (1.065375ms)
+▶ pipeline — reviewer seat (read-only, other seat)
+  ✔ both reviewers, in order: t1 = wb-model/WT_B/read-only, t2 = wa-model/WT_A/read-only, each under the subtask-reviewer role (0.825292ms)
+  ✔ RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>) (0.498167ms)
+✔ pipeline — reviewer seat (read-only, other seat) (1.380625ms)
+▶ pipeline — verdict flow
+  ✔ reviewer APPROVED -> the MERGER child runs (merger model); on its APPROVED the SUPERVISOR merges via mergeSubtask (0.829125ms)
+  ✔ reviewer BLOCKED -> the SAME writer seat re-runs with the findings in its prompt (0.778ms)
+  ✔ review-gate cap exhaustion -> escalated, ESCALATION.md, exit 3, no 6th spawn (1.276875ms)
+  ✔ merger BLOCKED -> the writer retries (same gate-cap discipline) (0.62525ms)
+✔ pipeline — verdict flow (3.581917ms)
+▶ pipeline — merge failures park
+  ✔ a merge CONFLICT from mergeSubtask parks the run (exit 4) (0.478458ms)
+  ✔ an attribution violation (foreign committer) blocks the merge and parks — no merge git call lands (0.382584ms)
+✔ pipeline — merge failures park (0.899792ms)
+▶ pipeline — worktree guard composition (preflight/postflight)
+  ✔ (a) a DIRTY writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.318708ms)
+  ✔ (b) a WRONG-branch writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.275375ms)
+  ✔ (c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge (0.327917ms)
+✔ pipeline — worktree guard composition (preflight/postflight) (0.967917ms)
+▶ pipeline — completion
+  ✔ both subtasks merged -> state done, exit 0; loop state + journal persisted under .handoff/loop (0.596459ms)
+✔ pipeline — completion (0.622667ms)
+▶ pipeline — G1: a claude-code worker seat writer carries model + seat cwd
+  ✔ RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer (0.644708ms)
+✔ pipeline — G1: a claude-code worker seat writer carries model + seat cwd (0.671208ms)
+▶ pipeline — G2: cap validation / resume / run-lock / stale branch
+  ✔ RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant) (0.117584ms)
+  ✔ RED (G2): a LIVE supervisor.lock refuses pipeline run (exit 1), zero spawns (0.121542ms)
+  ✔ RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing (0.354542ms)
+  ✔ RED (G2): a second pipeline run RESUMES loadLoopState — cap counters survive re-invocation (no refund) (0.975083ms)
+✔ pipeline — G2: cap validation / resume / run-lock / stale branch (2.1785ms)
+▶ pipeline — G3: writer result handling
+  ✔ RED (G3): a writer BLOCKED retries the WRITER without spawning a reviewer for the failed attempt (0.404666ms)
+  ✔ RED (G3): a writer whose LOG carries the claude session-limit banner routes to failover (not a plain review) (5.276458ms)
+  ✔ RED (G3): a writer that commits NOTHING (empty branch) is refused/parked — an empty branch never merges (0.854833ms)
+✔ pipeline — G3: writer result handling (6.599083ms)
+▶ pipeline — G5: reviewer-seat preflight + self-heal
+  ✔ RED (G5): a DIRTY reviewer seat parks BEFORE the reviewer spawns (0.439084ms)
+  ✔ RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash (0.563584ms)
+✔ pipeline — G5: reviewer-seat preflight + self-heal (1.051792ms)
+▶ pipeline — H1: writer prompt carries the verdict-tail contract
+  ✔ RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable) (0.372834ms)
+✔ pipeline — H1: writer prompt carries the verdict-tail contract (0.400375ms)
+▶ pipeline — H2: bounded failover (avoid carries; exhaustion parks)
+  ✔ RED (H2a): always-model-unavailable on a two-entry codex chain never re-picks a rejected model; all rejected -> PARK (bounded) (0.99075ms)
+  ✔ RED (H2b): always-usage-limit across a cross-platform chain parks within a bounded child budget (no infinite loop) (4.201ms)
+✔ pipeline — H2: bounded failover (avoid carries; exhaustion parks) (5.237625ms)
+▶ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root
+  ✔ RED (D2): the write-capable writer child runs in its SEAT cwd yet gets the MAIN /repo/.git in sandbox_workspace_write.writable_roots (0.457875ms)
+✔ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root (0.488792ms)
+▶ pipeline — D1: classification uses the transcript tail, not the body
+  ✔ RED (D1): a writer whose LOG BODY carries a usage-limit signature but whose TAIL is a clean exit-0 APPROVED is treated OK (proceeds to review, NO failover) (0.462917ms)
+  ✔ GUARD (D1): a death banner at the END of the log still classifies and routes to failover (0.430542ms)
+✔ pipeline — D1: classification uses the transcript tail, not the body (0.930208ms)
+▶ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry
+  ✔ RED (D4): after a model-unavailable relaunch onto wa2, a later BLOCKED retry re-runs wa2 (NOT the avoided wa1) — exactly one wa1 attempt (0.555167ms)
+✔ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry (0.578459ms)
+▶ pipeline — D5: failover sessionHint is the runId (no double loop- prefix)
+  ✔ RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId> (2.672ms)
+✔ pipeline — D5: failover sessionHint is the runId (no double loop- prefix) (2.711375ms)
+▶ pipeline — D6: reviewer & merger get classify→failover like writers
+  ✔ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (0.86ms)
+  ✔ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.5895ms)
+  ✔ GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged) (0.500042ms)
+  ✔ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.451917ms)
+✔ pipeline — D6: reviewer & merger get classify→failover like writers (2.478292ms)
+▶ pipeline — D7: escalation persists to state.json
+  ✔ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.393959ms)
+✔ pipeline — D7: escalation persists to state.json (0.42025ms)
+▶ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty
+  ✔ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.386708ms)
+  ✔ GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged) (0.318542ms)
+✔ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty (0.7395ms)
+▶ pipeline — findings persistence (item 4)
+  ✔ RED (4b pipeline): a re-invoke embeds the LATEST persisted findings in the FIRST writer prompt (older superseded) (0.402208ms)
+  ✔ RED (4c pipeline): a fresh-invoke cap escalation embeds the LATEST PERSISTED findings, not the D8 log tail (0.29675ms)
+✔ pipeline — findings persistence (item 4) (0.731292ms)
+▶ pipeline — review artifacts (item 4b)
+  ✖ RED (4b pipeline): a clean subtask cycle writes writer/reviewer/merger prompt+verdict artifacts under iteration-01 (1.470916ms)
+✖ pipeline — review artifacts (item 4b) (1.518458ms)
+▶ pipeline — trunk derivation (v1.1 item 2)
+  ✔ RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master (0.905875ms)
+  ✔ RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main (0.303792ms)
+  ✔ RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json (0.405ms)
+  ✔ RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails) (0.376583ms)
+  ✔ RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal (0.33925ms)
+  ✔ RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv (0.45425ms)
+✔ pipeline — trunk derivation (v1.1 item 2) (2.871458ms)
+▶ pipeline — H5: state flavor + spec-digest binding
+  ✔ RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns (0.165083ms)
+  ✔ RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex (0.159333ms)
+✔ pipeline — H5: state flavor + spec-digest binding (0.356875ms)
+▶ pipeline — I1: merge-receipt-gated auto-advance
+  ✔ RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park) (0.444958ms)
+  ✔ RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances (0.330958ms)
+  ✔ GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped (0.464458ms)
+  ✔ RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled (0.390166ms)
+✔ pipeline — I1: merge-receipt-gated auto-advance (1.68075ms)
+▶ pipeline — I3: unstamped legacy state is refused
+  ✔ RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns (0.15275ms)
+✔ pipeline — I3: unstamped legacy state is refused (0.174625ms)
+▶ pipeline — J1: pipeline resume
+  ✔ RED (J1a): resume transitions a PARKED run to running — the same subtask re-runs its writer, gate counters intact (no refund) (0.602208ms)
+  ✔ RED (J1b): resume refuses an ESCALATED run (exit 3, operator-only), zero spawns (0.154167ms)
+  ✔ RED (J1c): pipeline resume refuses a loop-flavored state (exit 2, flavor guard), zero spawns (0.146334ms)
+  ✔ GREEN (J1d companion): `baton loop resume` still refuses a pipeline-flavored state (exit 2), zero spawns — the boundary holds both ways (0.788334ms)
+  ✔ RED (J1e): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run (0.156625ms)
+✔ pipeline — J1: pipeline resume (1.914208ms)
+ℹ tests 114
+ℹ suites 52
+ℹ pass 111
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 134.431916
+
+✖ failing tests:
+
+test at tests/commands/loop-run.test.mjs:596:3
+✖ RED (4b-1): a two-iteration gate leaves iteration-01/02 with verbatim prompt.md + full-contract verdict.md (0.623209ms)
+  AssertionError [ERR_ASSERTION]: iteration-01/prompt.md written
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/loop-run.test.mjs:612:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+test at tests/commands/loop-run.test.mjs:642:3
+✖ RED (4b-2, fail-open): an artifact write error WARNS but never fails the run (0.306125ms)
+  AssertionError [ERR_ASSERTION]: the warning names the CONCRETE failed artifact path
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/loop-run.test.mjs:657:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: '',
+    expected: /reviews\/loop-b72c210483b9\/gate-1\/iteration-01\/(prompt|verdict)\.md/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1296:3
+✖ RED (4b pipeline): a clean subtask cycle writes writer/reviewer/merger prompt+verdict artifacts under iteration-01 (1.470916ms)
+  AssertionError [ERR_ASSERTION]: writer.prompt.md written under iteration-01
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1312:14)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+codex
+The runnable command slice is red in the expected 4b places: 4b-1, 4b-2, and the pipeline artifact pin fail while surrounding guards pass. I’m running the allowed typecheck now.
+exec
+/bin/zsh -lc 'npm run typecheck' in /Users/saksham/baton
+2026-07-20T06:12:09.335786Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+ succeeded in 738ms:
+exec
+/bin/zsh -lc "nl -ba core/src/loop/children.mjs | sed -n '1,25p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	/**
+     2	 * Child supervision — the loop's reliability surface. Owns the FULL child
+     3	 * lifecycle: argv assembly (per-role permissions), detached process-group
+     4	 * spawn with closed stdin, timeout SIGTERM→grace→SIGKILL of the whole group,
+     5	 * capped transcript logs, region-bounded verdict parsing (prompt-echo-proof),
+     6	 * and exit classification via core detect. Plan:
+     7	 * docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"Child supervision
+     8	 * contract".
+     9	 */
+    10	import { spawn } from 'node:child_process';
+    11	import { mkdirSync, writeFileSync } from 'node:fs';
+    12	import { dirname } from 'node:path';
+    13	import { classify } from '../detect/classifier.mjs';
+    14	
+    15	// Every review seat is read-only — writers are the implementer-side roles
+    16	// only. The merger CHILD is read-only too: it adversarially re-checks, but
+    17	// the SUPERVISOR performs the actual merge via worktrees.mergeSubtask
+    18	// (pipeline contract — the merger child never issues git).
+    19	const REVIEWER_ROLES = new Set(['plan-reviewer', 'test-verifier', 'subtask-reviewer', 'final-reviewer-a', 'final-reviewer-b', 'merger']);
+    20	
+    21	// AGENTS.md §9: children commit solely as the repo owner, zero AI attribution.
+    22	const GIT_IDENTITY = Object.freeze({
+    23	  GIT_AUTHOR_NAME: 'SakshamUboweja',
+    24	  GIT_AUTHOR_EMAIL: 'ssakshamu@gmail.com',
+    25	  GIT_COMMITTER_NAME: 'SakshamUboweja',
+
+exec
+/bin/zsh -lc "nl -ba tests/unit/loop-children.test.mjs | sed -n '1,24p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba core/src/loop/children.mjs | sed -n '160,220p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { classify } from '../../core/src/detect/classifier.mjs';
+     4	
+     5	// ---------------------------------------------------------------------------
+     6	// RED — loop child supervision, PURE parts (subtask loop-children, part A).
+     7	// NEW module; these tests DEFINE the API. Source of truth:
+     8	// docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"Child supervision
+     9	// contract" + §"baton loop (Layer 2)" child bullets; AGENTS.md §9 (sole-author
+    10	// attribution). This is the reliability surface — every pin is a field-failure
+    11	// class (stdin-hang, prompt-echo, zombie grandchild, unparseable-as-APPROVED).
+    12	//
+    13	// TARGET MODULE: core/src/loop/children.mjs.
+    14	//
+    15	// PINNED EXPORTS (the implementer follows these names):
+    16	//   buildChildArgv(assignment, prompt, opts) -> {command, args, env, stdio}
+    17	//   parseVerdict(transcript, {platform})     -> {verdict, findings, reason?}
+    18	//   capLog(text, maxBytes)                   -> string
+    19	//   classifyChildExit(transcript, exitCode, platform, table) -> class string
+    20	//   superviseChild(spec, opts)               -> Promise<result> (integration file)
+    21	//
+    22	// RED MECHANISM: dynamic-import-with-catch + M() guard (meaningful reds).
+    23	// ---------------------------------------------------------------------------
+    24	
+
+ succeeded in 0ms:
+   160	
+   161	/**
+   162	 * Spawn and supervise one child: detached in its OWN process group, stdin
+   163	 * closed; on timeout SIGTERM the group, wait graceMs, SIGKILL the group (no
+   164	 * zombie grandchildren). Output streams to a capped log at opts.logPath; the
+   165	 * verdict is parsed from the full transcript, region-bounded.
+   166	 * @param {{command: string, args: string[], env?: Record<string, string>, cwd?: string}} spec
+   167	 * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+   168	 * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string, pgid?: number}>}
+   169	 */
+   170	export function superviseChild(spec, opts) {
+   171	  return new Promise((resolve) => {
+   172	    const maxLogBytes = opts.maxLogBytes ?? 1_000_000;
+   173	    const child = spawn(spec.command, spec.args, {
+   174	      cwd: spec.cwd,
+   175	      env: { ...process.env, ...(spec.env ?? {}) },
+   176	      stdio: ['ignore', 'pipe', 'pipe'],
+   177	      detached: true, // its own process group — the kill unit
+   178	    });
+   179	
+   180	    // Report the group at spawn time so the supervisor can persist it BEFORE
+   181	    // the child completes — a supervisor crash leaves the orphan reap-able.
+   182	    const pgid = typeof child.pid === 'number' ? child.pid : -1;
+   183	    if (typeof opts.onStart === 'function' && typeof child.pid === 'number') {
+   184	      opts.onStart({ pid: child.pid, pgid });
+   185	    }
+   186	
+   187	    let out = '';
+   188	    let timedOut = false;
+   189	    /** @type {NodeJS.Timeout | null} */
+   190	    let killTimer = null;
+   191	
+   192	    const onChunk = (/** @type {Buffer} */ c) => {
+   193	      out += c.toString();
+   194	    };
+   195	    child.stdout?.on('data', onChunk);
+   196	    child.stderr?.on('data', onChunk);
+   197	
+   198	    const timeout = setTimeout(() => {
+   199	      timedOut = true;
+   200	      if (typeof child.pid === 'number') {
+   201	        killGroup(child.pid, 'SIGTERM');
+   202	        killTimer = setTimeout(() => {
+   203	          if (typeof child.pid === 'number') killGroup(child.pid, 'SIGKILL');
+   204	        }, opts.graceMs);
+   205	      }
+   206	    }, opts.timeoutMs);
+   207	
+   208	    const finish = (/** @type {number | null} */ exitCode) => {
+   209	      clearTimeout(timeout);
+   210	      if (killTimer) clearTimeout(killTimer);
+   211	      // Belt-and-braces: reap any group survivors even on a clean exit path.
+   212	      if (timedOut && typeof child.pid === 'number') killGroup(child.pid, 'SIGKILL');
+   213	      try {
+   214	        mkdirSync(dirname(opts.logPath), { recursive: true });
+   215	        writeFileSync(opts.logPath, capLog(out, maxLogBytes));
+   216	      } catch {
+   217	        // The log must never mask the result.
+   218	      }
+   219	      const parsed = parseVerdict(out, { platform: opts.platform ?? 'codex' });
+   220	      resolve({
+
+exec
+/bin/zsh -lc "nl -ba tests/integration/loop-children-spawn.test.mjs | sed -n '1,42p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it, after } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+     4	import { tmpdir } from 'node:os';
+     5	import { join } from 'node:path';
+     6	
+     7	// ---------------------------------------------------------------------------
+     8	// RED — loop child supervision, REAL-PROCESS parts (subtask loop-children,
+     9	// part B). Mirrors tests/adapters/claude-code-hook-spawn.test.mjs idioms
+    10	// (mkdtempSync scratch dirs, real node child scripts). Source of truth:
+    11	// docs/plans §"Child supervision contract": detached own-process-group spawn,
+    12	// timeout -> SIGTERM group -> grace -> SIGKILL group (no zombie grandchildren),
+    13	// output streamed to a capped log, stdin closed.
+    14	//
+    15	// PINNED: superviseChild(spec, opts) -> Promise<result>
+    16	//   spec  = {command, args, env?, cwd?}
+    17	//   opts  = {timeoutMs, graceMs, logPath, maxLogBytes?, platform?}
+    18	//   result= {timedOut, exitCode, verdict?, findings?, logPath}
+    19	//
+    20	// RED MECHANISM: dynamic-import-with-catch + M() guard.
+    21	// ---------------------------------------------------------------------------
+    22	
+    23	let mod = /** @type {any} */ (null);
+    24	let importError = /** @type {any} */ (null);
+    25	try {
+    26	  mod = await import('../../core/src/loop/children.mjs');
+    27	} catch (e) {
+    28	  importError = e;
+    29	}
+    30	function M() {
+    31	  assert.ok(mod, `core/src/loop/children.mjs must load (import error: ${importError?.message ?? 'none'})`);
+    32	  return mod;
+    33	}
+    34	
+    35	/** @type {string[]} */
+    36	const dirs = [];
+    37	function scratch() {
+    38	  const d = mkdtempSync(join(tmpdir(), 'baton-loop-child-'));
+    39	  dirs.push(d);
+    40	  return d;
+    41	}
+    42	after(() => {
+
+2026-07-20T06:12:44.559259Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+Verified: item 4b-1 now asserts the iteration-02 `verdict.md` role, concrete model, effort, harness/platform, exact date, exact verdict, degraded header, and empty body at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:631). That closes the iteration-02 blocker recorded in the prior verdict at [raw-output.txt](/Users/saksham/baton/reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt:3012).
+
+Verified: the runnable command slice remains red only in the expected 4b artifact pins, with failures at the 4b-1 prompt artifact, 4b-2 concrete warning path, and pipeline writer artifact assertions: [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:612), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:657), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1312). The 4b dead-child guard remains meaningful at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:669).
+
+Verified: item 5 remains judged by reading only per this iteration’s prompt [prompt.md](/Users/saksham/baton/reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-03/prompt.md:8); its accepted injected-fs and cap assertions remain unchanged at [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:191). `npm run typecheck` passed.
+
+Hypotheses: none requiring a finding.
+
+VERDICT: APPROVED
+FINDINGS:
+tokens used
+57,632
+Verified: item 4b-1 now asserts the iteration-02 `verdict.md` role, concrete model, effort, harness/platform, exact date, exact verdict, degraded header, and empty body at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:631). That closes the iteration-02 blocker recorded in the prior verdict at [raw-output.txt](/Users/saksham/baton/reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-02/raw-output.txt:3012).
+
+Verified: the runnable command slice remains red only in the expected 4b artifact pins, with failures at the 4b-1 prompt artifact, 4b-2 concrete warning path, and pipeline writer artifact assertions: [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:612), [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:657), [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1312). The 4b dead-child guard remains meaningful at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:669).
+
+Verified: item 5 remains judged by reading only per this iteration’s prompt [prompt.md](/Users/saksham/baton/reviews/2026-07-20-v1.1-plan/test-verifier/items-4b-5/iteration-03/prompt.md:8); its accepted injected-fs and cap assertions remain unchanged at [loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:191). `npm run typecheck` passed.
+
+Hypotheses: none requiring a finding.
+
+VERDICT: APPROVED
+FINDINGS:

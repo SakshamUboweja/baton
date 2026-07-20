@@ -334,6 +334,33 @@ async function runLoop(flags, io) {
     ensureDir(io.fs, `${p.dir}/findings`);
     appendEntry(io.fs, `${p.dir}/findings/${gate}.ndjson`, { iteration: state.iterations?.[gate] ?? 0, findings: text, at: io.now() });
   };
+  // Review artifacts from gate children (v1.1 item 4b): every PARSED verdict
+  // leaves reviews/<runId>/<gate>/iteration-NN/{prompt.md, verdict.md} in the
+  // repo tree — FAIL-OPEN: an artifact error warns and never fails the run.
+  /** @param {string} gate @param {any} assignment @param {string} promptText @param {string} verdict @param {string} findingsText @param {string} [filePrefix] */
+  const writeGateArtifacts = (gate, assignment, promptText, verdict, findingsText, filePrefix = '') => {
+    const nn = String((state.iterations?.[gate] ?? 0) + 1).padStart(2, '0');
+    const rel = `reviews/${runId}/${gate}/iteration-${nn}`;
+    const header = [
+      `role: ${assignment.role}`,
+      `model: ${assignment.platform}/${assignment.model}${assignment.effort ? `@${assignment.effort}` : ''}`,
+      `platform: ${assignment.platform}`,
+      `date: ${String(io.now()).slice(0, 10)}`,
+      `verdict: ${verdict}`,
+      `degraded: ${assignment.mode && assignment.mode !== 'native' ? String(assignment.mode) : 'none'}`,
+    ].join('\n');
+    for (const [name, content] of [
+      [`${filePrefix}prompt.md`, promptText],
+      [`${filePrefix}verdict.md`, `${header}\n\n${findingsText}\n`],
+    ]) {
+      try {
+        ensureDir(io.fs, `${root}/${rel}`);
+        atomicWriteText(io.fs, `${root}/${rel}/${name}`, content);
+      } catch (err) {
+        io.stderr.write(`baton loop run: could not write review artifact ${rel}/${name} — ${/** @type {any} */ (err)?.message ?? err} (fail-open; the run continues)\n`);
+      }
+    }
+  };
 
   try {
     // `loop resume` — a PARK is resumable; an escalation is operator-only.
@@ -515,6 +542,11 @@ async function runLoop(flags, io) {
         }
 
         const verdict = String(result.verdict ?? 'BLOCKED');
+        // Artifacts are for GATE children (plan item 4b) — non-gate phases
+        // (plain implementer/planner steps) leave no reviews/ output.
+        if (/gate/.test(String(phase.id))) {
+          writeGateArtifacts(phase.id, assignment, prompt, verdict, String(result.findings ?? ''));
+        }
         if (verdict === 'APPROVED' || verdict === 'APPROVED_WITH_NOTES') {
           await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
           phaseDone = true;

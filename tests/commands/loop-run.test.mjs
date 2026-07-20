@@ -571,6 +571,107 @@ describe('loop run — findings persistence (item 4)', () => {
 });
 
 // ===========================================================================
+// ITEM 4b (v1.1) — review artifacts from gate children. After EVERY verdict
+// parse for a gate child the supervisor writes reviews/<runId>/<gate>/
+// iteration-NN/{prompt.md, verdict.md} in the repo tree (layout per
+// reviews/README.md): prompt.md is the child prompt verbatim; verdict.md is a
+// header (role/model/date) + the parsed verdict + findings. NN = the gate
+// iteration count at parse time (01-based). Writes are FAIL-OPEN.
+describe('loop run — review artifacts from gate children (item 4b)', () => {
+  const promptOf = (call) => (call?.args ?? []).map(String).find((a) => a.includes('You are the')) ?? '';
+  // Parse a verdict.md into its leading `key: value` header block + trailing
+  // body (findings), per reviews/README.md's header convention.
+  const parseVerdictMd = (text) => {
+    const lines = String(text ?? '').split('\n');
+    const header = /** @type {Record<string,string>} */ ({});
+    let i = 0;
+    for (; i < lines.length; i += 1) {
+      const m = lines[i].match(/^([A-Za-z][\w-]*):\s?(.*)$/);
+      if (!m) break;
+      header[m[1].toLowerCase()] = m[2].trim();
+    }
+    return { header, body: lines.slice(i).join('\n').trim() };
+  };
+
+  it('RED (4b-1): a two-iteration gate leaves iteration-01/02 with verbatim prompt.md + full-contract verdict.md', async () => {
+    const marker = 'FIX_THE_THING_MARKER';
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', findings: marker },
+      { verdict: 'APPROVED' },
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the gate completes after the APPROVED; stderr: ${io.stderrText()}`);
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    const base = `/repo/reviews/${runId}/gate-1`;
+    const f = (rel) => io.files()[`${base}/${rel}`];
+
+    // iteration-01 — the BLOCKED attempt (01-based iteration count at parse time).
+    assert.ok(f('iteration-01/prompt.md'), 'iteration-01/prompt.md written');
+    assert.ok(f('iteration-01/verdict.md'), 'iteration-01/verdict.md written');
+    // prompt.md is EXACTLY the child prompt, verbatim.
+    assert.equal(f('iteration-01/prompt.md'), promptOf(io.__runner.calls[0]), 'iteration-01 prompt.md === the child prompt verbatim');
+    // verdict.md carries the FULL header contract + parsed verdict + findings.
+    const v1 = parseVerdictMd(f('iteration-01/verdict.md'));
+    assert.equal(v1.header.role, 'plan-reviewer', 'verdict header: exact role');
+    assert.match(v1.header.model ?? '', /gpt-5\.6-sol/, 'verdict header: concrete model');
+    assert.match(v1.header.model ?? '', /xhigh/, 'verdict header: the effort actually used');
+    assert.match(`${v1.header.harness ?? ''}${v1.header.platform ?? ''}`, /codex/i, 'verdict header: harness/platform');
+    assert.equal(v1.header.date, '2026-07-19', 'verdict header: date (YYYY-MM-DD from io.now())');
+    assert.equal(v1.header.verdict, 'BLOCKED', 'verdict header: exact verdict');
+    assert.ok('degraded' in v1.header, 'verdict header: degraded field present');
+    assert.equal(v1.body, marker, 'verdict.md body is the exact findings text');
+
+    // iteration-02 — the APPROVED attempt; its prompt embeds the prior findings.
+    assert.ok(f('iteration-02/prompt.md'), 'iteration-02/prompt.md written');
+    assert.equal(f('iteration-02/prompt.md'), promptOf(io.__runner.calls[1]), 'iteration-02 prompt.md === the second child prompt verbatim');
+    assert.match(f('iteration-02/prompt.md'), new RegExp(marker), 'the second prompt embeds the prior findings');
+    const v2 = parseVerdictMd(f('iteration-02/verdict.md'));
+    assert.equal(v2.header.role, 'plan-reviewer', 'iteration-02 verdict header: exact role');
+    assert.match(v2.header.model ?? '', /gpt-5\.6-sol/, 'iteration-02 verdict header: concrete model');
+    assert.match(v2.header.model ?? '', /xhigh/, 'iteration-02 verdict header: the effort actually used');
+    assert.match(`${v2.header.harness ?? ''}${v2.header.platform ?? ''}`, /codex/i, 'iteration-02 verdict header: harness/platform');
+    assert.equal(v2.header.date, '2026-07-19', 'iteration-02 verdict header: exact date');
+    assert.equal(v2.header.verdict, 'APPROVED', 'iteration-02 verdict header: exact verdict');
+    assert.ok('degraded' in v2.header, 'iteration-02 verdict header: degraded field present');
+    assert.equal(v2.body, '', 'iteration-02 verdict.md body is the exact findings (empty for a clean APPROVED)');
+  });
+
+  it('RED (4b-2, fail-open): an artifact write error WARNS but never fails the run', async () => {
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    // Every write under reviews/ throws — the run must not be failed by it.
+    const realWrite = io.fs.writeFileSync.bind(io.fs);
+    io.fs.writeFileSync = (/** @type {any} */ pth, /** @type {any} */ data, /** @type {any} */ o) => {
+      if (String(pth).includes('/reviews/')) throw Object.assign(new Error('EACCES: reviews/ not writable'), { code: 'EACCES' });
+      return realWrite(pth, data, o);
+    };
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, 'an artifact write error does NOT fail the run (fail-open)');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run still completed');
+    const runId = (await loadLoopState('/repo', io)).state.runId;
+    assert.match(io.stderrText(), new RegExp(`reviews/${runId}/gate-1/iteration-01/(prompt|verdict)\\.md`), 'the warning names the CONCRETE failed artifact path');
+  });
+
+  it('GUARD (4b): a DEAD (failover) gate child writes NO verdict.md — only parsed verdicts leave artifacts', async () => {
+    const cfg = JSON.parse(JSON.stringify(CONFIG));
+    cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh']; // single entry — a model death parks
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'solo-codex' }] });
+    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2), '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n' }, runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'BLOCKED', exitCode: 1, logContent: `child died: ${MODEL_UNAVAIL}\n` }]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 4, 'the model-unavailable death parks');
+    const verdictArtifacts = Object.keys(io.files()).filter((k) => /\/reviews\/.*\/verdict\.md$/.test(k));
+    assert.deepEqual(verdictArtifacts, [], 'a child that produced no parsed verdict leaves no verdict.md');
+  });
+});
+
+// ===========================================================================
 describe('loop run — failover integration', () => {
   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits

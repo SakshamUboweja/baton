@@ -1,6 +1,6 @@
 import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -140,6 +140,81 @@ describe('superviseChild — well-behaved child: parsed verdict + capped log', (
     assert.equal(result.logPath, logPath, 'the result reports the exact log path it was given');
     assert.ok(existsSync(logPath), 'the child output landed at the log path');
     assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= 1000 + 256, 'the log is capped to maxLogBytes (+ marker slack)');
+  });
+});
+
+// ===========================================================================
+// ITEM 5 (v1.1) — streaming log caps. superviseChild must route its log writes
+// through an injectable fs (opts.fs, default node:fs) and cap DURING capture, so
+// a runaway child cannot balloon the supervisor. Memory boundedness is observed
+// per the plan's acceptance — a recording-fake byte counter — plus the capped
+// file staying ≤ cap and the verdict tail surviving.
+//
+// NOTE (test-author): the plan named tests/unit/loop-children.test.mjs, but that
+// file holds only the PURE helpers; superviseChild's real-process coverage and
+// the fake-process pattern live HERE, so these pins land in the integration file
+// (nothing existing is modified). Flagged for the verifier.
+describe('superviseChild — streaming log cap (item 5)', () => {
+  // A recording fs that DELEGATES to real node:fs (so the file still lands on
+  // disk) and records every write's path + byte size — the sanctioned
+  // recording-fake byte counter.
+  function recordingFs() {
+    const writes = /** @type {Array<{method: string, path: string, bytes: number}>} */ ([]);
+    return {
+      writes,
+      writeFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'writeFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return writeFileSync(p, d, o); },
+      appendFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'appendFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return appendFileSync(p, d, o); },
+      mkdirSync: (/** @type {any} */ p, /** @type {any} */ o) => mkdirSync(p, o),
+    };
+  }
+
+  it('RED (5-1): a >>cap child routes its log through the injected fs, caps the file, and keeps the verdict tail', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const cap = 2000;
+    const script = join(dir, 'flood.cjs');
+    // ~5x the cap of body, then the verdict tail at the very END.
+    writeFileSync(
+      script,
+      [
+        'process.stdout.write("SYSTEM: end with VERDICT\\n");',
+        'for (let i = 0; i < 100; i++) process.stdout.write("X".repeat(100) + "\\n"); // ~10 KB body in chunks',
+        'process.stdout.write("tokens used: 9\\n");',
+        'process.stdout.write("VERDICT: APPROVED\\n");',
+        'process.stdout.write("FINDINGS: none\\n");',
+        'process.exit(0);',
+      ].join('\n'),
+    );
+    const logPath = join(dir, 'flood.log');
+    const rec = recordingFs();
+
+    const result = await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex', fs: rec },
+    );
+
+    const logWrites = rec.writes.filter((w) => w.path === logPath);
+    assert.ok(logWrites.length >= 1, 'the log is written through the INJECTED fs (opts.fs), not node:fs directly');
+    const peak = Math.max(...logWrites.map((w) => w.bytes));
+    assert.ok(peak <= cap + 512, `no single log write dumps more than the cap (+slack); peak=${peak}`);
+    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= cap + 512, 'the final log respects maxLogBytes (+ marker slack)');
+    assert.equal(result.verdict, 'APPROVED', 'the verdict tail survives capping (parsed from the capped transcript)');
+  });
+
+  it('GUARD (5-2): a small-output child’s log is byte-identical to today (default fs, no regression)', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const script = join(dir, 'small.cjs');
+    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
+    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
+    const logPath = join(dir, 'small.log');
+
+    const result = await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' }, // default fs — no injection
+    );
+    assert.equal(result.exitCode, 0);
+    assert.equal(readFileSync(logPath, 'utf8'), body, 'a sub-cap child log is written verbatim (no truncation marker, no regression)');
   });
 });
 
