@@ -103,7 +103,7 @@ A plain `baton loop run` (or `baton pipeline run`) on an already-parked run repo
 
 ## Status
 
-v1 is feature-complete and unpublished. The usage-limit failover core, the `baton loop` goal supervisor, and the `baton pipeline` dual-worktree preset are all built TDD behind review gates and proven in live dogfood runs; v1.1 hardening is closed. See `docs/plans/` for the approved plans, `CHANGELOG.md` for what shipped, and `reviews/` for the gate history. The npm publish is pending.
+v1 is feature-complete and unpublished. The usage-limit failover core, the `baton loop` goal supervisor, and the `baton pipeline` dual-worktree preset are all built TDD behind review gates and proven in live dogfood runs; v1.1 hardening is closed and validated by an independent cross-vendor Gate 2 (an OpenAI reviewer and a Claude reviewer, fresh context). See `docs/plans/` for the approved plans, `CHANGELOG.md` for what shipped, and `reviews/` for the gate history. The npm publish is pending.
 
 ## License
 
