@@ -261,13 +261,25 @@ export async function detachSupervisor(root, io, { cmdLabel, batonArgs }) {
   }
   const outPath = `${p.dir}/supervisor.out`;
   const lockPath = `${p.dir}/supervisor.lock`;
+  // Success signal that the detached child actually STARTED (plan item 10):
+  // the child either currently holds the lock, or has already written run
+  // state (a fast child can acquire → run → release before we sample, so
+  // "lock exists" alone races — a freshly-written state.json is the durable
+  // proof it got going). For a fresh detach state.json does not pre-exist.
+  const stateBefore = io.fs.existsSync(p.state);
+  const started = () => io.fs.existsSync(lockPath) || (!stateBefore && io.fs.existsSync(p.state));
   const { pid } = io.spawnDetached({ command: 'baton', args: batonArgs, env: io.env, cwd: root, outPath, maxBytes: SUPERVISOR_OUT_CAP });
-  // Return only AFTER the detached child owns the lock (plan item 10): the
-  // parent released so the child could acquire, and there is a brief window
-  // where neither holds it — poll (bounded) until the child's lock appears so
-  // a caller never observes an ownerless run.
-  for (let i = 0; i < 100 && !io.fs.existsSync(lockPath); i += 1) {
+  // Poll (bounded, injectable so the failure path doesn't sleep the full
+  // budget in tests — N1) until the child provably started.
+  const attempts = typeof io.detachPollAttempts === 'number' ? io.detachPollAttempts : 100;
+  for (let i = 0; i < attempts && !started(); i += 1) {
     await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // If the child never started, the detach FAILED — say so and return
+  // non-zero rather than reporting a phantom "started" (N1).
+  if (!started()) {
+    io.stderr.write(`baton ${cmdLabel}: --detach forked a supervisor (pid ${pid}) but it never acquired the run lock — the detached run may have failed to start; check ${outPath}\n`);
+    return 1;
   }
   io.stdout.write(`baton ${cmdLabel}: detached supervisor started (pid ${pid}); follow it with: tail -f ${outPath}\n`);
   return 0;
@@ -553,9 +565,14 @@ async function runLoop(flags, io) {
         // a completed child's (possibly OS-recycled) process group (H3).
         appendEntry(io.fs, `${p.dir}/children.ndjson`, { childId, endedAt: io.now() });
 
-        // Classification reads the child's LOG (the frozen transcript), so a
-        // limit banner routes to failover even when a verdict parsed.
-        const transcript = io.fs.existsSync(logPath) ? io.fs.readFileSync(logPath, 'utf8') : '';
+        // Classify on the PRE-redaction transcript the runner parsed (N3) —
+        // NOT a re-read of the on-disk log, which is redacted and could drop a
+        // death banner overlapping a secret and mis-shift the class. Fall back
+        // to the (redacted) log only if the runner didn't surface one.
+        const transcript =
+          typeof result.transcript === 'string'
+            ? result.transcript
+            : io.fs.existsSync(logPath) ? io.fs.readFileSync(logPath, 'utf8') : '';
         const cls = classify({ text: transcriptTail(transcript), exitCode: result.exitCode ?? 0, platform: assignment.platform, table }).class;
 
         if (cls === 'usage-limit' || cls === 'model-unavailable' || cls === 'other-error' || cls === 'throttle' || cls === 'auth') {

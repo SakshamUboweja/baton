@@ -353,7 +353,11 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
       return EXIT_PARKED;
     }
     await transition({ type: LOOP_EVENT.SMOKE_APPROVE, token: flags['approve-smoke'], verified: true });
+    // Approval completes the run — return here so the end-of-run "done" line
+    // below never double-prints on top of this (N2).
     io.stdout.write('baton pipeline run: smoke approval verified — pipeline complete\n');
+    if (flags.json) emitEnvelope(io, { ok: true, data: { status: state.status, subtasks: subtasks.length } });
+    return 0;
   }
 
   if (state.status === LOOP_STATUS.ESCALATED) {
@@ -521,7 +525,9 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
         forced = null;
         const asg = { ...resolved, role: c.childRole };
         const result = await spawn(asg, c.prompt, c.seatPath, c.label);
-        const log = result.logPath && io.fs.existsSync(result.logPath) ? io.fs.readFileSync(result.logPath, 'utf8') : '';
+        // Classify on the PRE-redaction parsed transcript (N3), not the
+        // redacted on-disk log.
+        const log = typeof result.transcript === 'string' ? result.transcript : result.logPath && io.fs.existsSync(result.logPath) ? io.fs.readFileSync(result.logPath, 'utf8') : '';
         const cls = classify({ text: transcriptTail(log), exitCode: result.exitCode ?? 0, platform: asg.platform, table }).class;
         if (cls === 'ok') return { result, assignment: asg };
         attempt += 1;
@@ -582,7 +588,9 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
       // classify its log first — a limit/model death routes through failover,
       // a BLOCKED self-check retries the writer, and only a passing writer
       // hands off to review.
-      const writerLog = writerResult.logPath && io.fs.existsSync(writerResult.logPath) ? io.fs.readFileSync(writerResult.logPath, 'utf8') : '';
+      // Classify on the PRE-redaction parsed transcript (N3), not the redacted
+      // on-disk log; the log write itself stays redacted (item 6).
+      const writerLog = typeof writerResult.transcript === 'string' ? writerResult.transcript : writerResult.logPath && io.fs.existsSync(writerResult.logPath) ? io.fs.readFileSync(writerResult.logPath, 'utf8') : '';
       const writerCls = classify({ text: transcriptTail(writerLog), exitCode: writerResult.exitCode ?? 0, platform: writerAsg.platform, table }).class;
       if (writerCls !== 'ok') {
         failoverAttempt += 1;

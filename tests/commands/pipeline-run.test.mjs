@@ -1379,6 +1379,19 @@ describe('pipeline — smoke gate (item 9)', () => {
     assert.equal(raw.status, 'done', 'the approved run persists status done');
   });
 
+  it('RED (N2): pipeline run --approve-smoke prints EXACTLY ONE completion line (no duplicate done line)', async () => {
+    const io = smokeAwareIo(smokeSpec());
+    assert.equal(await run(['pipeline', 'run'], io), 0);
+    const token = JSON.parse(io.files()[`${DIR}/smoke-approval.json`]).token;
+    const before = io.stdoutText().length;
+    const code = await run(['pipeline', 'run', '--approve-smoke', token], io);
+    assert.equal(code, 0, `the approved run completes; stderr: ${io.stderrText()}`);
+    const run2Out = io.stdoutText().slice(before);
+    assert.doesNotMatch(run2Out, /done — \d+ subtask\(s\) merged/, 'no separate end-of-run "done — N subtask(s) merged" line after the approval');
+    const completionLines = run2Out.split('\n').filter((l) => /verified|complete|done —/i.test(l));
+    assert.equal(completionLines.length, 1, `--approve-smoke prints exactly ONE completion line; got ${JSON.stringify(completionLines)}`);
+  });
+
   it('RED (9-2b): a BOGUS token with NO drift is still refused — the run does NOT complete', async () => {
     const io = smokeAwareIo(smokeSpec());
     assert.equal(await run(['pipeline', 'run'], io), 0);

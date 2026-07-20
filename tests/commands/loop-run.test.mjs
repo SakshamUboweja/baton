@@ -7,6 +7,7 @@ import { makeIo } from '../helpers/fakeio.mjs';
 import { cmdLoop } from '../../core/src/commands/loop.mjs';
 import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
 import { dedupeKey } from '../../core/src/util/ids.mjs';
+import { redactSecrets } from '../../core/src/util/redact.mjs';
 
 // ---------------------------------------------------------------------------
 // RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
@@ -819,6 +820,28 @@ describe('loop run — --detach (item 10)', () => {
     assert.ok(killIdx < forkIdx, `the orphan kill (-9001) precedes the fork; events: ${JSON.stringify(events)}`);
   });
 
+  it('RED (N1): --detach whose child never takes the lock WARNS and returns non-zero — no false "started" success', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    // SEAM (flagged): bound the lock-appear poll so the timeout path doesn't
+    // sleep the real 100×50ms=5s — the impl must honor an injected poll bound.
+    io.detachPollAttempts = 2;
+    const seam = detachSeam(io, 999, { writeLock: false }); // the child never acquires the lock
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(seam.calls.length, 1, 'the fork was attempted');
+    assert.notEqual(code, 0, 'a detach whose child never took the lock returns NON-ZERO');
+    assert.doesNotMatch(io.stdoutText(), /detached supervisor started/, 'it does NOT print the success line when the lock never appeared');
+    assert.match(io.stderrText(), /lock|never|failed|did not|could not/i, 'a stderr warning names the lock-acquire failure');
+  });
+
+  it('GUARD (N1): --detach still exits 0 with the started message when the child DOES take the lock', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    const seam = detachSeam(io, 707070); // writes the lock (child acquires)
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(seam.calls.length, 1, 'the fork happened');
+    assert.equal(code, 0, 'the happy path exits 0');
+    assert.match(io.stdoutText(), /detached supervisor started/, 'it prints the started message when the lock is present');
+  });
+
   it('GUARD (10-4): a completing run releases the lock — the release contract a detached supervisor reuses', { skip: SKIP_WIN }, async () => {
     // The detached child runs the same supervisor body; isolating its release
     // needs a real child, so this pins the reused contract on the attached path.
@@ -838,6 +861,45 @@ describe('loop run — --detach (item 10)', () => {
     const spec = seam.calls[0];
     assert.match(String(spec.outPath ?? ''), /\.handoff\/loop\/supervisor\.out$/, 'spec.outPath directs the detached output to .handoff/loop/supervisor.out');
     assert.ok(typeof spec.maxBytes === 'number' && spec.maxBytes > 0, `spec.maxBytes is a positive byte cap for supervisor.out; got ${JSON.stringify(spec.maxBytes)}`);
+  });
+});
+
+// ===========================================================================
+// N3 (Gate-2 fold) — classification must read the SAME transcript the verdict
+// was parsed from (pre-redaction), NOT a re-read of the redacted written log. A
+// death banner hidden inside a secret that redaction rewrites would otherwise
+// vanish from the re-read and mis-classify. SEAM (flagged): superviseChild
+// exposes the pre-redaction transcript on its result (result.transcript); the
+// loop classifies THAT. Item-6 redaction of the WRITTEN log stays intact.
+describe('loop run — classification uses the pre-redaction transcript (N3)', () => {
+  it('RED (N3): a death banner hidden in a redacted region still classifies (via the runner result), driving failover — not a redacted-log re-read that misses it', async () => {
+    const cfg = JSON.parse(JSON.stringify(CONFIG));
+    cfg.roles['trio'] = ['codex/cx-head@xhigh', 'codex/cx-next@xhigh'];
+    const spec = loopSpec({ phases: [{ id: 'work', role: 'trio' }] });
+    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2) }, runner: undefined });
+    // The model-unavailable banner sits INSIDE a PEM block: redactSecrets wipes
+    // the whole block, so the WRITTEN (redacted) log classifies 'ok' and misses
+    // it — only the pre-redaction transcript classifies model-unavailable.
+    const preRedaction = `working…\n-----BEGIN PRIVATE KEY-----\n${MODEL_UNAVAIL}\n-----END PRIVATE KEY-----\ntokens used: 5\nVERDICT: BLOCKED\n`;
+    assert.doesNotMatch(redactSecrets(preRedaction), new RegExp(MODEL_UNAVAIL.slice(0, 20)), 'precondition: redaction destroys the banner in the written log');
+    const calls = /** @type {any[]} */ ([]);
+    io.superviseChild = (/** @type {any} */ childSpec, /** @type {any} */ opts) => {
+      const args = (childSpec?.args ?? []).map(String);
+      const model = args[args.indexOf('--model') + 1];
+      calls.push({ command: childSpec?.command, args, model });
+      if (model === 'cx-head') {
+        io.fs.mkdirSync(opts.logPath.slice(0, opts.logPath.lastIndexOf('/')), { recursive: true });
+        io.fs.writeFileSync(opts.logPath, redactSecrets(preRedaction)); // written log: banner GONE (item-6 redaction intact)
+        // result carries the PRE-REDACTION transcript the verdict was parsed from.
+        return Promise.resolve({ timedOut: false, exitCode: 1, verdict: 'BLOCKED', findings: '', logPath: opts.logPath, transcript: preRedaction });
+      }
+      return Promise.resolve({ timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '', logPath: opts.logPath, transcript: 'tokens used\nVERDICT: APPROVED\n' });
+    };
+    io.__runner = io.superviseChild;
+    await cmdLoop(['run'], io);
+    const models = calls.map((c) => c.model);
+    assert.equal(models[0], 'cx-head', 'the first child ran on the head model');
+    assert.equal(models[1], 'cx-next', 'the death was classified from the PRE-REDACTION transcript → failover to the next entry (a redacted-log re-read would miss the banner and retry cx-head)');
   });
 });
 

@@ -19,7 +19,7 @@ import { loadSignatures } from '../../core/src/detect/signatures.mjs';
 // PINNED EXPORTS (the implementer follows these names):
 //   buildChildArgv(assignment, prompt, opts) -> {command, args, env, stdio}
 //   parseVerdict(transcript, {platform})     -> {verdict, findings, reason?}
-//   capLog(text, maxBytes)                   -> string
+//   (capLog removed — N4: superviseChild streams inline; the export is dead)
 //   classifyChildExit(transcript, exitCode, platform, table) -> class string
 //   superviseChild(spec, opts)               -> Promise<result> (integration file)
 //
@@ -300,35 +300,12 @@ describe('parseVerdict — claude-code: the structured result field only', () =>
 });
 
 // ===========================================================================
-describe('capLog — head + marker + verbatim tail, bounded size', () => {
-  it('text under the cap is returned unchanged', () => {
-    const { capLog } = M();
-    assert.equal(capLog('a short log', 1000), 'a short log');
-  });
-
-  it('over-cap text preserves the head, marks the middle, and keeps the TAIL verbatim', () => {
-    const { capLog } = M();
-    const head = 'HEAD-'.repeat(60); // 300 bytes
-    const middle = 'M'.repeat(5000);
-    const tail = 'VERDICT: BLOCKED\nFINDINGS: the tail must survive'; // the verdict lives at the end
-    const big = head + middle + tail;
-    const maxBytes = 1000;
-    const capped = capLog(big, maxBytes);
-
-    assert.ok(Buffer.byteLength(capped) <= maxBytes + 256, `capped size within budget + marker slack; got ${Buffer.byteLength(capped)}`);
-    assert.ok(capped.startsWith('HEAD-'), 'the head is preserved');
-    assert.match(capped, /truncat/i, 'a truncation marker replaces the middle');
-    assert.ok(capped.endsWith(tail.slice(-32)), 'the last bytes (the verdict) survive verbatim');
-  });
-
-  it('a ROOMY cap keeps the ENTIRE tail verbatim (the full verdict block survives)', () => {
-    const { capLog } = M();
-    const head = 'HEAD-'.repeat(60); // 300 bytes
-    const middle = 'M'.repeat(20000);
-    const tail = 'VERDICT: BLOCKED\nFINDINGS:\n1. [high] the whole tail block must survive verbatim';
-    const capped = capLog(head + middle + tail, 4000);
-    assert.ok(capped.endsWith(tail), 'with headroom the complete tail (not just its last bytes) is preserved verbatim');
-    assert.match(capped, /truncat/i, 'the middle is still marked as truncated');
+// N4 (Gate-2 fold) — capLog is DEAD: superviseChild streams inline to a bounded
+// head+tail buffer now, so capLog is exported/tested but unused. Its behavior
+// tests are removed (a removal has no red); this pin drives dropping the export.
+describe('capLog — removed dead export (N4)', () => {
+  it('RED (N4): capLog is no longer exported from core/src/loop/children.mjs', () => {
+    assert.equal('capLog' in M(), false, 'capLog is dead after the streaming rewrite — it must not be exported');
   });
 });
 

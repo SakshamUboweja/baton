@@ -121,25 +121,6 @@ export function parseVerdict(transcript, { platform }) {
   return hit ?? unparseable;
 }
 
-const TRUNCATION_MARKER = '\n[... truncated by baton log cap ...]\n';
-
-/**
- * Cap a transcript: head preserved, middle replaced with a marker, TAIL
- * preserved verbatim (the verdict lives at the end and must never be cut).
- * @param {string} text @param {number} maxBytes
- * @returns {string}
- */
-export function capLog(text, maxBytes) {
-  const s = String(text ?? '');
-  if (Buffer.byteLength(s) <= maxBytes) return s;
-  const headBytes = Math.max(1, Math.floor(maxBytes * 0.4));
-  const tailBytes = Math.max(1, maxBytes - headBytes);
-  const buf = Buffer.from(s);
-  const head = buf.subarray(0, headBytes).toString();
-  const tail = buf.subarray(buf.length - tailBytes).toString();
-  return head + TRUNCATION_MARKER + tail;
-}
-
 /**
  * Exit classification delegates to core detect — one classifier, one
  * signature table, no drift. Returns exactly classify(...).class.
@@ -166,7 +147,7 @@ function killGroup(pid, sig) {
  * verdict is parsed from the full transcript, region-bounded.
  * @param {{command: string, args: string[], env?: Record<string, string>, cwd?: string}} spec
  * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, fs?: {writeFileSync: Function, mkdirSync: Function}, onStart?: (info: {pid: number, pgid: number}) => void}} opts
- * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string, pgid?: number}>}
+ * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, transcript?: string, logPath: string, pgid?: number}>}
  */
 export function superviseChild(spec, opts) {
   return new Promise((resolve) => {
@@ -249,6 +230,11 @@ export function superviseChild(spec, opts) {
         verdict: parsed.verdict,
         findings: parsed.findings,
         ...(parsed.reason ? { reason: parsed.reason } : {}),
+        // The PRE-redaction transcript the verdict was parsed from — callers
+        // classify on THIS, not a re-read of the redacted on-disk log, so a
+        // secret overlapping a death banner can't shift the class (N3). The
+        // written log stays redacted (item 6).
+        transcript,
         logPath: opts.logPath,
         pgid,
       });
