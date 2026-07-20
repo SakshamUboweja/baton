@@ -211,16 +211,41 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     io.stderr.write(`baton pipeline run: parked — ${reason}\n`);
     return EXIT_PARKED;
   };
+  // Persisted per-gate findings (plan item 4): the latest non-empty line
+  // survives parks, crashes, and re-invocations.
+  /** @param {string} gate @returns {string} */
+  const latestFindings = (gate) => {
+    const path = `${p.dir}/findings/${gate}.ndjson`;
+    if (!io.fs.existsSync(path)) return '';
+    let last = '';
+    for (const line of String(io.fs.readFileSync(path, 'utf8')).split('\n')) {
+      if (line.trim() === '') continue;
+      try {
+        const rec = JSON.parse(line);
+        if (typeof rec?.findings === 'string' && rec.findings.length > 0) last = rec.findings;
+      } catch {
+        // A torn line proves nothing — skip it.
+      }
+    }
+    return last;
+  };
+  /** @param {string} gate @param {string} text */
+  const persistFindings = (gate, text) => {
+    ensureDir(io.fs, `${p.dir}/findings`);
+    appendEntry(io.fs, `${p.dir}/findings/${gate}.ndjson`, { iteration: state.iterations?.[gate] ?? 0, findings: text, at: io.now() });
+  };
+
   /**
    * Persist the escalation (D7 — the exit-3 path must leave state.json
-   * escalated, not 'running') and write ESCALATION.md. When the findings are
-   * empty (an unparseable child death reached the cap), the operator gets the
-   * last child's log tail instead of a blank report (D8); the findings-present
-   * format is byte-stable.
+   * escalated, not 'running') and write ESCALATION.md. Empty in-memory
+   * findings fall back to the latest PERSISTED findings for the gate (item
+   * 4); only when neither exists does the operator get the last child's log
+   * tail (D8). The findings-present format is byte-stable.
    * @param {string} gateId @param {string} findingsText @param {number} capN
    */
   const escalate = async (gateId, findingsText, capN) => {
     await transition({ type: LOOP_EVENT.ESCALATE, gate: gateId });
+    if (findingsText === '') findingsText = latestFindings(gateId);
     let body = `# Pipeline escalation\n\nGate '${gateId}' exhausted its ${capN}-iteration cap.\nLast findings:\n\n${findingsText}\n`;
     if (findingsText === '') {
       const tail =
@@ -376,7 +401,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       return park(`seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
     }
 
-    let findings = '';
+    let findings = latestFindings(gate);
     let merged = false;
     let failoverAttempt = 0;
     /** @type {Array<{platform: string, model: string}>} */
@@ -498,6 +523,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       }
       if (writerResult.verdict !== 'APPROVED' && writerResult.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(writerResult.findings ?? '');
+        persistFindings(gate, findings);
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
         if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
           return escalate(gate, findings, cap);
@@ -545,6 +571,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       if (review.parked !== undefined) return review.parked;
       if (review.result.verdict !== 'APPROVED' && review.result.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(review.result.findings ?? '');
+        persistFindings(gate, findings);
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
         if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
           return escalate(gate, findings, cap);
@@ -569,6 +596,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       if (mergerCheck.parked !== undefined) return mergerCheck.parked;
       if (mergerCheck.result.verdict !== 'APPROVED' && mergerCheck.result.verdict !== 'APPROVED_WITH_NOTES') {
         findings = String(mergerCheck.result.findings ?? '');
+        persistFindings(gate, findings);
         const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate, verdict: 'BLOCKED' });
         if (after.status === LOOP_STATUS.ESCALATED || (after.iterations?.[gate] ?? 0) >= cap) {
           return escalate(gate, findings, cap);

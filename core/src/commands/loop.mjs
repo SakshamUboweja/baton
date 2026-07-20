@@ -307,6 +307,33 @@ async function runLoop(flags, io) {
   /** @type {Array<{platform: string, model: string}>} */
   let avoidEntries = [];
   let childSeq = 0;
+  // Child spend is budgeted PER PHASE (plan item 3) — a runaway phase parks
+  // itself without eating the other phases' budgets.
+  /** @type {Map<string, number>} */
+  const phaseChildren = new Map();
+  // Persisted per-gate findings (plan item 4): the latest non-empty line
+  // survives parks, crashes, and re-invocations.
+  /** @param {string} gate @returns {string} */
+  const latestFindings = (gate) => {
+    const path = `${p.dir}/findings/${gate}.ndjson`;
+    if (!io.fs.existsSync(path)) return '';
+    let last = '';
+    for (const line of String(io.fs.readFileSync(path, 'utf8')).split('\n')) {
+      if (line.trim() === '') continue;
+      try {
+        const rec = JSON.parse(line);
+        if (typeof rec?.findings === 'string' && rec.findings.length > 0) last = rec.findings;
+      } catch {
+        // A torn line proves nothing — skip it.
+      }
+    }
+    return last;
+  };
+  /** @param {string} gate @param {string} text */
+  const persistFindings = (gate, text) => {
+    ensureDir(io.fs, `${p.dir}/findings`);
+    appendEntry(io.fs, `${p.dir}/findings/${gate}.ndjson`, { iteration: state.iterations?.[gate] ?? 0, findings: text, at: io.now() });
+  };
 
   try {
     // `loop resume` — a PARK is resumable; an escalation is operator-only.
@@ -366,7 +393,7 @@ async function runLoop(flags, io) {
     while (state.status === LOOP_STATUS.RUNNING && state.phaseIndex < state.phaseCount) {
       const phase = spec.phases[state.phaseIndex];
       const cap = spec.budgets.iterationCap;
-      let findings = '';
+      let findings = latestFindings(phase.id);
       let failoverAttempt = 0;
       /** @type {any | null} */
       let forcedAssignment = null;
@@ -389,8 +416,10 @@ async function runLoop(flags, io) {
           io.stderr.write(`baton loop run: gate '${phase.id}' hit the ${cap}-iteration cap — escalated (see ${p.dir}/ESCALATION.md)\n`);
           return EXIT_ESCALATED;
         }
-        if (childSeq >= spec.budgets.maxChildrenPerPhase * spec.phases.length) {
-          await transition({ type: LOOP_EVENT.PARK, reason: 'total child budget exhausted' });
+        if ((phaseChildren.get(phase.id) ?? 0) >= spec.budgets.maxChildrenPerPhase) {
+          const reason = `phase '${phase.id}' exhausted its ${spec.budgets.maxChildrenPerPhase}-child budget — other phases are unaffected`;
+          await transition({ type: LOOP_EVENT.PARK, reason });
+          io.stderr.write(`baton loop run: parked — ${reason}\n`);
           return EXIT_PARKED;
         }
 
@@ -421,6 +450,7 @@ async function runLoop(flags, io) {
         forcedPrompt = null;
 
         childSeq += 1;
+        phaseChildren.set(phase.id, (phaseChildren.get(phase.id) ?? 0) + 1);
         const childId = `${String(childSeq).padStart(3, '0')}-${phase.id}`;
         const logPath = `${p.dir}/children/${childId}.log`;
         ensureDir(io.fs, `${p.dir}/children`);
@@ -522,6 +552,7 @@ async function runLoop(flags, io) {
         } else {
           // BLOCKED (or unparseable, already coerced to BLOCKED upstream).
           findings = String(result.findings ?? '');
+          persistFindings(phase.id, findings);
           const after = await transition({ type: LOOP_EVENT.GATE_ITERATION, gate: phase.id, verdict });
           if (after.status === LOOP_STATUS.ESCALATED) {
             atomicWriteText(

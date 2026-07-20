@@ -1216,6 +1216,64 @@ describe('pipeline — D8: ESCALATION.md carries the last-child log tail when fi
 });
 
 // ===========================================================================
+// ITEM 4 (v1.1) — findings persistence (pipeline half). A re-invoke re-prompts
+// the gate's writer with the LATEST persisted findings, and a cap escalation
+// embeds them even when the in-memory findings are empty (preferred over the D8
+// log-tail fallback).
+describe('pipeline — findings persistence (item 4)', () => {
+  const FDIR = `${loopPaths('/repo').dir}/findings`;
+  const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
+  // Two ordered persisted lines — the LATEST must win; the older must not be
+  // selected as the active prior findings.
+  const OLD = 'OLDER_FINDINGS_SUPERSEDED_PIPE';
+  const NEW = 'NEWER_FINDINGS_LATEST_PIPE';
+  const seedTwoFindings = (io, gate) => {
+    io.fs.mkdirSync(FDIR, { recursive: true });
+    io.fs.writeFileSync(`${FDIR}/${gate}.ndjson`,
+      JSON.stringify({ iteration: 1, findings: OLD, at: T0 }) + '\n' + JSON.stringify({ iteration: 2, findings: NEW, at: T0 }) + '\n');
+  };
+
+  it('RED (4b pipeline): a re-invoke embeds the LATEST persisted findings in the FIRST writer prompt (older superseded)', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const gate = 'subtask-t1-review';
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+    seedTwoFindings(io, gate);
+
+    await run(['pipeline', 'run'], io);
+    const writer = writersOf(io.__runner)[0];
+    assert.ok(writer, 'a writer spawned on re-invoke');
+    const prompt = argsOf(writer).join(' ');
+    assert.match(prompt, new RegExp(NEW), 'the first writer prompt embeds the LATEST persisted findings (not an empty string)');
+    assert.doesNotMatch(prompt, new RegExp(OLD), 'the superseded (older) findings is not selected as the active prior findings');
+  });
+
+  it('RED (4c pipeline): a fresh-invoke cap escalation embeds the LATEST PERSISTED findings, not the D8 log tail', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const gate = 'subtask-t1-review';
+    const io = makePipeRepo({
+      spec: pipelineSpec({ subtasks, budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+      runner: undefined,
+    });
+    io.superviseChild = fakeRunner(io, cleanSubtask()); // unused — escalates before spawn
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 1 } });
+    seedTwoFindings(io, gate);
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 3, 'a gate at the cap escalates');
+    const esc = io.files()[ESC];
+    assert.match(esc, new RegExp(NEW), 'the cap escalation embeds the LATEST persisted findings even when in-memory findings are empty');
+    assert.doesNotMatch(esc, new RegExp(OLD), 'the superseded (older) findings is not the one embedded');
+    // Persisted genuinely WINS over the D8 fallback — no log-tail footer when
+    // persisted findings exist.
+    assert.doesNotMatch(esc, /Last child log tail|produced no parseable findings/, 'the D8 empty-findings log-tail footer is absent when persisted findings exist');
+  });
+});
+
+// ===========================================================================
 // ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
 // actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
 // rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never

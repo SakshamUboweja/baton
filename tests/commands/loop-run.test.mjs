@@ -410,6 +410,167 @@ describe('loop run — D9: done-status persistence', () => {
 });
 
 // ===========================================================================
+// ITEM 3 (v1.1) — per-phase child budgets. Today budgets.maxChildrenPerPhase
+// gates a GLOBAL product (childSeq >= maxChildrenPerPhase * phases.length);
+// enforce it PER phase so one runaway phase parks naming itself while others are
+// unaffected, and the SUM across phases may legitimately exceed a single budget.
+describe('loop run — per-phase child budgets (item 3)', () => {
+  // A runner that ALWAYS returns BLOCKED — the phase never passes on its own.
+  const alwaysBlocked = (io) => {
+    const calls = /** @type {any[]} */ ([]);
+    const fn = (/** @type {any} */ spec, /** @type {any} */ opts) => {
+      calls.push({ spec, command: spec?.command, args: spec?.args ?? [] });
+      return Promise.resolve({ timedOut: false, exitCode: 0, verdict: 'BLOCKED', findings: 'still-not-done', logPath: opts.logPath });
+    };
+    fn.calls = calls;
+    return fn;
+  };
+
+  it('RED (item 3): a phase exhausting its OWN child budget parks naming that phase (global product NOT exhausted)', async () => {
+    // 3 phases → the GLOBAL product is 2*3 = 6, far from exhausted; gate-1 alone
+    // must park at its OWN budget of 2, before the 5-iteration cap trips.
+    const spec = loopSpec({
+      budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 2 },
+      phases: [{ id: 'gate-1', role: 'plan-reviewer' }, { id: 'plan', role: 'planner' }, { id: 'gate-2', role: 'plan-reviewer' }],
+    });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    const runner = alwaysBlocked(io);
+    io.superviseChild = runner;
+    io.__runner = runner;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 4, 'exhausting a single phase’s child budget parks (exit 4), not escalates at the cap');
+    const { state } = await loadLoopState('/repo', io);
+    assert.equal(state.status, LOOP_STATUS.PARKED, 'the run is parked');
+    assert.match(state.parkReason ?? '', /gate-1/, 'the park reason names the phase whose budget was exhausted');
+    // The phase SPENT its full budget (not an immediate/early park): exactly 2
+    // children ran, each a BLOCKED gate iteration, so the budget — not something
+    // else — is the binding constraint.
+    assert.equal(runner.calls.length, 2, `the phase spent exactly its 2-child budget before parking; got ${runner.calls.length}`);
+    assert.equal(state.iterations['gate-1'], 2, 'both budgeted children ran their BLOCKED gate iterations (iterations[gate-1] === 2)');
+  });
+
+  it('GUARD (item 3): phases each UNDER their own budget complete even when the SUM exceeds one phase budget', async () => {
+    // 3 phases, budget 2 each. Each spends 2 children (BLOCKED then APPROVED) —
+    // total 6 across phases > any single budget (2), and > a naive global 2.
+    const spec = loopSpec({
+      budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 2 },
+      phases: [{ id: 'p1', role: 'planner' }, { id: 'p2', role: 'planner' }, { id: 'p3', role: 'planner' }],
+    });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', findings: 'x' }, { verdict: 'APPROVED' }, // p1: 2 children
+      { verdict: 'BLOCKED', findings: 'x' }, { verdict: 'APPROVED' }, // p2: 2 children
+      { verdict: 'BLOCKED', findings: 'x' }, { verdict: 'APPROVED' }, // p3: 2 children
+    ]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `no per-phase budget is exceeded, so the run completes; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
+    assert.equal(io.__runner.calls.length, 6, 'the SUM of children (6) exceeds any single phase budget (2) — no global-product regression');
+  });
+});
+
+// ===========================================================================
+// ITEM 4 (v1.1) — findings persistence. Append-only .handoff/loop/findings/
+// <gate>.ndjson, one line per BLOCKED verdict {iteration?, findings, at}; the
+// next child prompt for that gate embeds the LATEST persisted findings, and
+// escalations embed them too — so a park→resume or a crash→re-invoke re-prompts
+// with the real prior findings instead of an empty string.
+describe('loop run — findings persistence (item 4)', () => {
+  const P = loopPaths('/repo');
+  const findingsLines = (io, gate) => {
+    const raw = io.files()[`${P.dir}/findings/${gate}.ndjson`];
+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  };
+  const seedRunningState = (io, over) => {
+    io.fs.mkdirSync(P.dir, { recursive: true });
+    io.fs.writeFileSync(`${P.dir}/state.json`, JSON.stringify({
+      schema: 'baton/loop-state@1', runId: 'loop-item4', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 0,
+      iterations: {}, status: 'running', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+      flavor: 'loop', ...over,
+    }, null, 2) + '\n');
+  };
+
+  it('RED (4a): a BLOCKED gate then PARK then resume carries the persisted findings into the next child prompt', async () => {
+    const marker = 'DISTINCTIVE_FINDINGS_4A_MARKER';
+    const cfg = JSON.parse(JSON.stringify(CONFIG));
+    cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh']; // single entry — a model death parks
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'solo-codex' }] });
+    const io = makeLoopRepo({ spec, files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2), '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n' }, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', exitCode: 0, findings: marker }, // records the gate findings
+      { verdict: 'BLOCKED', exitCode: 1, logContent: `child died: ${MODEL_UNAVAIL}\n` }, // model death → single-entry chain parks
+    ]);
+    io.__runner = io.superviseChild;
+    assert.equal(await cmdLoop(['run'], io), 4, 'run 1 parks after recording the BLOCKED findings');
+    assert.ok(findingsLines(io, 'gate-1').some((l) => String(l.findings).includes(marker)), 'the BLOCKED findings were persisted to findings/gate-1.ndjson');
+
+    const runner2 = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.superviseChild = runner2;
+    io.__runner = runner2;
+    await cmdLoop(['resume'], io);
+    assert.ok(runner2.calls.length >= 1, 'resume re-spawned the gate child');
+    assert.match((runner2.calls[0].args ?? []).map(String).join(' '), new RegExp(marker), 'the resumed child prompt embeds the persisted prior findings');
+  });
+
+  // Two ordered persisted lines — the LATEST must win, the older must not be
+  // selected as the active prior findings.
+  const OLD = 'OLDER_FINDINGS_SUPERSEDED';
+  const NEW = 'NEWER_FINDINGS_LATEST';
+  const seedTwoFindings = (io, gate) => {
+    io.fs.mkdirSync(`${P.dir}/findings`, { recursive: true });
+    io.fs.writeFileSync(`${P.dir}/findings/${gate}.ndjson`,
+      JSON.stringify({ iteration: 1, findings: OLD, at: T0 }) + '\n' + JSON.stringify({ iteration: 2, findings: NEW, at: T0 }) + '\n');
+  };
+
+  it('RED (4b loop): a re-invoke embeds the LATEST persisted findings in the FIRST child prompt (older superseded)', async () => {
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    seedRunningState(io, { specDigest: dedupeKey(spec.phases), iterations: { 'gate-1': 2 } });
+    seedTwoFindings(io, 'gate-1');
+
+    await cmdLoop(['run'], io);
+    assert.ok(io.__runner.calls.length >= 1, 'a child spawned on re-invoke');
+    const prompt = (io.__runner.calls[0].args ?? []).map(String).join(' ');
+    assert.match(prompt, new RegExp(NEW), 'the first re-invoke child prompt embeds the LATEST persisted findings');
+    assert.doesNotMatch(prompt, new RegExp(OLD), 'the superseded (older) findings is not selected as the active prior findings');
+  });
+
+  it('RED (4c loop): a fresh-invoke cap escalation embeds the LATEST persisted findings in ESCALATION.md (older superseded)', async () => {
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]); // unused — escalates before spawn
+    io.__runner = io.superviseChild;
+    seedRunningState(io, { specDigest: dedupeKey(spec.phases), iterations: { 'gate-1': 1 } }); // AT cap 1
+    seedTwoFindings(io, 'gate-1');
+
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 3, 'a gate at the cap escalates');
+    const esc = loopFile(io, 'ESCALATION.md') ?? '';
+    assert.match(esc, new RegExp(NEW), 'ESCALATION.md embeds the LATEST persisted findings even when in-memory findings are empty');
+    assert.doesNotMatch(esc, new RegExp(OLD), 'the superseded (older) findings is not the one embedded');
+  });
+
+  it('RED (4d): the findings file is append-only across iterations (two BLOCKED verdicts → two ordered lines)', async () => {
+    const spec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }], budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, [
+      { verdict: 'BLOCKED', findings: 'first-finding-A' },
+      { verdict: 'BLOCKED', findings: 'second-finding-B' },
+      { verdict: 'APPROVED' },
+    ]);
+    io.__runner = io.superviseChild;
+    await cmdLoop(['run'], io);
+    const lines = findingsLines(io, 'gate-1');
+    assert.equal(lines.length, 2, 'two BLOCKED verdicts append two findings lines (append-only, never overwrite)');
+    assert.match(String(lines[0].findings), /first-finding-A/, 'the first BLOCKED findings is line 1');
+    assert.match(String(lines[1].findings), /second-finding-B/, 'the second BLOCKED findings is line 2 (order preserved)');
+  });
+});
+
+// ===========================================================================
 describe('loop run — failover integration', () => {
   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits
