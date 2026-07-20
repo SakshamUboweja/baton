@@ -1,6 +1,9 @@
 # baton
 .handoff/
 
+# review-gate transcripts are large and machine-specific — kept local only
+reviews/**/raw-output.txt
+
 node_modules/
 coverage/
 *.log

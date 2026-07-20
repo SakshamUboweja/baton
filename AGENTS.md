@@ -8,7 +8,7 @@ baton is a zero-dependency Node CLI plus per-harness adapters that give AI codin
 - `adapters/` — `claude-code/` (plugin surfaces), `codex/`, `cursor/`
 - `templates/` — scaffolded AGENTS.md / CLAUDE.md / baton.config.json
 - `tests/` — unit, command, invariant, integration suites (`node:test`)
-- `docs/` — plans (`docs/plans/`), design (`docs/design/`)
+- `docs/` — architecture overview (`docs/architecture.md`); new plans land in `docs/plans/`
 - `reviews/` — review-gate artifacts, one directory per task
 
 ## 2. Roles and models
