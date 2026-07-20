@@ -357,6 +357,59 @@ describe('loop run — smoke gate', () => {
 });
 
 // ===========================================================================
+// D9 (v1.1 item 1) — done-status persistence. A smoke-approve resume that
+// completes the FINAL phase must persist raw status 'done'. Today the last
+// phase's PHASE_ADVANCE flips DONE, SMOKE_AWAIT overwrites it, and SMOKE_APPROVE
+// resumes to RUNNING — nothing re-flips DONE, so the completion path prints
+// done + exits 0 while state.json stays 'running'.
+describe('loop run — D9: done-status persistence', () => {
+  const smokeExec = (rec = []) => (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+    rec.push([cmd, ...args].join(' '));
+    if (cmd === 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+    return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+  };
+  // smoke-build is the LAST phase — no phase after the smoke gate re-flips DONE.
+  const finalSmokeSpec = loopSpec({
+    smoke: { cmd: 'npm run smoke', expect: 'ok' },
+    phases: [{ id: 'work', role: 'implementer' }, { id: 'smoke-build', role: 'implementer' }],
+  });
+
+  it('RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done', async () => {
+    const io = makeLoopRepo({ spec: finalSmokeSpec, execFile: smokeExec(), runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]); // work + smoke-build
+    io.__runner = io.superviseChild;
+    assert.equal(await cmdLoop(['run'], io), 0, 'the first pass reaches the smoke gate');
+    const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token;
+
+    const runner2 = fakeRunner(io, []); // no phase remains after the smoke gate
+    io.superviseChild = runner2;
+    io.__runner = runner2;
+    const code = await cmdLoop(['run', '--approve-smoke', token], io);
+    assert.equal(code, 0, 'the approved completion exits 0');
+    const raw = JSON.parse(loopFile(io, 'state.json'));
+    assert.equal(raw.status, 'done', 'the completed run persists status done (not left running after SMOKE_APPROVE)');
+  });
+
+  it('GUARD (D9): re-running a completed (done) run still prints done and exits 0, no re-spawn', async () => {
+    const spec = loopSpec({ phases: [{ id: 'work', role: 'implementer' }] });
+    const io = makeLoopRepo({ spec, runner: undefined });
+    io.superviseChild = fakeRunner(io, []);
+    io.__runner = io.superviseChild;
+    const p = loopPaths('/repo');
+    io.fs.mkdirSync(p.dir, { recursive: true });
+    io.fs.writeFileSync(`${p.dir}/state.json`, JSON.stringify({
+      schema: 'baton/loop-state@1', runId: 'loop-done', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 1,
+      iterations: {}, status: 'done', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+      flavor: 'loop', specDigest: dedupeKey(spec.phases),
+    }, null, 2) + '\n');
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, 'a re-run of a done run exits 0');
+    assert.match(io.stdoutText(), /done/, 'it still prints done');
+    assert.equal(io.__runner.calls.length, 0, 'no child re-spawns for a completed run');
+  });
+});
+
+// ===========================================================================
 describe('loop run — failover integration', () => {
   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits

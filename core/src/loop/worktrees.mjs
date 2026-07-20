@@ -113,32 +113,33 @@ export async function preflightWorktree(root, target, io) {
 
 /**
  * Postflight after a child: HEAD still on the expected branch (checked in the
- * seat cwd) and main unmoved from the pre-child capture.
- * @param {string} root @param {{seat: string, branch: string, mainSha: string}} target @param {any} io
+ * seat cwd) and the trunk unmoved from the pre-child capture.
+ * @param {string} root @param {{seat: string, branch: string, mainSha: string, trunk?: string}} target @param {any} io
  * @returns {Promise<{ok: true} | {ok: false, check: string, refusal: string}>}
  */
 export async function postflightWorktree(root, target, io) {
+  const trunk = target.trunk ?? 'main';
   const path = worktreePaths(root).seats[target.seat];
   const head = (await git(io, path, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
   if (head !== target.branch) {
     return { ok: false, check: 'head-drift', refusal: `the child left HEAD on '${head}' instead of the expected branch '${target.branch}'` };
   }
-  const main = (await git(io, root, ['rev-parse', 'main'])).stdout.trim();
-  if (main !== target.mainSha) {
-    return { ok: false, check: 'main-moved', refusal: `main moved under the child (was ${target.mainSha}, now ${main}) — only the merger writes main` };
+  const trunkSha = (await git(io, root, ['rev-parse', trunk])).stdout.trim();
+  if (trunkSha !== target.mainSha) {
+    return { ok: false, check: 'main-moved', refusal: `${trunk} moved under the child (was ${target.mainSha}, now ${trunkSha}) — only the merger writes ${trunk}` };
   }
   return { ok: true };
 }
 
 /**
- * Full-range attribution scan over main..branch — the merge gate. Every
+ * Full-range attribution scan over trunk..branch — the merge gate. Every
  * commit must be authored AND committed by the sole author, with no forbidden
  * AI-attribution trailer in the body. The range is never windowed.
- * @param {string} root @param {string} branch @param {any} io
+ * @param {string} root @param {string} branch @param {any} io @param {string} [trunk]
  * @returns {Promise<{ok: true} | {ok: false, offending: string, reason: string}>}
  */
-export async function attributionScan(root, branch, io) {
-  const out = (await git(io, root, ['log', `main..${branch}`, `--format=${LOG_FORMAT}`])).stdout;
+export async function attributionScan(root, branch, io, trunk = 'main') {
+  const out = (await git(io, root, ['log', `${trunk}..${branch}`, `--format=${LOG_FORMAT}`])).stdout;
   for (const record of String(out).split('\x1e')) {
     if (record.trim().length === 0) continue;
     const [sha, an, ae, cn, ce, body = ''] = record.replace(/^\n/, '').split('\x00');
@@ -158,14 +159,15 @@ export async function attributionScan(root, branch, io) {
 const mergeLockPath = (/** @type {string} */ root) => `${root}/.handoff/loop/merge.lock`;
 
 /**
- * Merge an approved subtask branch into main — one guarded transaction:
+ * Merge an approved subtask branch into the trunk — one guarded transaction:
  * acquire the merge lock (a held lock refuses), gate on the attribution scan,
  * merge at the repo root, abort-and-park on conflict, then ff-only sync both
  * seats. The lock is released on EVERY exit path after acquisition.
- * @param {string} root @param {{branch: string}} input @param {any} io
+ * @param {string} root @param {{branch: string, trunk?: string}} input @param {any} io
  * @returns {Promise<{ok: true, branch: string} | {ok: false, reason: string}>}
  */
 export async function mergeSubtask(root, input, io) {
+  const trunk = input.trunk ?? 'main';
   const lock = mergeLockPath(root);
   if (io.fs.existsSync(lock)) {
     return { ok: false, reason: `the merge lock at ${lock} is held by another merger — refusing a concurrent merge` };
@@ -173,7 +175,7 @@ export async function mergeSubtask(root, input, io) {
   ensureDir(io.fs, `${root}/.handoff/loop`);
   atomicWriteJson(io.fs, lock, { host: io.host, pid: io.pid, at: io.now() });
   try {
-    const scan = await attributionScan(root, input.branch, io);
+    const scan = await attributionScan(root, input.branch, io, trunk);
     if (scan.ok !== true) return { ok: false, reason: scan.reason };
 
     try {
@@ -192,10 +194,10 @@ export async function mergeSubtask(root, input, io) {
     const seats = worktreePaths(root).seats;
     for (const seat of SEATS) {
       try {
-        await git(io, seats[seat], ['merge', '--ff-only', 'main']);
+        await git(io, seats[seat], ['merge', '--ff-only', trunk]);
       } catch (err) {
         const msg = /** @type {any} */ (err)?.stderr || /** @type {any} */ (err)?.message || String(err);
-        return { ok: false, reason: `worktree wt-${seat} could not fast-forward to main — corruption signal, parked: ${String(msg).split('\n')[0]}` };
+        return { ok: false, reason: `worktree wt-${seat} could not fast-forward to ${trunk} — corruption signal, parked: ${String(msg).split('\n')[0]}` };
       }
     }
     return { ok: true, branch: input.branch };

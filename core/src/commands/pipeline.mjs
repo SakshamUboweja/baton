@@ -73,6 +73,25 @@ export async function cmdPipeline(args, io) {
   return runPipeline(flags, io);
 }
 
+/**
+ * Derive the repo's trunk branch EXACTLY ONCE per run: origin's HEAD when it
+ * exists, else the currently checked-out branch at the root. The result is
+ * stamped into state and reused on every resume — never re-derived mid-run.
+ * @param {string} root @param {any} io
+ * @returns {Promise<string>}
+ */
+async function deriveTrunk(root, io) {
+  try {
+    const out = String((await io.execFile('git', ['symbolic-ref', 'refs/remotes/origin/HEAD'], { cwd: root })).stdout).trim();
+    const m = out.match(/refs\/remotes\/origin\/(.+)$/);
+    if (m?.[1]) return m[1];
+  } catch {
+    // No origin HEAD (local-only repo) — fall back to the checked-out branch.
+  }
+  const branch = String((await io.execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: root })).stdout).trim();
+  return branch.length > 0 && branch !== 'HEAD' ? branch : 'main';
+}
+
 /** Validate the spec's subtasks — every rejection names its offender.
  * @param {any} subtasks @returns {string | null} */
 function validateSubtasks(subtasks) {
@@ -158,7 +177,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     if (flags.__resume === true) {
       return usageError(io, flags, 'pipeline', 'nothing to resume — no run state exists here; start with: baton pipeline run');
     }
-    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest };
+    state = { ...initLoopState(stateSpec, io), flavor: 'pipeline', specDigest, trunk: await deriveTrunk(root, io) };
     await writeLoopState(root, state, io);
   } else {
     if (typeof state.flavor === 'string' && state.flavor !== 'pipeline') {
@@ -172,7 +191,14 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     if (state.specDigest !== specDigest) {
       return usageError(io, flags, 'pipeline', 'the subtasks list changed since this run started (spec digest mismatch) — resuming would misalign the subtask position; archive .handoff/loop to start fresh');
     }
+    // Additive migration: a stamped state from before trunk derivation lacks
+    // the field — derive once and stamp it, never refuse (plan item 2).
+    if (typeof state.trunk !== 'string' || state.trunk.length === 0) {
+      state = { ...state, trunk: await deriveTrunk(root, io) };
+      await writeLoopState(root, state, io);
+    }
   }
+  const trunk = state.trunk;
   const transition = async (/** @type {any} */ ev) => {
     const next = applyLoopEvent(state, ev);
     const seq = await appendLoopEvent(root, ev, io);
@@ -313,19 +339,19 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
     // receipt-without-ancestor re-runs the subtask.
     let isAncestor = false;
     try {
-      await io.execFile('git', ['merge-base', '--is-ancestor', branch, 'main'], { cwd: root });
+      await io.execFile('git', ['merge-base', '--is-ancestor', branch, trunk], { cwd: root });
       isAncestor = true;
     } catch {
       // Not an ancestor (or the branch does not exist yet) — the normal path.
     }
     if (isAncestor) {
       if (mergeReceipts().some((r) => r?.subtaskId === st.id)) {
-        io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into main (receipt + ancestor) — advancing\n`);
+        io.stdout.write(`baton pipeline run: subtask '${st.id}' is already merged into ${trunk} (receipt + ancestor) — advancing\n`);
         await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
         continue;
       }
       return park(
-        `subtask '${st.id}' has a stale branch '${branch}' whose tip is already contained in main, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log main..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
+        `subtask '${st.id}' has a stale branch '${branch}' whose tip is already contained in ${trunk}, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect \`git log ${trunk}..${branch}\` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete '${branch}' and continue with: baton pipeline resume`,
       );
     }
 
@@ -345,7 +371,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       if (!alreadyOnBranch) await withSeatHealing(seat, () => io.execFile('git', ['checkout', '-b', branch], { cwd: seats[seat] }));
       const pre = await preflightWorktree(root, { seat, branch }, io);
       if (pre.ok !== true) return park(`preflight refused subtask '${st.id}': ${pre.refusal}`);
-      mainSha = (await io.execFile('git', ['rev-parse', 'main'], { cwd: root })).stdout.trim();
+      mainSha = (await io.execFile('git', ['rev-parse', trunk], { cwd: root })).stdout.trim();
     } catch (err) {
       return park(`seat preparation failed for subtask '${st.id}': ${String(/** @type {any} */ (err)?.message ?? err).split('\n')[0]}`);
     }
@@ -479,12 +505,12 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         continue; // the writer retries; no reviewer sees a failed attempt
       }
 
-      const post = await postflightWorktree(root, { seat, branch, mainSha }, io);
+      const post = await postflightWorktree(root, { seat, branch, mainSha, trunk }, io);
       if (post.ok !== true) return park(`postflight refused subtask '${st.id}': ${post.refusal}`);
 
       // An empty branch never merges (Gate-2 fold G3): the writer must have
       // actually committed work ahead of main.
-      const ahead = String((await io.execFile('git', ['log', `main..${branch}`, '--format=%H'], { cwd: root })).stdout).trim();
+      const ahead = String((await io.execFile('git', ['log', `${trunk}..${branch}`, '--format=%H'], { cwd: root })).stdout).trim();
       if (ahead.length === 0) return park(`subtask '${st.id}' produced an EMPTY branch (no commits ahead of main) — nothing to review or merge`);
 
       // Reviewer-seat preflight (Gate-2 fold G5): the reviewing seat must be
@@ -500,7 +526,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
       // Reviewer (read-only, the OTHER seat's model and cwd, subtask-reviewer role).
       const reviewPrompt = [
         `You are the subtask-reviewer for subtask '${st.id}': ${st.title}.`,
-        `Review the change on ${branch} against main from the ${other} seat (fresh context). Run: git diff main..${branch} (and git log main..${branch}) to see exactly what changed — branch refs are shared across worktrees.`,
+        `Review the change on ${branch} against ${trunk} from the ${other} seat (fresh context). Run: git diff ${trunk}..${branch} (and git log ${trunk}..${branch}) to see exactly what changed — branch refs are shared across worktrees.`,
         "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ].join('\n\n');
       // A reviewer DEATH is never a review verdict (dogfood finding D6): a
@@ -528,7 +554,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
 
       // Merger (read-only child — it re-checks; the SUPERVISOR merges).
       const mergerPrompt = [
-        `You are the merger for subtask '${st.id}'. Adversarially re-check ${branch} against main before it merges.`,
+        `You are the merger for subtask '${st.id}'. Adversarially re-check ${branch} against ${trunk} before it merges.`,
         "End with exactly:\nVERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED\nFINDINGS: numbered findings, or 'none'",
       ].join('\n\n');
       const mergerCheck = await superviseVerdictChild({
@@ -550,7 +576,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs 
         continue;
       }
 
-      const merge = await mergeSubtask(root, { branch }, io);
+      const merge = await mergeSubtask(root, { branch, trunk }, io);
       if (merge.ok !== true) return park(`merge of '${branch}' refused: ${merge.reason}`);
       // The receipt lands BEFORE the phase-advance journal write (I1): a
       // crash between the two resumes into a receipt-backed advance.

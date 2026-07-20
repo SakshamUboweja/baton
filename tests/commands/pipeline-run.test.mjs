@@ -1216,6 +1216,247 @@ describe('pipeline — D8: ESCALATION.md carries the last-child log tail when fi
 });
 
 // ===========================================================================
+// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+// actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
+// rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
+// re-derived mid-run. Pinned in a MASTER-trunk fake repo — the observable is
+// "master used everywhere; one derivation", not the exact command.
+
+// A fake git modeling a MASTER-trunk repo: the default branch is 'master'
+// (symbolic-ref refs/remotes/origin/HEAD → origin/master; fallback rev-parse
+// --abbrev-ref HEAD at the ROOT → master). It answers 'main' refs LENIENTLY
+// (same sha/ranges) so a main-hardcoded impl still runs end to end — the pin's
+// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
+// the default-branch derivation fail (to prove a resume reuses a stamped trunk).
+// Structured argv classifiers shared by the fake's dispatch AND its call-count
+// helpers, so both agree on what "a trunk-derivation probe" is (verifier iter 3):
+// any arg order, plus symbolic-ref HEAD and branch --show-current variants.
+function isDerivationShape(args) {
+  const has = (a) => args.includes(a);
+  return (
+    (has('symbolic-ref') && (has('refs/remotes/origin/HEAD') || has('HEAD'))) || // (a) + (d)
+    (has('rev-parse') && has('--abbrev-ref') && has('HEAD')) || // (b) any order
+    (has('branch') && has('--show-current')) // (c)
+  );
+}
+// The one legit exception: rev-parse --abbrev-ref HEAD (any order) in a seat cwd.
+function isSeatHeadProbe(args, cwd) {
+  const seat = cwd === WT_A || cwd === WT_B;
+  return seat && args.includes('rev-parse') && args.includes('--abbrev-ref') && args.includes('HEAD');
+}
+
+function masterGit({ merged = [], existingBranches = [], dirtyCwds = [], log = CLEAN_LOG, deriveThrows = false } = {}) {
+  const added = /** @type {Map<string,string>} */ (new Map());
+  const branchAt = /** @type {Map<string,string>} */ (new Map());
+  const branches = new Set(existingBranches);
+  const dirty = new Set(dirtyCwds);
+  const mergedSet = new Set(merged);
+  const calls = /** @type {any[]} */ ([]);
+  const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
+  const list = () => {
+    const entries = [{ path: '/repo', branch: 'master' }];
+    for (const [path, branch] of added) entries.push({ path, branch: branchAt.get(path) ?? branch });
+    return entries.map((e) => `worktree ${e.path}\nHEAD ${MAIN_SHA}\nbranch refs/heads/${e.branch}\n`).join('\n');
+  };
+  const fn = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
+    const argstr = args.join(' ');
+    calls.push({ cmd, args, argstr, cwd: opts?.cwd, lockPresent: lockProbeRef.fn ? lockProbeRef.fn() : undefined });
+    if (cmd !== 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+    // ---- structured trunk-derivation classification (verifier iter 3) --------
+    // Every current-/default-branch probe shape is classified by ARGV, not by an
+    // exact string, so arg-order variants and alternate commands can't slip past:
+    //   (a) symbolic-ref naming refs/remotes/origin/HEAD
+    //   (b) rev-parse containing BOTH --abbrev-ref and HEAD (any order)
+    //   (c) branch --show-current
+    //   (d) symbolic-ref HEAD
+    // The ONLY legit exception is form (b) issued in a seat cwd (the pipeline's
+    // alreadyOnBranch / preflight / postflight HEAD checks).
+    const seatCwd = opts?.cwd === WT_A || opts?.cwd === WT_B;
+    if (isSeatHeadProbe(args, opts?.cwd)) {
+      const dflt = opts.cwd === WT_A ? 'baton/wt-a/base' : 'baton/wt-b/base'; // never 'master' — a seat probe is never the trunk
+      return Promise.resolve({ stdout: `${branchAt.get(opts.cwd) ?? dflt}\n`, stderr: '' });
+    }
+    if (isDerivationShape(args) && !seatCwd) {
+      // A derivation attempt (root fallback or a stray probe in any non-seat cwd).
+      // deriveThrows makes EVERY such form fail so it can't silently succeed via a
+      // generic catch-all; otherwise it returns the shape-appropriate default.
+      if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: no default branch'), { code: 128, stderr: 'fatal: no default branch\n' }));
+      if (args.includes('symbolic-ref')) return Promise.resolve({ stdout: `${args.includes('refs/remotes/origin/HEAD') ? 'refs/remotes/origin/master' : 'refs/heads/master'}\n`, stderr: '' });
+      return Promise.resolve({ stdout: 'master\n', stderr: '' }); // rev-parse --abbrev-ref HEAD / branch --show-current
+    }
+    if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
+    if (argstr.startsWith('worktree add')) {
+      const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
+      const bi = args.indexOf('-b');
+      const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
+      if (path) { added.set(path, branch); branchAt.set(path, branch); }
+      return Promise.resolve({ stdout: '', stderr: '' });
+    }
+    if (argstr.startsWith('worktree prune') || argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
+    if (argstr.startsWith('checkout -b')) {
+      const target = args[args.indexOf('-b') + 1];
+      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
+      branches.add(target);
+      if (opts?.cwd) branchAt.set(opts.cwd, target);
+      return Promise.resolve({ stdout: '', stderr: '' });
+    }
+    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
+    // merge-base --is-ancestor <branch> <trunk>: exit 0 iff branch already merged.
+    if (argstr.startsWith('merge-base --is-ancestor')) {
+      const b = args[args.indexOf('--is-ancestor') + 1];
+      return mergedSet.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
+    }
+    // Lenient: rev-parse of ANY single ref (master OR main) resolves to the sha.
+    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${MAIN_SHA}\n`, stderr: '' });
+    if (argstr.startsWith('log ')) {
+      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
+      const branch = String(range).split('..')[1];
+      if (branch && mergedSet.has(branch)) return Promise.resolve({ stdout: '', stderr: '' }); // merged → empty
+      return Promise.resolve({ stdout: log, stderr: '' });
+    }
+    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' }); // merge <branch> and merge --ff-only <trunk>
+    if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
+    return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
+  };
+  fn.calls = calls;
+  fn.git = () => calls.filter((c) => c.cmd === 'git');
+  fn.mainCalls = () => fn.git().filter((c) => c.argstr.includes('main'));
+  // A trunk-derivation attempt = ANY derivation SHAPE (symbolic-ref origin/HEAD,
+  // rev-parse --abbrev-ref HEAD in any order, branch --show-current, symbolic-ref
+  // HEAD) that is NOT the legit seat HEAD probe. Counts seat-cwd re-derivations of
+  // other shapes too — the only exclusion is the explicit seat HEAD-probe form —
+  // so "derive once, never re-derive" is pinned by the count, arg-order-proof.
+  fn.derivationCalls = () => fn.git().filter((c) => isDerivationShape(c.args) && !isSeatHeadProbe(c.args, c.cwd)).length;
+  // The legit seat HEAD probes (alreadyOnBranch / preflight / postflight),
+  // confined to the two seat cwds — asserted explicitly.
+  fn.seatProbes = () => fn.git().filter((c) => isSeatHeadProbe(c.args, c.cwd));
+  fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
+  return fn;
+}
+
+describe('pipeline — trunk derivation (v1.1 item 2)', () => {
+  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  const mergeReceiptsOf = (io) => {
+    const raw = io.files()[MERGES];
+    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  };
+
+  it('RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master', async () => {
+    const git = masterGit();
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `a master-trunk run completes; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
+    // Teeth: NO trunk touchpoint used the hardcoded 'main'.
+    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'every trunk git call targets master — no main anywhere');
+    // Reviewer prompt ranges over master..branch.
+    const rev = reviewersOf(io.__runner)[0];
+    assert.ok(rev, 'a reviewer ran');
+    const revPrompt = argsOf(rev).join(' ');
+    assert.match(revPrompt, /git diff master\.\.baton\/wt-a\/subtask-t1/, 'the reviewer prompt ranges over master..<branch>');
+    assert.doesNotMatch(revPrompt, /\bmain\.\./, 'the reviewer prompt never ranges over main');
+    // Merger prompt names master as the trunk.
+    const merger = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
+    assert.ok(merger, 'a merger ran');
+    assert.match(argsOf(merger).join(' '), /against master/, 'the merger prompt names master as the trunk');
+    // Receipt shape unchanged.
+    assert.ok(
+      mergeReceiptsOf(io).some((r) => r.subtaskId === 't1' && r.branch === 'baton/wt-a/subtask-t1' && typeof r.mergedAt === 'string'),
+      'the merge receipt keeps its {subtaskId, branch, mergedAt} shape',
+    );
+  });
+
+  it('RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main', async () => {
+    const branch = 'baton/wt-a/subtask-t1';
+    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
+    const out = io.stderrText() + io.stdoutText();
+    assert.match(out, /git log master\.\.baton\/wt-a\/subtask-t1/, 'the stale-park message points at git log master..<branch>');
+    assert.doesNotMatch(out, /\bmain\.\./, 'the stale-park message never ranges over main');
+  });
+
+  it('RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json', async () => {
+    const git = masterGit();
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    await run(['pipeline', 'run'], io);
+    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
+    assert.equal(state.trunk, 'master', 'the derived trunk is persisted in state.json for reuse');
+    assert.equal(git.derivationCalls(), 1, 'the trunk is derived EXACTLY once at init (one root-level derivation)');
+  });
+
+  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    // A prior run already derived + stamped the trunk.
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', trunk: 'master' });
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `resume completes using the stamped trunk without re-deriving; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed run reached DONE');
+    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the resumed run uses the stamped master everywhere');
+    // Derive-once teeth: a stamped resume issues NO derivation — not symbolic-ref,
+    // not a root fallback, and not a stray abbrev-ref in any non-seat cwd (a
+    // seat-cwd re-derivation would count here too, since only WT_A/WT_B probes
+    // are excluded).
+    assert.equal(git.derivationCalls(), 0, 'a stamped resume NEVER re-derives the trunk (not even to catch-and-fallback, and not via a seat cwd)');
+    // The exclusion is explicit: the only abbrev-ref HEAD calls are the known
+    // legit seat probes, confined to the two seat cwds.
+    assert.ok(git.seatProbes().length >= 1, 'the resume made its legit seat HEAD probes');
+    assert.ok(git.seatProbes().every((c) => c.cwd === WT_A || c.cwd === WT_B), 'every abbrev-ref HEAD probe is a seat probe (WT_A/WT_B), never a disguised derivation');
+  });
+
+  it('RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal', async () => {
+    const subtasks = [{ id: 't1', title: 'only' }];
+    const git = masterGit();
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    // A pre-trunk stamped state: flavor + specDigest present, but NO trunk field.
+    // Missing trunk alone is NOT the I3 legacy-unstamped refusal.
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running' });
+    const code = await run(['pipeline', 'run'], io);
+    assert.notEqual(code, 2, 'a missing trunk field is additive migration, not a legacy-unstamped refusal');
+    assert.equal(code, 0, `the run migrates and completes; stderr: ${io.stderrText()}`);
+    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
+    assert.equal(state.trunk, 'master', 'the trunk is derived once and stamped on migration');
+    assert.equal(git.derivationCalls(), 1, 'migration derives the trunk EXACTLY once, then stamps it');
+  });
+
+  it('RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv', async () => {
+    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+    const t1Branch = 'baton/wt-a/subtask-t1';
+    // t1 is genuinely merged under master: is-ancestor true, empty master..t1,
+    // AND a receipt. t2 is unmerged and runs normally.
+    const git = masterGit({ merged: [t1Branch] });
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+    io.__runner = io.superviseChild;
+    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2, status: 'running', trunk: 'master' });
+    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId: 't1', branch: t1Branch, mergedAt: T0 }) + '\n');
+
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the receipt-backed t1 auto-advances and t2 completes; stderr: ${io.stderrText()}`);
+    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed merged subtask is not mistaken for empty/stale under master');
+    const writers = writersOf(io.__runner);
+    assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — receipt-backed t1 was recognized as merged and skipped');
+    assert.ok(!writers.some((c) => argsOf(c).join(' ').includes("subtask 't1'")), 'no writer ran for the already-merged t1');
+    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the already-merged recognizer and merge path use master — no main anywhere');
+  });
+});
+
+// ===========================================================================
 // H5 (B4) — state flavor + spec binding across loop/pipeline.
 describe('pipeline — H5: state flavor + spec-digest binding', () => {
   it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {

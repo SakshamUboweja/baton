@@ -1,0 +1,2584 @@
+Reading additional input from stdin...
+2026-07-20T03:08:45.447646Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7d7f-5a73-7640-888f-72b7ba81628a
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, items-1-2 series iteration 2 of 5, re-auditing the Milestone-D item 1+2 pins after your iteration-1 BLOCKED verdict (2 findings; report: reviews/2026-07-20-v1.1-plan/test-verifier/items-1-2/iteration-01/raw-output.txt). Uncommitted, tests-only; baseline 0291e22.
+
+Claimed closures:
+1. (derive-once teeth) masterGit gained a derivationCalls() helper counting ROOT-level derivation attempts (symbolic-ref refs/remotes/origin/HEAD + root-cwd rev-parse --abbrev-ref HEAD, seat HEAD checks excluded by cwd); asserted === 1 on fresh init (trunk-3a) and migrating resume (trunk-4), === 0 on stamped resume (trunk-3b) — a re-derive-catch-fall-back impl fails.
+2. (master receipt-advance) new trunk-5: stamped trunk 'master', seeded t1 receipt, t1 branch is-ancestor under master → t1 auto-advances (first writer t2/wt-b, no t1 writer, not mistaken empty/stale), zero 'main' in argv. Red today on the recognizer.
+
+Claimed totals: suite 1217, 1210 pass / 7 red (D9 + trunk-1,2,3a,3b,4,5), guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — integration files are environment noise.
+
+Scope: verify both closures genuine (read the tests; probe whether derivationCalls' cwd-exclusion could miss a sneaky seat-cwd derivation that still counts as re-derivation of the ROOT trunk), red-phase integrity, no weakening, no regressions. Raise only NEW defects or defective closures.
+
+You may run: node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+I’m in test-verifier mode for the items-1-2 iteration-2 audit. I’ll first read the prior blocked report and the current tests-only diff against `0291e22`, then run only the commands you allowed if the sandbox permits it.
+exec
+/bin/zsh -lc 'git diff --stat 0291e22 --' in /Users/saksham/baton
+ succeeded in 0ms:
+ tests/commands/loop-run.test.mjs     |  53 +++++++++
+ tests/commands/pipeline-run.test.mjs | 205 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 258 insertions(+)
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/saksham/baton
+ succeeded in 0ms:
+ M tests/commands/loop-run.test.mjs
+ M tests/commands/pipeline-run.test.mjs
+?? reviews/2026-07-20-v1.1-plan/test-verifier/
+
+exec
+/bin/zsh -lc "sed -n '1,240p' reviews/2026-07-20-v1.1-plan/test-verifier/items-1-2/iteration-01/raw-output.txt" in /Users/saksham/baton
+ succeeded in 0ms:
+Reading additional input from stdin...
+2026-07-20T03:01:46.916566Z ERROR codex_models_manager::cache: failed to load models cache: missing field `supports_reasoning_summaries` at line 78 column 5
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7d78-f792-7080-87d2-fba18698321a
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, items-1-2 series iteration 1 of 5, auditing the Milestone-D build pins for plan items 1 (D9 done-status persistence) and 2 (trunk derivation) BEFORE implementation. Authority: docs/plans/2026-07-20-v1.1-hardening.md items 1–2 (Gate-1 approved). Uncommitted, tests-only: tests/commands/loop-run.test.mjs ("D9" block) + tests/commands/pipeline-run.test.mjs ("trunk derivation" block with a masterGit() fake that answers main refs leniently so a main-hardcoded impl runs end-to-end and the teeth are argv content). Claimed totals: suite 1216, 1210 pass / 6 red, guards green, typecheck green. NOTE: your sandbox cannot mkdtemp — integration files are environment noise; judge by reading.
+
+The pins:
+- D9 (RED): a smoke-approved run whose smoke gate sits on the FINAL phase completes exit 0 AND raw persisted state.json status === 'done' (today 'running'). GUARD green: re-running a done state prints done, exit 0, no spawn.
+- trunk-1 (RED): master-trunk pipeline completes DONE with ZERO 'main' in recorded git argv; reviewer prompt uses git diff master..<branch>; merger prompt names master; receipt shape unchanged.
+- trunk-2 (RED): the stale-branch park message points at git log master..<branch>.
+- trunk-3a (RED): a fresh master run stamps state.trunk === 'master'.
+- trunk-3b (RED): resume REUSES the stamp — with derivation disabled (deriveThrows), the run still completes on master.
+- trunk-4 (RED): a stamped (flavor+specDigest) state WITHOUT trunk migrates additively — derived once and stamped, code !== 2 (contrast the I3 unstamped refusal).
+- GUARD: no existing main-trunk test modified.
+
+Audit adversarially:
+1. Would a WRONG implementation pass? (a) D9 — could an impl flip done WITHOUT the smoke gate being on the final phase (i.e. is the fixture genuinely final-phase so the SMOKE_AWAIT-clobbers-DONE ordering is exercised)? (b) trunk-1 — is the lenient masterGit() fake genuinely lenient (a main-hardcoded impl must RUN, not crash, so the argv assertion is the only teeth), and is the zero-'main' scan over ALL recorded git argv including worktree setup/postflight/merge/ff-sync? (c) trunk-3b — does deriveThrows make BOTH derivation commands fail so only the stamp can supply master? (d) trunk-4 — does it assert the trunk is stamped AFTER the migrating resume and that nothing refused (not merely absence of crash)?
+2. Red-phase integrity: 6 reds fail on behavioral assertions today (no ReferenceError/TypeError); guards meaningful; baseline 1209 unaffected.
+3. Coverage vs plan items 1–2: any acceptance sub-item unpinned (e.g. the already-merged recognizer under master; receipts+resume paths under master)?
+
+You may run: node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+I’m starting in test-verifier mode: I’ll read the approved plan and the two tests, then sanity-check the red pins by running only the allowed commands if the sandbox permits it.
+exec
+/bin/zsh -lc "rg -n \"D9|trunk derivation|masterGit|deriveThrows|stale|state\\.trunk|done-status|done status|trunk\" tests/commands/loop-run.test.mjs tests/commands/pipeline-run.test.mjs docs/plans/2026-07-20-v1.1-hardening.md" in /Users/saksham/baton
+ succeeded in 0ms:
+docs/plans/2026-07-20-v1.1-hardening.md:12:1. **D9 — done-status persistence.** A smoke-approve resume that completes
+docs/plans/2026-07-20-v1.1-hardening.md:20:   Accept: in a master-trunk repo, EVERY trunk touchpoint uses the persisted
+docs/plans/2026-07-20-v1.1-hardening.md:21:   trunk — worktree setup/preflight/merge git calls, reviewer/merger prompts
+docs/plans/2026-07-20-v1.1-hardening.md:22:   (`git diff <trunk>..<branch>`), the stale-branch park message, the
+docs/plans/2026-07-20-v1.1-hardening.md:24:   the existing main-trunk suite passes unchanged; an EXISTING state.json
+docs/plans/2026-07-20-v1.1-hardening.md:25:   without a trunk field derives once at resume and stamps it (additive
+docs/plans/2026-07-20-v1.1-hardening.md:66:   staleness > 15 min ignored, degraded flag preserved). Accept: a cached
+docs/plans/2026-07-20-v1.1-hardening.md:70:   missing or stale cache resolves exactly as today (offline-degraded,
+docs/plans/2026-07-20-v1.1-hardening.md:99:  cover the master-trunk case AND re-run the main-trunk suite unchanged.
+tests/commands/pipeline-run.test.mjs:118:  const branches = new Set(existingBranches); // stale/pre-existing namespaced branches
+tests/commands/pipeline-run.test.mjs:613:describe('pipeline — G2: cap validation / resume / run-lock / stale branch', () => {
+tests/commands/pipeline-run.test.mjs:634:  it('RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing', async () => {
+tests/commands/pipeline-run.test.mjs:640:    await assert.doesNotReject(async () => { code = await run(['pipeline', 'run'], io); }, 'a stale branch must not crash the supervisor');
+tests/commands/pipeline-run.test.mjs:641:    assert.equal(code, 4, 'a stale subtask branch parks the run');
+tests/commands/pipeline-run.test.mjs:786:    assert.ok(io.__git.issued(/worktree prune/), 'the stale worktree metadata was pruned during self-heal');
+tests/commands/pipeline-run.test.mjs:1219:// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+tests/commands/pipeline-run.test.mjs:1222:// re-derived mid-run. Pinned in a MASTER-trunk fake repo — the observable is
+tests/commands/pipeline-run.test.mjs:1225:// A fake git modeling a MASTER-trunk repo: the default branch is 'master'
+tests/commands/pipeline-run.test.mjs:1229:// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
+tests/commands/pipeline-run.test.mjs:1230:// the default-branch derivation fail (to prove a resume reuses a stamped trunk).
+tests/commands/pipeline-run.test.mjs:1231:function masterGit({ merged = [], existingBranches = [], dirtyCwds = [], log = CLEAN_LOG, deriveThrows = false } = {}) {
+tests/commands/pipeline-run.test.mjs:1248:    // ---- trunk derivation (both forms) ----
+tests/commands/pipeline-run.test.mjs:1250:      if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: no origin/HEAD'), { code: 128, stderr: 'no origin/HEAD\n' }));
+tests/commands/pipeline-run.test.mjs:1255:        if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: HEAD'), { code: 128 }));
+tests/commands/pipeline-run.test.mjs:1277:    // merge-base --is-ancestor <branch> <trunk>: exit 0 iff branch already merged.
+tests/commands/pipeline-run.test.mjs:1290:    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' }); // merge <branch> and merge --ff-only <trunk>
+tests/commands/pipeline-run.test.mjs:1301:describe('pipeline — trunk derivation (v1.1 item 2)', () => {
+tests/commands/pipeline-run.test.mjs:1308:  it('RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master', async () => {
+tests/commands/pipeline-run.test.mjs:1309:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1314:    assert.equal(code, 0, `a master-trunk run completes; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1316:    // Teeth: NO trunk touchpoint used the hardcoded 'main'.
+tests/commands/pipeline-run.test.mjs:1317:    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'every trunk git call targets master — no main anywhere');
+tests/commands/pipeline-run.test.mjs:1324:    // Merger prompt names master as the trunk.
+tests/commands/pipeline-run.test.mjs:1327:    assert.match(argsOf(merger).join(' '), /against master/, 'the merger prompt names master as the trunk');
+tests/commands/pipeline-run.test.mjs:1335:  it('RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main', async () => {
+tests/commands/pipeline-run.test.mjs:1337:    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
+tests/commands/pipeline-run.test.mjs:1342:    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
+tests/commands/pipeline-run.test.mjs:1344:    assert.match(out, /git log master\.\.baton\/wt-a\/subtask-t1/, 'the stale-park message points at git log master..<branch>');
+tests/commands/pipeline-run.test.mjs:1345:    assert.doesNotMatch(out, /\bmain\.\./, 'the stale-park message never ranges over main');
+tests/commands/pipeline-run.test.mjs:1348:  it('RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json', async () => {
+tests/commands/pipeline-run.test.mjs:1349:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1355:    assert.equal(state.trunk, 'master', 'the derived trunk is persisted in state.json for reuse');
+tests/commands/pipeline-run.test.mjs:1358:  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
+tests/commands/pipeline-run.test.mjs:1360:    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
+tests/commands/pipeline-run.test.mjs:1364:    // A prior run already derived + stamped the trunk.
+tests/commands/pipeline-run.test.mjs:1365:    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', trunk: 'master' });
+tests/commands/pipeline-run.test.mjs:1367:    assert.equal(code, 0, `resume completes using the stamped trunk without re-deriving; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1372:  it('RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal', async () => {
+tests/commands/pipeline-run.test.mjs:1374:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1378:    // A pre-trunk stamped state: flavor + specDigest present, but NO trunk field.
+tests/commands/pipeline-run.test.mjs:1379:    // Missing trunk alone is NOT the I3 legacy-unstamped refusal.
+tests/commands/pipeline-run.test.mjs:1382:    assert.notEqual(code, 2, 'a missing trunk field is additive migration, not a legacy-unstamped refusal');
+tests/commands/pipeline-run.test.mjs:1385:    assert.equal(state.trunk, 'master', 'the trunk is derived once and stamped on migration');
+tests/commands/pipeline-run.test.mjs:1403:  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+tests/commands/pipeline-run.test.mjs:1420:// is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
+tests/commands/pipeline-run.test.mjs:1449:    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+tests/commands/pipeline-run.test.mjs:1455:  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+tests/commands/pipeline-run.test.mjs:1467:    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+tests/commands/pipeline-run.test.mjs:1469:    assert.match(out, /stale/i, 'the park names the stale branch');
+tests/commands/pipeline-run.test.mjs:1470:    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
+tests/commands/loop-run.test.mjs:351:    const code = await cmdLoop(['run', '--approve-smoke', token], io); // the OLD token, now stale
+tests/commands/loop-run.test.mjs:360:// D9 (v1.1 item 1) — done-status persistence. A smoke-approve resume that
+tests/commands/loop-run.test.mjs:365:describe('loop run — D9: done-status persistence', () => {
+tests/commands/loop-run.test.mjs:377:  it('RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done', async () => {
+tests/commands/loop-run.test.mjs:393:  it('GUARD (D9): re-running a completed (done) run still prints done and exits 0, no re-spawn', async () => {
+tests/commands/loop-run.test.mjs:982:  it('RED (I2b): a NORMAL (non-reclaim) acquisition truncates prior-invocation records — a stale retire cannot linger to mask a future child', async () => {
+tests/commands/loop-run.test.mjs:986:    // A prior invocation's stale records (a distinctive pgid 4242000) are present;
+
+exec
+/bin/zsh -lc 'rg -n "main-trunk|main trunk|recognizer|receipt|resume|I3|D9|item 1|item 2|Milestone-D|Gate" tests docs/plans/2026-07-20-v1.1-hardening.md' in /Users/saksham/baton
+ succeeded in 0ms:
+docs/plans/2026-07-20-v1.1-hardening.md:7:implement → per-item commit — with Gate 2 dual review at the end of the
+docs/plans/2026-07-20-v1.1-hardening.md:12:1. **D9 — done-status persistence.** A smoke-approve resume that completes
+docs/plans/2026-07-20-v1.1-hardening.md:23:   already-merged recognizer, receipts, and resume — pinned end-to-end;
+docs/plans/2026-07-20-v1.1-hardening.md:24:   the existing main-trunk suite passes unchanged; an EXISTING state.json
+docs/plans/2026-07-20-v1.1-hardening.md:25:   without a trunk field derives once at resume and stamps it (additive
+docs/plans/2026-07-20-v1.1-hardening.md:32:   `.handoff/loop/findings/<gate>.ndjson` (append-only) so a resumed run
+docs/plans/2026-07-20-v1.1-hardening.md:34:   (a) park → resume mid-gate carries the prior findings into the next
+docs/plans/2026-07-20-v1.1-hardening.md:75:   binding; `pipeline resume`/`--approve-smoke` flows reused). Accept: a
+docs/plans/2026-07-20-v1.1-hardening.md:99:  cover the master-trunk case AND re-run the main-trunk suite unchanged.
+docs/plans/2026-07-20-v1.1-hardening.md:101:  blocked) — the Gate-1-approved availability rules apply verbatim.
+docs/plans/2026-07-20-v1.1-hardening.md:109:regression in the proven flow; Gate 2 dual review APPROVED/WITH_NOTES with
+tests/helpers/fixtures/golden/stale.txt:20:- [ ] Bind receipt token
+tests/helpers/fixtures/golden/stale.txt:43:1. Bind receipt token
+tests/helpers/fixtures/golden/resume-prompt.txt:18:1. Bind the receipt token to the git digest
+tests/commands/session-adoption.test.mjs:12:// Gate-2 fix 2 (reviewer-a finding 2 / reviewer-b findings 3+5): session
+tests/commands/pipeline-run.test.mjs:612:// G2 (A2/B3) — pipeline preconditions, caps, resume, run-lock.
+tests/commands/pipeline-run.test.mjs:613:describe('pipeline — G2: cap validation / resume / run-lock / stale branch', () => {
+tests/commands/pipeline-run.test.mjs:649:    // a fresh git (a resumed run legitimately reuses persisted worktree state).
+tests/commands/pipeline-run.test.mjs:681:    // Run 2 resumes: two more BLOCKED reviews reach the 5-cap; the 6th escalates.
+tests/commands/pipeline-run.test.mjs:1107:    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+tests/commands/pipeline-run.test.mjs:1166:    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
+tests/commands/pipeline-run.test.mjs:1213:    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
+tests/commands/pipeline-run.test.mjs:1230:// the default-branch derivation fail (to prove a resume reuses a stamped trunk).
+tests/commands/pipeline-run.test.mjs:1301:describe('pipeline — trunk derivation (v1.1 item 2)', () => {
+tests/commands/pipeline-run.test.mjs:1331:      'the merge receipt keeps its {subtaskId, branch, mergedAt} shape',
+tests/commands/pipeline-run.test.mjs:1337:    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
+tests/commands/pipeline-run.test.mjs:1342:    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
+tests/commands/pipeline-run.test.mjs:1358:  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
+tests/commands/pipeline-run.test.mjs:1360:    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
+tests/commands/pipeline-run.test.mjs:1367:    assert.equal(code, 0, `resume completes using the stamped trunk without re-deriving; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1368:    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed run reached DONE');
+tests/commands/pipeline-run.test.mjs:1369:    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the resumed run uses the stamped master everywhere');
+tests/commands/pipeline-run.test.mjs:1379:    // Missing trunk alone is NOT the I3 legacy-unstamped refusal.
+tests/commands/pipeline-run.test.mjs:1398:    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+tests/commands/pipeline-run.test.mjs:1403:  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+tests/commands/pipeline-run.test.mjs:1412:    assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+tests/commands/pipeline-run.test.mjs:1423:// Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
+tests/commands/pipeline-run.test.mjs:1425:// resume requires is-ancestor(branch, main) AND a receipt for that subtask.
+tests/commands/pipeline-run.test.mjs:1426:describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
+tests/commands/pipeline-run.test.mjs:1432:  const receipts = (io) => {
+tests/commands/pipeline-run.test.mjs:1437:  it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
+tests/commands/pipeline-run.test.mjs:1439:    // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
+tests/commands/pipeline-run.test.mjs:1448:    assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1449:    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+tests/commands/pipeline-run.test.mjs:1452:    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
+tests/commands/pipeline-run.test.mjs:1455:  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+tests/commands/pipeline-run.test.mjs:1458:    // NO merge receipt (the writer crashed before its first commit).
+tests/commands/pipeline-run.test.mjs:1464:    // No receipt seeded.
+tests/commands/pipeline-run.test.mjs:1467:    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+tests/commands/pipeline-run.test.mjs:1476:    assert.match(out, /merged without a receipt|merge.*receipt.*missing|not.*recorded/i, 'ALSO names the merged-without-receipt cause (no single-cause misdiagnosis)');
+tests/commands/pipeline-run.test.mjs:1481:  it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
+tests/commands/pipeline-run.test.mjs:1483:    // A receipt exists for t1, but the branch is NOT an ancestor of main (the
+tests/commands/pipeline-run.test.mjs:1484:    // merge did not actually land — e.g. main was rewound). A receipt-ONLY
+tests/commands/pipeline-run.test.mjs:1491:    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
+tests/commands/pipeline-run.test.mjs:1497:    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
+tests/commands/pipeline-run.test.mjs:1500:  it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
+tests/commands/pipeline-run.test.mjs:1506:    // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
+tests/commands/pipeline-run.test.mjs:1508:    const receiptAtAdvance = [];
+tests/commands/pipeline-run.test.mjs:1512:        receiptAtAdvance.push(receipts(io).some((r) => r.subtaskId === 't1'));
+tests/commands/pipeline-run.test.mjs:1519:    const rec = receipts(io).find((r) => r.subtaskId === 't1');
+tests/commands/pipeline-run.test.mjs:1520:    assert.ok(rec, 'a merge receipt is persisted after the subtask merges');
+tests/commands/pipeline-run.test.mjs:1521:    assert.equal(rec.branch, 'baton/wt-a/subtask-t1', 'the receipt names the merged branch');
+tests/commands/pipeline-run.test.mjs:1522:    assert.ok(typeof rec.mergedAt === 'string' && rec.mergedAt.length > 0, 'the receipt records mergedAt');
+tests/commands/pipeline-run.test.mjs:1523:    assert.ok(receiptAtAdvance.length >= 1 && receiptAtAdvance.every(Boolean), 'the receipt is durable on disk BEFORE the phase advance is journaled (crash-safe)');
+tests/commands/pipeline-run.test.mjs:1528:// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
+tests/commands/pipeline-run.test.mjs:1530:describe('pipeline — I3: unstamped legacy state is refused', () => {
+tests/commands/pipeline-run.test.mjs:1531:  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
+tests/commands/pipeline-run.test.mjs:1545:    assert.equal(code, 2, 'an unstamped state is refused, not resumed');
+tests/commands/pipeline-run.test.mjs:1552:// J1 (B1) — `baton pipeline resume` mirrors G6's loop resume: PARKED -> running
+tests/commands/pipeline-run.test.mjs:1554:describe('pipeline — J1: pipeline resume', () => {
+tests/commands/pipeline-run.test.mjs:1557:  it('RED (J1a): resume transitions a PARKED run to running — the same subtask re-runs its writer, gate counters intact (no refund)', async () => {
+tests/commands/pipeline-run.test.mjs:1568:    const code = await run(['pipeline', 'resume'], io);
+tests/commands/pipeline-run.test.mjs:1569:    assert.notEqual(code, 2, 'resume is a recognized subcommand (not a usage error)');
+tests/commands/pipeline-run.test.mjs:1571:    assert.ok(writers.length >= 1, 'resume re-runs the parked subtask — its writer spawns again');
+tests/commands/pipeline-run.test.mjs:1573:    assert.ok((await loadLoopState('/repo', io)).state.iterations[gate] >= 3, 'the gate cap counter survives resume — no refund');
+tests/commands/pipeline-run.test.mjs:1574:    // J1a: resume must pin SUCCESSFUL continuation of the clean case, not merely
+tests/commands/pipeline-run.test.mjs:1577:    assert.equal(code, 0, `resume completes the clean subtask; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1578:    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed pipeline reaches DONE');
+tests/commands/pipeline-run.test.mjs:1581:    const resumeIdx = journal.findIndex((e) => e.type === LOOP_EVENT.RESUME);
+tests/commands/pipeline-run.test.mjs:1582:    assert.ok(resumeIdx >= 0, 'the resume is journaled (a RESUME event is appended)');
+tests/commands/pipeline-run.test.mjs:1584:    assert.ok(advanceIdx > resumeIdx, 'the RESUME event precedes the phase-advance that completes the run');
+tests/commands/pipeline-run.test.mjs:1587:  it('RED (J1b): resume refuses an ESCALATED run (exit 3, operator-only), zero spawns', async () => {
+tests/commands/pipeline-run.test.mjs:1596:    const code = await run(['pipeline', 'resume'], io);
+tests/commands/pipeline-run.test.mjs:1597:    assert.equal(code, 3, 'an escalated run cannot be resumed (operator-only)');
+tests/commands/pipeline-run.test.mjs:1598:    assert.equal(io.__runner.calls.length, 0, 'resume never spawns on an escalated run');
+tests/commands/pipeline-run.test.mjs:1602:  it('RED (J1c): pipeline resume refuses a loop-flavored state (exit 2, flavor guard), zero spawns', async () => {
+tests/commands/pipeline-run.test.mjs:1608:    const code = await run(['pipeline', 'resume'], io);
+tests/commands/pipeline-run.test.mjs:1609:    assert.equal(code, 2, 'a loop-flavored state cannot be resumed by pipeline');
+tests/commands/pipeline-run.test.mjs:1614:  it('GREEN (J1d companion): `baton loop resume` still refuses a pipeline-flavored state (exit 2), zero spawns — the boundary holds both ways', async () => {
+tests/commands/pipeline-run.test.mjs:1629:    const code = await run(['loop', 'resume'], io);
+tests/commands/pipeline-run.test.mjs:1630:    assert.equal(code, 2, 'loop resume refuses a pipeline-flavored state');
+tests/commands/pipeline-run.test.mjs:1635:  it('RED (J1e): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run', async () => {
+tests/commands/pipeline-run.test.mjs:1637:    // e.g. `resume` run in the wrong directory. Resuming must refuse, NOT quietly
+tests/commands/pipeline-run.test.mjs:1644:    const code = await run(['pipeline', 'resume'], io);
+tests/commands/pipeline-run.test.mjs:1645:    assert.equal(code, 2, 'nothing to resume is a usage error, not a silent fresh run');
+tests/commands/pipeline-run.test.mjs:1647:    assert.match(out, /nothing to resume/i, 'the refusal states there is nothing to resume');
+tests/commands/pipeline-run.test.mjs:1649:    assert.equal(io.__runner.calls.length, 0, 'a nothing-to-resume refusal spawns no children');
+tests/commands/pipeline-run.test.mjs:1650:    // The teeth: a wrong-directory resume must not initialize and start over.
+tests/commands/pipeline-run.test.mjs:1651:    assert.equal(io.fs.existsSync(loopPaths('/repo').state), false, 'refusing to resume never creates a state.json');
+tests/commands/receive.test.mjs:23://   2. --print-prompt: prepare-only. The resume prompt is printed to stdout, exit
+tests/commands/receive.test.mjs:162:  it('prints the resume prompt to stdout, exits 0, and mutates NOTHING', async () => {
+tests/commands/session-start.test.mjs:7:// Gate-2 fix 8 (reviewer-a finding 11): Codex and Cursor SessionStart hooks
+tests/commands/session-start.test.mjs:8:// used to run FULL receive preparation — exit-1 noise with no bundle, a resume
+tests/commands/checkpoint-pipeline.test.mjs:9:// Gate-2 fix 10 (reviewer-a finding 4 / reviewer-b finding 8): the plan's
+tests/commands/init.test.mjs:43://   I3. FRESH APPLY (no --dry-run) creates, under <root>:
+tests/commands/majors-minors.test.mjs:16:// Gate-2 majors 14-15 + minors 16: cursor debounce; validate-before-backup +
+tests/commands/majors-minors.test.mjs:18:// auto-resume; lock-aware marker reconciliation on read paths; status through
+tests/commands/majors-minors.test.mjs:121:describe('purge marker — auto-resume and read-path visibility', () => {
+tests/commands/majors-minors.test.mjs:122:  it('a leftover purge marker is surfaced by loadBundle and resumed by the next purge run', async () => {
+tests/commands/majors-minors.test.mjs:133:    assert.match(io.stderrText(), /resum/i, 'the rerun names that it resumed an interrupted purge');
+tests/commands/doctor-gaps.test.mjs:12:// Gate-2 major 13 (reviewer-a finding 9 / reviewer-b findings 16+25): doctor
+tests/commands/checkpoint-pipeline-2.test.mjs:8:// Gate-2 iteration-2 findings M1 (reviewer-a #1), M5 (reviewer-a #10),
+tests/commands/purge-transcript.test.mjs:24:// resumes from its marker until the whole tree is clean)").
+tests/commands/purge-transcript.test.mjs:42://       resumed and finished on the next run: the whole tree ends clean and the
+tests/commands/purge-transcript.test.mjs:180:  it('resumes an interrupted purge (leftover marker + partially-scrubbed tree) until the whole tree is clean', async () => {
+tests/commands/purge-transcript.test.mjs:193:    assert.ok(treeContainsSecret(io).length >= 4, 'the partially-purged tree still leaks the secret before resume');
+tests/commands/purge-transcript.test.mjs:198:    assert.deepEqual(treeContainsSecret(io).map((f) => f.path), [], 'resume scrubs every remaining copy until the tree is clean');
+tests/commands/purge-transcript.test.mjs:200:    assert.equal(markerStillThere, false, 'the purge marker is cleared after a successful resume');
+tests/commands/gate2-iter3-group6.test.mjs:9:// Gate-2 iteration-3 group 6:
+tests/adapters/claude-code-hook-spawn.test.mjs:10:// Gate-2 fix (reviewer-b finding 1): the hook script must WORK when executed
+tests/commands/envelopes-2.test.mjs:11:// Gate-2 iteration-2 findings M6 (reviewer-a #11) + B5 (reviewer-a #9):
+tests/commands/envelopes-2.test.mjs:85:    assert.match(env.data.prompt, /ship it/, 'the resume prompt is carried in the envelope');
+
+exec
+/bin/zsh -lc "rg -n \"trunk-|derivationCalls|masterGit|receipt|is-ancestor|origin/HEAD|abbrev-ref|symbolic-ref|trunk 'master'|main\" tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs" in /Users/saksham/baton
+ succeeded in 0ms:
+tests/commands/loop-run.test.mjs:335:        const out = key === 'rev-parse HEAD' ? head : key === 'rev-parse --abbrev-ref HEAD' ? 'main' : '';
+tests/commands/loop-run.test.mjs:384:    const runner2 = fakeRunner(io, []); // no phase remains after the smoke gate
+tests/commands/loop-run.test.mjs:556:    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]); // only gate-1 remains
+tests/commands/loop-run.test.mjs:562:    assert.equal(code, 0, 'resuming the remaining phase completes the run');
+tests/commands/pipeline-run.test.mjs:121:  const merged = new Set(mergedBranches); // branches already merged into main (ancestor; empty main..branch)
+tests/commands/pipeline-run.test.mjs:124:  let mainSha = MAIN_SHA; // mutable so a child can "move main" mid-subtask
+tests/commands/pipeline-run.test.mjs:127:    const entries = [{ path: '/repo', branch: 'main' }];
+tests/commands/pipeline-run.test.mjs:168:    if (argstr === 'rev-parse --abbrev-ref HEAD') return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'main'}\n`, stderr: '' });
+tests/commands/pipeline-run.test.mjs:169:    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${mainSha}\n`, stderr: '' });
+tests/commands/pipeline-run.test.mjs:170:    // merge-base --is-ancestor <branch> main : exit 0 iff <branch> is already in main.
+tests/commands/pipeline-run.test.mjs:171:    if (argstr.startsWith('merge-base --is-ancestor')) {
+tests/commands/pipeline-run.test.mjs:172:      const b = args[args.indexOf('--is-ancestor') + 1];
+tests/commands/pipeline-run.test.mjs:176:      // A merged branch has NO commits ahead of main (empty main..<branch>).
+tests/commands/pipeline-run.test.mjs:192:  fn.moveMain = (/** @type {string} */ sha) => { mainSha = sha; }; // a child "moves main" mid-subtask
+tests/commands/pipeline-run.test.mjs:215:    // A child may perturb the world (e.g. move main) between spawn and postflight.
+tests/commands/pipeline-run.test.mjs:232:      '/repo/.git/HEAD': 'ref: refs/heads/main\n',
+tests/commands/pipeline-run.test.mjs:391:  it('RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>)', async () => {
+tests/commands/pipeline-run.test.mjs:401:    assert.match(prompt, /git diff main\.\.baton\/wt-a\/subtask-t1/, 'the reviewer prompt names the exact `git diff main..<branch>` range to review');
+tests/commands/pipeline-run.test.mjs:428:    const ff = io.__git.matching(/^merge --ff-only main$/);
+tests/commands/pipeline-run.test.mjs:429:    assert.ok(ff.length >= 2, 'both worktrees fast-forward to main after each merge');
+tests/commands/pipeline-run.test.mjs:542:    const git = pipelineGit({ over: { 'rev-parse --abbrev-ref HEAD': { stdout: 'some-other-branch\n' } } });
+tests/commands/pipeline-run.test.mjs:554:  it('(c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge', async () => {
+tests/commands/pipeline-run.test.mjs:557:    // The writer child (first spawn) moves main between preflight-capture and postflight.
+tests/commands/pipeline-run.test.mjs:746:    // The stateful git returns an EMPTY main..branch log (no commits ahead).
+tests/commands/pipeline-run.test.mjs:753:    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'no empty branch is merged to main');
+tests/commands/pipeline-run.test.mjs:884:// D2 (dogfood milestone C) — `pipeline run` must actually PASS the main repo
+tests/commands/pipeline-run.test.mjs:886:// live under <mainRoot>/.git/worktrees/<seat>, outside the seat-cwd sandbox
+tests/commands/pipeline-run.test.mjs:891:describe('pipeline — D2: the writer spawn passes the main .git as a sandbox writable root', () => {
+tests/commands/pipeline-run.test.mjs:906:    assert.equal(valAfter(args, '-C'), WT_A, 'the writer runs in its seat worktree, not the main root');
+tests/commands/pipeline-run.test.mjs:1107:    assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+tests/commands/pipeline-run.test.mjs:1219:// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+tests/commands/pipeline-run.test.mjs:1220:// actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
+tests/commands/pipeline-run.test.mjs:1221:// rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
+tests/commands/pipeline-run.test.mjs:1226:// (symbolic-ref refs/remotes/origin/HEAD → origin/master; fallback rev-parse
+tests/commands/pipeline-run.test.mjs:1227:// --abbrev-ref HEAD at the ROOT → master). It answers 'main' refs LENIENTLY
+tests/commands/pipeline-run.test.mjs:1228:// (same sha/ranges) so a main-hardcoded impl still runs end to end — the pin's
+tests/commands/pipeline-run.test.mjs:1229:// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
+tests/commands/pipeline-run.test.mjs:1231:function masterGit({ merged = [], existingBranches = [], dirtyCwds = [], log = CLEAN_LOG, deriveThrows = false } = {}) {
+tests/commands/pipeline-run.test.mjs:1249:    if (argstr === 'symbolic-ref refs/remotes/origin/HEAD') {
+tests/commands/pipeline-run.test.mjs:1250:      if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: no origin/HEAD'), { code: 128, stderr: 'no origin/HEAD\n' }));
+tests/commands/pipeline-run.test.mjs:1253:    if (argstr === 'rev-parse --abbrev-ref HEAD') {
+tests/commands/pipeline-run.test.mjs:1277:    // merge-base --is-ancestor <branch> <trunk>: exit 0 iff branch already merged.
+tests/commands/pipeline-run.test.mjs:1278:    if (argstr.startsWith('merge-base --is-ancestor')) {
+tests/commands/pipeline-run.test.mjs:1279:      const b = args[args.indexOf('--is-ancestor') + 1];
+tests/commands/pipeline-run.test.mjs:1282:    // Lenient: rev-parse of ANY single ref (master OR main) resolves to the sha.
+tests/commands/pipeline-run.test.mjs:1296:  fn.mainCalls = () => fn.git().filter((c) => c.argstr.includes('main'));
+tests/commands/pipeline-run.test.mjs:1297:  // Root-level trunk derivation: symbolic-ref origin/HEAD, or the abbrev-ref
+tests/commands/pipeline-run.test.mjs:1298:  // fallback issued AT the repo root (seat abbrev-ref HEAD checks are excluded
+tests/commands/pipeline-run.test.mjs:1301:  fn.derivationCalls = () =>
+tests/commands/pipeline-run.test.mjs:1303:      (c) => c.argstr === 'symbolic-ref refs/remotes/origin/HEAD' || (c.argstr === 'rev-parse --abbrev-ref HEAD' && c.cwd === '/repo'),
+tests/commands/pipeline-run.test.mjs:1316:  it('RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master', async () => {
+tests/commands/pipeline-run.test.mjs:1317:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1324:    // Teeth: NO trunk touchpoint used the hardcoded 'main'.
+tests/commands/pipeline-run.test.mjs:1325:    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'every trunk git call targets master — no main anywhere');
+tests/commands/pipeline-run.test.mjs:1331:    assert.doesNotMatch(revPrompt, /\bmain\.\./, 'the reviewer prompt never ranges over main');
+tests/commands/pipeline-run.test.mjs:1339:      'the merge receipt keeps its {subtaskId, branch, mergedAt} shape',
+tests/commands/pipeline-run.test.mjs:1343:  it('RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main', async () => {
+tests/commands/pipeline-run.test.mjs:1345:    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
+tests/commands/pipeline-run.test.mjs:1350:    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
+tests/commands/pipeline-run.test.mjs:1353:    assert.doesNotMatch(out, /\bmain\.\./, 'the stale-park message never ranges over main');
+tests/commands/pipeline-run.test.mjs:1356:  it('RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json', async () => {
+tests/commands/pipeline-run.test.mjs:1357:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1364:    assert.equal(git.derivationCalls(), 1, 'the trunk is derived EXACTLY once at init (one root-level derivation)');
+tests/commands/pipeline-run.test.mjs:1367:  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
+tests/commands/pipeline-run.test.mjs:1369:    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
+tests/commands/pipeline-run.test.mjs:1378:    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the resumed run uses the stamped master everywhere');
+tests/commands/pipeline-run.test.mjs:1379:    assert.equal(git.derivationCalls(), 0, 'a stamped resume NEVER re-derives the trunk (not even to catch-and-fallback)');
+tests/commands/pipeline-run.test.mjs:1382:  it('RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal', async () => {
+tests/commands/pipeline-run.test.mjs:1384:    const git = masterGit();
+tests/commands/pipeline-run.test.mjs:1396:    assert.equal(git.derivationCalls(), 1, 'migration derives the trunk EXACTLY once, then stamps it');
+tests/commands/pipeline-run.test.mjs:1399:  it('RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv', async () => {
+tests/commands/pipeline-run.test.mjs:1402:    // t1 is genuinely merged under master: is-ancestor true, empty master..t1,
+tests/commands/pipeline-run.test.mjs:1403:    // AND a receipt. t2 is unmerged and runs normally.
+tests/commands/pipeline-run.test.mjs:1404:    const git = masterGit({ merged: [t1Branch] });
+tests/commands/pipeline-run.test.mjs:1413:    assert.equal(code, 0, `the receipt-backed t1 auto-advances and t2 completes; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1414:    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed merged subtask is not mistaken for empty/stale under master');
+tests/commands/pipeline-run.test.mjs:1417:    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — receipt-backed t1 was recognized as merged and skipped');
+tests/commands/pipeline-run.test.mjs:1419:    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the already-merged recognizer and merge path use master — no main anywhere');
+tests/commands/pipeline-run.test.mjs:1454:// is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
+tests/commands/pipeline-run.test.mjs:1457:// Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
+tests/commands/pipeline-run.test.mjs:1459:// resume requires is-ancestor(branch, main) AND a receipt for that subtask.
+tests/commands/pipeline-run.test.mjs:1460:describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
+tests/commands/pipeline-run.test.mjs:1466:  const receipts = (io) => {
+tests/commands/pipeline-run.test.mjs:1471:  it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
+tests/commands/pipeline-run.test.mjs:1473:    // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
+tests/commands/pipeline-run.test.mjs:1482:    assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+tests/commands/pipeline-run.test.mjs:1483:    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+tests/commands/pipeline-run.test.mjs:1486:    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
+tests/commands/pipeline-run.test.mjs:1489:  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+tests/commands/pipeline-run.test.mjs:1491:    // t1's branch is empty at main's tip: is-ancestor true, empty main..t1 — but
+tests/commands/pipeline-run.test.mjs:1492:    // NO merge receipt (the writer crashed before its first commit).
+tests/commands/pipeline-run.test.mjs:1498:    // No receipt seeded.
+tests/commands/pipeline-run.test.mjs:1501:    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+tests/commands/pipeline-run.test.mjs:1510:    assert.match(out, /merged without a receipt|merge.*receipt.*missing|not.*recorded/i, 'ALSO names the merged-without-receipt cause (no single-cause misdiagnosis)');
+tests/commands/pipeline-run.test.mjs:1511:    assert.match(out, /git log main\.\.baton\/wt-a\/subtask-t1/, 'points at `git log main..<branch>` to disambiguate');
+tests/commands/pipeline-run.test.mjs:1515:  it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
+tests/commands/pipeline-run.test.mjs:1517:    // A receipt exists for t1, but the branch is NOT an ancestor of main (the
+tests/commands/pipeline-run.test.mjs:1518:    // merge did not actually land — e.g. main was rewound). A receipt-ONLY
+tests/commands/pipeline-run.test.mjs:1520:    const git = pipelineGit({ mergedBranches: [] }); // is-ancestor FALSE for every branch
+tests/commands/pipeline-run.test.mjs:1525:    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
+tests/commands/pipeline-run.test.mjs:1531:    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
+tests/commands/pipeline-run.test.mjs:1534:  it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
+tests/commands/pipeline-run.test.mjs:1540:    // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
+tests/commands/pipeline-run.test.mjs:1542:    const receiptAtAdvance = [];
+tests/commands/pipeline-run.test.mjs:1546:        receiptAtAdvance.push(receipts(io).some((r) => r.subtaskId === 't1'));
+tests/commands/pipeline-run.test.mjs:1553:    const rec = receipts(io).find((r) => r.subtaskId === 't1');
+tests/commands/pipeline-run.test.mjs:1554:    assert.ok(rec, 'a merge receipt is persisted after the subtask merges');
+tests/commands/pipeline-run.test.mjs:1555:    assert.equal(rec.branch, 'baton/wt-a/subtask-t1', 'the receipt names the merged branch');
+tests/commands/pipeline-run.test.mjs:1556:    assert.ok(typeof rec.mergedAt === 'string' && rec.mergedAt.length > 0, 'the receipt records mergedAt');
+tests/commands/pipeline-run.test.mjs:1557:    assert.ok(receiptAtAdvance.length >= 1 && receiptAtAdvance.every(Boolean), 'the receipt is durable on disk BEFORE the phase advance is journaled (crash-safe)');
+
+codex
+The current diff is limited to `tests/commands/loop-run.test.mjs` and `tests/commands/pipeline-run.test.mjs`, which matches the tests-only scope. I’m going line-by-line through the added D9/trunk blocks now, including the fake git behaviors that make or break the claimed teeth.
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1,260p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import * as nodeFs from 'node:fs';
+     4	import { fileURLToPath } from 'node:url';
+     5	import { join, dirname } from 'node:path';
+     6	import { makeIo } from '../helpers/fakeio.mjs';
+     7	import { run } from '../../core/src/cli.mjs';
+     8	import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT } from '../../core/src/loop/state.mjs';
+     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+    10	
+    11	// ---------------------------------------------------------------------------
+    12	// RED — `baton pipeline run` (subtask pipeline, Layer 3). NEW command that
+    13	// COMPOSES worktrees/children/state/failover into the dual-worktree per-subtask
+    14	// cadence with a per-subtask seat swap; the merger role performs the final
+    15	// adversarial merge (via the REAL mergeSubtask machinery — the merger CHILD
+    16	// never merges). Source: plan §"baton pipeline (Layer 3 — a loop preset)".
+    17	//
+    18	// TARGET: core/src/commands/pipeline.mjs (+ cli.mjs routing for 'pipeline').
+    19	// Driven through the real router run(['pipeline', …], io). Today 'pipeline' is
+    20	// not a known command, so run() exits 2 ("unknown command 'pipeline'"); reds
+    21	// assert TARGET behavior — distinguished from that generic exit 2.
+    22	//
+    23	// SEAMS (same as loop run): io.superviseChild (fake scripted runner recording
+    24	// {command,args,env,opts}), io.execFile (STRICT fake git — unstubbed rejects),
+    25	// io.processAlive. --detach is out of unit scope (deferred to e2e).
+    26	//
+    27	// PINNED EXIT CODES (shared with loop run): done 0 · escalated 3 · parked 4 ·
+    28	// usage error 2.
+    29	// ---------------------------------------------------------------------------
+    30	
+    31	const here = dirname(fileURLToPath(import.meta.url));
+    32	const repoRoot = join(here, '..', '..');
+    33	const SIG_ABS = join(repoRoot, 'core', 'data', 'signatures.v1.json');
+    34	const SIG_CONTENT = nodeFs.readFileSync(SIG_ABS, 'utf8');
+    35	
+    36	const T0 = '2026-07-19T00:00:00.000Z';
+    37	const NAME = 'SakshamUboweja';
+    38	const EMAIL = 'ssakshamu@gmail.com';
+    39	const MAIN_SHA = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    40	const WT_A = '/repo/.worktrees/wt-a';
+    41	const WT_B = '/repo/.worktrees/wt-b';
+    42	const MERGE_LOCK = '/repo/.handoff/loop/merge.lock';
+    43	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+    44	const CODEX_LIMIT = "You've hit your usage limit"; // codex usage-limit signature
+    45	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account'; // codex model-unavailable signature
+    46	
+    47	// Both seats codex so --model is present in every child argv (claude-code omits
+    48	// it), letting the tests assert per-seat models directly.
+    49	const PIPELINE_CONFIG = {
+    50	  schema: 'baton/config@1',
+    51	  roles: {
+    52	    planner: ['codex/planner-m@xhigh'],
+    53	    merger: ['codex/mg-model@xhigh'],
+    54	    'worker-a': ['codex/wa-model@xhigh'],
+    55	    'worker-b': ['codex/wb-model@xhigh'],
+    56	    'subtask-reviewer': ['codex/sr-model@xhigh'],
+    57	    'test-author': ['codex/ta@xhigh'],
+    58	    'test-verifier': ['codex/tv@xhigh'],
+    59	    implementer: ['codex/impl@xhigh'],
+    60	    'plan-reviewer': ['codex/pr@xhigh'],
+    61	    'final-reviewer-a': ['codex/fra@xhigh'],
+    62	    'final-reviewer-b': ['codex/frb@xhigh'],
+    63	  },
+    64	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+    65	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+    66	};
+    67	
+    68	const pipelineSpec = (over = {}) => ({
+    69	  schema: 'baton/loop@1',
+    70	  goal: 'Ship the pipeline',
+    71	  constraints: [],
+    72	  budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 },
+    73	  subtasks: [
+    74	    { id: 't1', title: 'First subtask' },
+    75	    { id: 't2', title: 'Second subtask' },
+    76	  ],
+    77	  ...over,
+    78	});
+    79	
+    80	const REC = (sha, an, ae, cn, ce, body) => [sha, an, ae, cn, ce, body].join('\x00');
+    81	const logStdout = (...recs) => recs.map((r) => r + '\x1e').join('');
+    82	const CLEAN_LOG = logStdout(REC('c1', NAME, EMAIL, NAME, EMAIL, 'subtask work'));
+    83	
+    84	// A seeded handoff bundle so a pipeline writer limit-death has a real bundle to
+    85	// seal/receive through runFailover.
+    86	function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+    87	  return {
+    88	    schema: 'baton/bundle@1',
+    89	    bundleId: 'b_pipe00000000000',
+    90	    generation: 1,
+    91	    createdAt: T0,
+    92	    updatedAt: T0,
+    93	    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+    94	    task: { goal: 'Ship the pipeline', constraints: [], acceptance: [] },
+    95	    plan: { steps: [] },
+    96	    decisions: [],
+    97	    files: { touched: [] },
+    98	    roles: { assignments: {} },
+    99	    git: null,
+   100	    handoff:
+   101	      status === 'sealed'
+   102	        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+   103	        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+   104	    journalSeq: 0,
+   105	    compaction: { droppedDecisions: 0, note: null },
+   106	    dedupeRing: [],
+   107	  };
+   108	}
+   109	
+   110	/**
+   111	 * A STRICT, stateful fake git: unstubbed commands reject; worktree add/list and
+   112	 * checkout -b are modeled so setup + preflight/postflight + merge cohere.
+   113	 * `over` overrides specific responses (e.g. a merge conflict).
+   114	 */
+   115	function pipelineGit({ over = {}, log = CLEAN_LOG, existingBranches = [], dirtyCwds = [], mergedBranches = [] } = {}) {
+   116	  const added = /** @type {Map<string,string>} */ (new Map()); // path -> branch
+   117	  const branchAt = /** @type {Map<string,string>} */ (new Map()); // cwd -> current branch
+   118	  const branches = new Set(existingBranches); // stale/pre-existing namespaced branches
+   119	  const dirty = new Set(dirtyCwds); // seat cwds whose index is dirty
+   120	  const deleted = new Set(); // seats listed by git but raw-deleted on disk
+   121	  const merged = new Set(mergedBranches); // branches already merged into main (ancestor; empty main..branch)
+   122	  const calls = /** @type {any[]} */ ([]);
+   123	  const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
+   124	  let mainSha = MAIN_SHA; // mutable so a child can "move main" mid-subtask
+   125	
+   126	  const list = () => {
+   127	    const entries = [{ path: '/repo', branch: 'main' }];
+   128	    for (const [path, branch] of added) entries.push({ path, branch: branchAt.get(path) ?? branch });
+   129	    return entries.map((e) => `worktree ${e.path}\nHEAD ${MAIN_SHA}\nbranch refs/heads/${e.branch}\n`).join('\n');
+   130	  };
+   131	
+   132	  const fn = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
+   133	    const argstr = args.join(' ');
+   134	    calls.push({ cmd, args, argstr, cwd: opts?.cwd, lockPresent: lockProbeRef.fn ? lockProbeRef.fn() : undefined });
+   135	    if (cmd !== 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+   136	
+   137	    // Explicit overrides win.
+   138	    const okey = Object.keys(over).sort((a, b) => b.length - a.length).find((k) => argstr.includes(k));
+   139	    if (okey) {
+   140	      const r = over[okey];
+   141	      if (r?.reject) return Promise.reject(Object.assign(new Error(r.stderr || 'git failed'), { code: r.code ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' }));
+   142	      return Promise.resolve({ stdout: r?.stdout ?? '', stderr: r?.stderr ?? '' });
+   143	    }
+   144	
+   145	    // A raw-deleted seat: git still LISTS it, but any command IN that cwd fails
+   146	    // (the directory is gone). Only self-heal (prune + re-add) recovers it.
+   147	    if (opts?.cwd && deleted.has(opts.cwd) && !argstr.startsWith('worktree ')) {
+   148	      return Promise.reject(Object.assign(new Error(`fatal: cannot chdir to '${opts.cwd}': No such file or directory`), { code: 128, stderr: 'No such file or directory\n' }));
+   149	    }
+   150	    if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
+   151	    if (argstr.startsWith('worktree add')) {
+   152	      const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
+   153	      const bi = args.indexOf('-b');
+   154	      const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
+   155	      if (path) { added.set(path, branch); branchAt.set(path, branch); deleted.delete(path); }
+   156	      return Promise.resolve({ stdout: '', stderr: '' });
+   157	    }
+   158	    if (argstr.startsWith('worktree prune')) { deleted.clear(); return Promise.resolve({ stdout: '', stderr: '' }); }
+   159	    if (argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
+   160	    if (argstr.startsWith('checkout -b')) {
+   161	      const target = args[args.indexOf('-b') + 1];
+   162	      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
+   163	      branches.add(target);
+   164	      if (opts?.cwd) branchAt.set(opts.cwd, target);
+   165	      return Promise.resolve({ stdout: '', stderr: '' });
+   166	    }
+   167	    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
+   168	    if (argstr === 'rev-parse --abbrev-ref HEAD') return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'main'}\n`, stderr: '' });
+   169	    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${mainSha}\n`, stderr: '' });
+   170	    // merge-base --is-ancestor <branch> main : exit 0 iff <branch> is already in main.
+   171	    if (argstr.startsWith('merge-base --is-ancestor')) {
+   172	      const b = args[args.indexOf('--is-ancestor') + 1];
+   173	      return merged.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
+   174	    }
+   175	    if (argstr.startsWith('log ')) {
+   176	      // A merged branch has NO commits ahead of main (empty main..<branch>).
+   177	      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
+   178	      const branch = String(range).split('..')[1];
+   179	      if (branch && merged.has(branch)) return Promise.resolve({ stdout: '', stderr: '' });
+   180	      return Promise.resolve({ stdout: log, stderr: '' });
+   181	    }
+   182	    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' });
+   183	    if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
+   184	    return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
+   185	  };
+   186	  fn.calls = calls;
+   187	  fn.git = () => calls.filter((c) => c.cmd === 'git');
+   188	  fn.issued = (/** @type {RegExp} */ re) => calls.some((c) => c.cmd === 'git' && re.test(c.argstr));
+   189	  fn.matching = (/** @type {RegExp} */ re) => calls.filter((c) => c.cmd === 'git' && re.test(c.argstr));
+   190	  fn.withCwd = (/** @type {RegExp} */ re, /** @type {string} */ cwd) => calls.filter((c) => c.cmd === 'git' && re.test(c.argstr) && c.cwd === cwd);
+   191	  fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
+   192	  fn.moveMain = (/** @type {string} */ sha) => { mainSha = sha; }; // a child "moves main" mid-subtask
+   193	  fn.setBranch = (/** @type {string} */ cwd, /** @type {string} */ branch) => { branchAt.set(cwd, branch); };
+   194	  // Explicit seed: git LISTS this worktree; `raw` marks its dir as deleted on
+   195	  // disk (any in-cwd command fails until prune + re-add self-heals it).
+   196	  fn.seedWorktree = (/** @type {string} */ path, /** @type {string} */ branch, /** @type {{raw?: boolean}} */ o = {}) => {
+   197	    added.set(path, branch);
+   198	    branchAt.set(path, branch);
+   199	    if (o.raw) deleted.add(path);
+   200	  };
+   201	  return fn;
+   202	}
+   203	
+   204	function fakeRunner(io, script) {
+   205	  const queue = [...script];
+   206	  const calls = /** @type {any[]} */ ([]);
+   207	  const fn = (/** @type {any} */ spec, /** @type {any} */ opts = {}) => {
+   208	    calls.push({ spec, opts, command: spec?.command, args: spec?.args ?? [], env: spec?.env });
+   209	    const r = queue.shift() ?? { verdict: 'APPROVED' };
+   210	    if (typeof r.logContent === 'string' && opts.logPath) {
+   211	      const dir = opts.logPath.slice(0, opts.logPath.lastIndexOf('/'));
+   212	      io.fs.mkdirSync(dir, { recursive: true });
+   213	      io.fs.writeFileSync(opts.logPath, r.logContent);
+   214	    }
+   215	    // A child may perturb the world (e.g. move main) between spawn and postflight.
+   216	    if (typeof r.effect === 'function') r.effect();
+   217	    return Promise.resolve({ timedOut: false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath: opts.logPath });
+   218	  };
+   219	  fn.calls = calls;
+   220	  return fn;
+   221	}
+   222	
+   223	function makePipeRepo({ spec = pipelineSpec(), config = PIPELINE_CONFIG, files = {}, git, runner, env = {} } = {}) {
+   224	  const io = makeIo({
+   225	    now: T0,
+   226	    host: 'pipe-host',
+   227	    pid: 4242,
+   228	    startTime: 111000,
+   229	    env,
+   230	    files: {
+   231	      [SIG_ABS]: SIG_CONTENT,
+   232	      '/repo/.git/HEAD': 'ref: refs/heads/main\n',
+   233	      '/repo/baton.config.json': JSON.stringify(config, null, 2),
+   234	      ...(spec ? { '/repo/loop.json': JSON.stringify(spec, null, 2) + '\n' } : {}),
+   235	      ...files,
+   236	    },
+   237	  });
+   238	  const g = git ?? pipelineGit();
+   239	  g.setLockProbe(() => io.fs.existsSync(MERGE_LOCK));
+   240	  io.execFile = g;
+   241	  const fake = runner ?? fakeRunner(io, []);
+   242	  io.superviseChild = fake;
+   243	  io.__git = g;
+   244	  io.__runner = fake;
+   245	  return io;
+   246	}
+   247	
+   248	// A full clean subtask = writer APPROVED, reviewer APPROVED, merger APPROVED.
+   249	const cleanSubtask = () => [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }];
+   250	const argsOf = (call) => (call?.args ?? []).map(String);
+   251	const valAfter = (arr, flag) => { const i = arr.indexOf(flag); return i >= 0 ? arr[i + 1] : undefined; };
+   252	const childWithModel = (runner, model) => runner.calls.filter((c) => argsOf(c).includes(model));
+   253	// Writers = the write-capable children (in call order). Reviewers = read-only
+   254	// children whose prompt carries the 'subtask-reviewer' role identity (so the
+   255	// merger, also read-only, is excluded).
+   256	const writersOf = (runner) => runner.calls.filter((c) => valAfter(argsOf(c), '-s') === 'workspace-write');
+   257	const reviewersOf = (runner) => runner.calls.filter((c) => valAfter(argsOf(c), '-s') === 'read-only' && argsOf(c).join(' ').includes('subtask-reviewer'));
+   258	
+   259	// ===========================================================================
+   260	describe('pipeline — CLI routing & flags', () => {
+
+exec
+/bin/zsh -lc 'git diff --unified=80 0291e22 -- tests/commands/loop-run.test.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+diff --git a/tests/commands/loop-run.test.mjs b/tests/commands/loop-run.test.mjs
+index 7be0bcf..e599311 100644
+--- a/tests/commands/loop-run.test.mjs
++++ b/tests/commands/loop-run.test.mjs
+@@ -279,160 +279,213 @@ describe('loop run — smoke gate', () => {
+   });
+ 
+   function smokeExecFile(rec) {
+     return (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+       rec.push([cmd, ...args].join(' '));
+       // git stays unavailable; the smoke command "passes".
+       if (cmd === 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+       return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+     };
+   }
+ 
+   it('after smoke-build: runs smoke.cmd, writes SMOKE-REVIEW.md + a smoke-approval token, awaits, exit 0, no further child', async () => {
+     const rec = [];
+     const io = makeLoopRepo({ spec: smokeSpec, execFile: smokeExecFile(rec), runner: undefined });
+     io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+     io.__runner = io.superviseChild;
+ 
+     const code = await cmdLoop(['run'], io);
+     assert.equal(code, 0, 'pausing for smoke approval is a clean exit 0');
+     assert.equal(io.__runner.calls.length, 3, 'the smoke slice ran (3 phases); the post-smoke phase did NOT spawn');
+     assert.ok(rec.some((c) => /smoke/.test(c)), 'smoke.cmd was executed via io.execFile');
+ 
+     assert.ok(loopFile(io, 'SMOKE-REVIEW.md'), 'SMOKE-REVIEW.md was written');
+     const approval = loopFile(io, 'smoke-approval.json');
+     assert.ok(approval, 'a smoke-approval record was written');
+     const token = JSON.parse(approval).token;
+     assert.ok(typeof token === 'string' && token.startsWith('smk1.'), 'the approval carries a smokeApprovalToken over the six inputs');
+ 
+     const { state } = await loadLoopState('/repo', io);
+     assert.equal(state.status, LOOP_STATUS.AWAITING_SMOKE_APPROVAL, 'the run is awaiting smoke approval');
+   });
+ 
+   it('--approve-smoke <correct token> resumes into the next phase (a child spawns again)', async () => {
+     const rec = [];
+     const io = makeLoopRepo({ spec: smokeSpec, execFile: smokeExecFile(rec), runner: undefined });
+     io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+     io.__runner = io.superviseChild;
+     assert.equal(await cmdLoop(['run'], io), 0);
+     const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token;
+ 
+     // Resume with the correct token — a FRESH runner for the continued phase.
+     const runner2 = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+     io.superviseChild = runner2;
+     io.__runner = runner2;
+     const code = await cmdLoop(['run', '--approve-smoke', token], io);
+     assert.equal(code, 0);
+     assert.equal(runner2.calls.length, 1, 'a verified approval continues into the post-smoke phase');
+   });
+ 
+   it('--approve-smoke with the REAL issued token after a bound input drifted -> refused: exit 4, PARKED, zero spawns', async () => {
+     // A git-aware execFile whose HEAD is a mutable ref — HEAD is a bound token
+     // input, so moving it between issuance and approval is genuine drift.
+     let head = 'HEAD-A';
+     const gitAware = (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+       if (cmd === 'git') {
+         const key = args.join(' ');
+         const out = key === 'rev-parse HEAD' ? head : key === 'rev-parse --abbrev-ref HEAD' ? 'main' : '';
+         return Promise.resolve({ stdout: out + '\n', stderr: '' });
+       }
+       return Promise.resolve({ stdout: 'ok\n', stderr: '' }); // the smoke command
+     };
+     const io = makeLoopRepo({ spec: smokeSpec, execFile: gitAware, runner: undefined });
+     io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+     io.__runner = io.superviseChild;
+     assert.equal(await cmdLoop(['run'], io), 0);
+     const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token; // the ACTUAL issued smk1 token
+ 
+     // Drift a bound input: HEAD moves after the human looked.
+     head = 'HEAD-B';
+     const runner2 = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+     io.superviseChild = runner2;
+     io.__runner = runner2;
+     const code = await cmdLoop(['run', '--approve-smoke', token], io); // the OLD token, now stale
+     assert.equal(code, 4, 'the plan parks on smoke-token drift');
+     assert.equal(runner2.calls.length, 0, 'a drifted approval spawns no child');
+     const { state } = await loadLoopState('/repo', io);
+     assert.equal(state.status, LOOP_STATUS.PARKED, 'drift parks the run (not left silently awaiting)');
+   });
+ });
+ 
++// ===========================================================================
++// D9 (v1.1 item 1) — done-status persistence. A smoke-approve resume that
++// completes the FINAL phase must persist raw status 'done'. Today the last
++// phase's PHASE_ADVANCE flips DONE, SMOKE_AWAIT overwrites it, and SMOKE_APPROVE
++// resumes to RUNNING — nothing re-flips DONE, so the completion path prints
++// done + exits 0 while state.json stays 'running'.
++describe('loop run — D9: done-status persistence', () => {
++  const smokeExec = (rec = []) => (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
++    rec.push([cmd, ...args].join(' '));
++    if (cmd === 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
++    return Promise.resolve({ stdout: 'ok\n', stderr: '' });
++  };
++  // smoke-build is the LAST phase — no phase after the smoke gate re-flips DONE.
++  const finalSmokeSpec = loopSpec({
++    smoke: { cmd: 'npm run smoke', expect: 'ok' },
++    phases: [{ id: 'work', role: 'implementer' }, { id: 'smoke-build', role: 'implementer' }],
++  });
++
++  it('RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done', async () => {
++    const io = makeLoopRepo({ spec: finalSmokeSpec, execFile: smokeExec(), runner: undefined });
++    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]); // work + smoke-build
++    io.__runner = io.superviseChild;
++    assert.equal(await cmdLoop(['run'], io), 0, 'the first pass reaches the smoke gate');
++    const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token;
++
++    const runner2 = fakeRunner(io, []); // no phase remains after the smoke gate
++    io.superviseChild = runner2;
++    io.__runner = runner2;
++    const code = await cmdLoop(['run', '--approve-smoke', token], io);
++    assert.equal(code, 0, 'the approved completion exits 0');
++    const raw = JSON.parse(loopFile(io, 'state.json'));
++    assert.equal(raw.status, 'done', 'the completed run persists status done (not left running after SMOKE_APPROVE)');
++  });
++
++  it('GUARD (D9): re-running a completed (done) run still prints done and exits 0, no re-spawn', async () => {
++    const spec = loopSpec({ phases: [{ id: 'work', role: 'implementer' }] });
++    const io = makeLoopRepo({ spec, runner: undefined });
++    io.superviseChild = fakeRunner(io, []);
++    io.__runner = io.superviseChild;
++    const p = loopPaths('/repo');
++    io.fs.mkdirSync(p.dir, { recursive: true });
++    io.fs.writeFileSync(`${p.dir}/state.json`, JSON.stringify({
++      schema: 'baton/loop-state@1', runId: 'loop-done', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 1,
++      iterations: {}, status: 'done', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
++      flavor: 'loop', specDigest: dedupeKey(spec.phases),
++    }, null, 2) + '\n');
++    const code = await cmdLoop(['run'], io);
++    assert.equal(code, 0, 'a re-run of a done run exits 0');
++    assert.match(io.stdoutText(), /done/, 'it still prints done');
++    assert.equal(io.__runner.calls.length, 0, 'no child re-spawns for a completed run');
++  });
++});
++
+ // ===========================================================================
+ describe('loop run — failover integration', () => {
+   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
+     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits
+     // a session limit -> failover avoids claude-code -> relaunch on codex.
+     const spec = loopSpec({ phases: [{ id: 'subtask-implement', role: 'implementer' }] });
+     const io = makeLoopRepo({ spec, files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' }, runner: undefined });
+     io.superviseChild = fakeRunner(io, [
+       { verdict: 'BLOCKED', exitCode: 1, logContent: `child transcript...\n${CC_LIMIT}\n` }, // the limit lives in the LOG
+       { verdict: 'APPROVED' }, // the relaunched child succeeds
+     ]);
+     io.__runner = io.superviseChild;
+ 
+     const code = await cmdLoop(['run'], io);
+     assert.equal(io.__runner.calls.length, 2, 'the failover relaunched exactly one follow-up child');
+     assert.equal(io.__runner.calls[0].command, 'claude', 'the first child ran on the claude-code chain head');
+     assert.equal(io.__runner.calls[1].command, 'codex', 'the relaunch ran on the failover target platform (codex)');
+     assert.equal(valAfter(argsOf(io, 1), '--model'), 'gpt-5.6-sol', 'the relaunch used the resolved next-entry model');
+     assert.equal(code, 0, 'the relaunched child completed the phase');
+   });
+ 
+   it('a failover PARK decision stops the run parked (single-entry CODEX role, model-unavailable)', async () => {
+     // The model-unavailable signature is CODEX-only, and the classifier filters
+     // by the child's platform — so the dead child must run on codex. A
+     // single-entry codex chain exhausts after its dead model -> runFailover parks.
+     const cfg = JSON.parse(JSON.stringify(CONFIG));
+     cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh'];
+     const spec = loopSpec({ phases: [{ id: 'work', role: 'solo-codex' }] });
+     const io = makeLoopRepo({
+       spec,
+       files: {
+         '/repo/baton.config.json': JSON.stringify(cfg, null, 2),
+         '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('codex', 'open'), null, 2) + '\n',
+       },
+       runner: undefined,
+     });
+     io.superviseChild = fakeRunner(io, [{ verdict: 'BLOCKED', exitCode: 1, logContent: `child said: ${MODEL_UNAVAIL}\n` }]);
+     io.__runner = io.superviseChild;
+ 
+     const code = await cmdLoop(['run'], io);
+     assert.equal(io.__runner.calls.length, 1, 'no relaunch when failover parks');
+     assert.equal(io.__runner.calls[0].command, 'codex', 'the dead child genuinely ran on codex (so the codex-only signature applies)');
+     assert.equal(code, 4, 'a parked run exits 4 (defined nonzero)');
+     const { state } = await loadLoopState('/repo', io);
+     assert.equal(state.status, LOOP_STATUS.PARKED, 'the run is parked');
+   });
+ });
+ 
+ // ===========================================================================
+ // D1 (dogfood milestone C) — classification reads the transcript TAIL, not the
+ // whole child log: a signature the child itself WROTE mid-log (documenting
+ // failover in a diff) must not route a healthy exit-0 child into failover. Seam:
+ // classify a bounded tail (~4 KB); pin the behavior (signature placed far from
+ // the end), not the constant.
+ describe('loop run — D1: classification uses the transcript tail, not the body', () => {
+   const bodySignatureLog = (signature) =>
+     `writing docs…\n${signature}\n` +
+     '+ a clean documented line\n'.repeat(600) + // ~15 KB of body, well past any ~4 KB tail
+     `\ntokens used: 88\nDone.\nVERDICT: APPROVED\nFINDINGS: none\n`;
+ 
+   it('RED (D1): a child whose LOG BODY carries a usage-limit signature but whose exit-0 TAIL is clean advances the phase (NO failover)', async () => {
+     // A single non-gate phase: an OK child just advances to done.
+     const spec = loopSpec({ phases: [{ id: 'plan', role: 'planner' }] }); // planner = claude-code
+     const io = makeLoopRepo({ spec, runner: undefined });
+     io.superviseChild = fakeRunner(io, [
+       { verdict: 'APPROVED', exitCode: 0, logContent: bodySignatureLog(CC_LIMIT) },
+     ]);
+     io.__runner = io.superviseChild;
+     const code = await cmdLoop(['run'], io);
+     assert.equal(code, 0, `the phase completes — the body signature was NOT a death; stderr: ${io.stderrText()}`);
+     assert.equal(io.__runner.calls.length, 1, 'exactly one child — no failover relaunch on the child’s own work product');
+     assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
+   });
+ 
+   it('GUARD (D1): a death banner in the TAIL still classifies and routes to failover (parks a single-entry codex chain)', async () => {
+     const cfg = JSON.parse(JSON.stringify(CONFIG));
+     cfg.roles['solo-codex'] = ['codex/gpt-5.6-sol@xhigh'];
+     const spec = loopSpec({ phases: [{ id: 'work', role: 'solo-codex' }] });
+     const io = makeLoopRepo({
+       spec,
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1210,1435p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc 'git diff --unified=120 0291e22 -- tests/commands/pipeline-run.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/commands/loop-run.test.mjs | sed -n '1,430p'" in /Users/saksham/baton
+ succeeded in 0ms:
+  1210	    const esc = io.files()[ESC];
+  1211	    // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
+  1212	    // format change OR an appended log tail on THIS path fails the guard.
+  1213	    const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
+  1214	    assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
+  1215	  });
+  1216	});
+  1217	
+  1218	// ===========================================================================
+  1219	// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
+  1220	// actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
+  1221	// rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
+  1222	// re-derived mid-run. Pinned in a MASTER-trunk fake repo — the observable is
+  1223	// "master used everywhere; one derivation", not the exact command.
+  1224	
+  1225	// A fake git modeling a MASTER-trunk repo: the default branch is 'master'
+  1226	// (symbolic-ref refs/remotes/origin/HEAD → origin/master; fallback rev-parse
+  1227	// --abbrev-ref HEAD at the ROOT → master). It answers 'main' refs LENIENTLY
+  1228	// (same sha/ranges) so a main-hardcoded impl still runs end to end — the pin's
+  1229	// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
+  1230	// the default-branch derivation fail (to prove a resume reuses a stamped trunk).
+  1231	function masterGit({ merged = [], existingBranches = [], dirtyCwds = [], log = CLEAN_LOG, deriveThrows = false } = {}) {
+  1232	  const added = /** @type {Map<string,string>} */ (new Map());
+  1233	  const branchAt = /** @type {Map<string,string>} */ (new Map());
+  1234	  const branches = new Set(existingBranches);
+  1235	  const dirty = new Set(dirtyCwds);
+  1236	  const mergedSet = new Set(merged);
+  1237	  const calls = /** @type {any[]} */ ([]);
+  1238	  const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
+  1239	  const list = () => {
+  1240	    const entries = [{ path: '/repo', branch: 'master' }];
+  1241	    for (const [path, branch] of added) entries.push({ path, branch: branchAt.get(path) ?? branch });
+  1242	    return entries.map((e) => `worktree ${e.path}\nHEAD ${MAIN_SHA}\nbranch refs/heads/${e.branch}\n`).join('\n');
+  1243	  };
+  1244	  const fn = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
+  1245	    const argstr = args.join(' ');
+  1246	    calls.push({ cmd, args, argstr, cwd: opts?.cwd, lockPresent: lockProbeRef.fn ? lockProbeRef.fn() : undefined });
+  1247	    if (cmd !== 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+  1248	    // ---- trunk derivation (both forms) ----
+  1249	    if (argstr === 'symbolic-ref refs/remotes/origin/HEAD') {
+  1250	      if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: no origin/HEAD'), { code: 128, stderr: 'no origin/HEAD\n' }));
+  1251	      return Promise.resolve({ stdout: 'refs/remotes/origin/master\n', stderr: '' });
+  1252	    }
+  1253	    if (argstr === 'rev-parse --abbrev-ref HEAD') {
+  1254	      if (opts?.cwd === '/repo') {
+  1255	        if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: HEAD'), { code: 128 }));
+  1256	        return Promise.resolve({ stdout: 'master\n', stderr: '' }); // fallback derivation at root
+  1257	      }
+  1258	      return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'master'}\n`, stderr: '' }); // seat HEAD
+  1259	    }
+  1260	    if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
+  1261	    if (argstr.startsWith('worktree add')) {
+  1262	      const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
+  1263	      const bi = args.indexOf('-b');
+  1264	      const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
+  1265	      if (path) { added.set(path, branch); branchAt.set(path, branch); }
+  1266	      return Promise.resolve({ stdout: '', stderr: '' });
+  1267	    }
+  1268	    if (argstr.startsWith('worktree prune') || argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
+  1269	    if (argstr.startsWith('checkout -b')) {
+  1270	      const target = args[args.indexOf('-b') + 1];
+  1271	      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
+  1272	      branches.add(target);
+  1273	      if (opts?.cwd) branchAt.set(opts.cwd, target);
+  1274	      return Promise.resolve({ stdout: '', stderr: '' });
+  1275	    }
+  1276	    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
+  1277	    // merge-base --is-ancestor <branch> <trunk>: exit 0 iff branch already merged.
+  1278	    if (argstr.startsWith('merge-base --is-ancestor')) {
+  1279	      const b = args[args.indexOf('--is-ancestor') + 1];
+  1280	      return mergedSet.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
+  1281	    }
+  1282	    // Lenient: rev-parse of ANY single ref (master OR main) resolves to the sha.
+  1283	    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${MAIN_SHA}\n`, stderr: '' });
+  1284	    if (argstr.startsWith('log ')) {
+  1285	      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
+  1286	      const branch = String(range).split('..')[1];
+  1287	      if (branch && mergedSet.has(branch)) return Promise.resolve({ stdout: '', stderr: '' }); // merged → empty
+  1288	      return Promise.resolve({ stdout: log, stderr: '' });
+  1289	    }
+  1290	    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' }); // merge <branch> and merge --ff-only <trunk>
+  1291	    if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
+  1292	    return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
+  1293	  };
+  1294	  fn.calls = calls;
+  1295	  fn.git = () => calls.filter((c) => c.cmd === 'git');
+  1296	  fn.mainCalls = () => fn.git().filter((c) => c.argstr.includes('main'));
+  1297	  // Root-level trunk derivation: symbolic-ref origin/HEAD, or the abbrev-ref
+  1298	  // fallback issued AT the repo root (seat abbrev-ref HEAD checks are excluded
+  1299	  // by the cwd filter). Counts every attempt so "derive once, never re-derive"
+  1300	  // is pinned by the call count, not just the observable trunk.
+  1301	  fn.derivationCalls = () =>
+  1302	    fn.git().filter(
+  1303	      (c) => c.argstr === 'symbolic-ref refs/remotes/origin/HEAD' || (c.argstr === 'rev-parse --abbrev-ref HEAD' && c.cwd === '/repo'),
+  1304	    ).length;
+  1305	  fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
+  1306	  return fn;
+  1307	}
+  1308	
+  1309	describe('pipeline — trunk derivation (v1.1 item 2)', () => {
+  1310	  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  1311	  const mergeReceiptsOf = (io) => {
+  1312	    const raw = io.files()[MERGES];
+  1313	    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  1314	  };
+  1315	
+  1316	  it('RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master', async () => {
+  1317	    const git = masterGit();
+  1318	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+  1319	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1320	    io.__runner = io.superviseChild;
+  1321	    const code = await run(['pipeline', 'run'], io);
+  1322	    assert.equal(code, 0, `a master-trunk run completes; stderr: ${io.stderrText()}`);
+  1323	    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
+  1324	    // Teeth: NO trunk touchpoint used the hardcoded 'main'.
+  1325	    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'every trunk git call targets master — no main anywhere');
+  1326	    // Reviewer prompt ranges over master..branch.
+  1327	    const rev = reviewersOf(io.__runner)[0];
+  1328	    assert.ok(rev, 'a reviewer ran');
+  1329	    const revPrompt = argsOf(rev).join(' ');
+  1330	    assert.match(revPrompt, /git diff master\.\.baton\/wt-a\/subtask-t1/, 'the reviewer prompt ranges over master..<branch>');
+  1331	    assert.doesNotMatch(revPrompt, /\bmain\.\./, 'the reviewer prompt never ranges over main');
+  1332	    // Merger prompt names master as the trunk.
+  1333	    const merger = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
+  1334	    assert.ok(merger, 'a merger ran');
+  1335	    assert.match(argsOf(merger).join(' '), /against master/, 'the merger prompt names master as the trunk');
+  1336	    // Receipt shape unchanged.
+  1337	    assert.ok(
+  1338	      mergeReceiptsOf(io).some((r) => r.subtaskId === 't1' && r.branch === 'baton/wt-a/subtask-t1' && typeof r.mergedAt === 'string'),
+  1339	      'the merge receipt keeps its {subtaskId, branch, mergedAt} shape',
+  1340	    );
+  1341	  });
+  1342	
+  1343	  it('RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main', async () => {
+  1344	    const branch = 'baton/wt-a/subtask-t1';
+  1345	    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
+  1346	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+  1347	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1348	    io.__runner = io.superviseChild;
+  1349	    const code = await run(['pipeline', 'run'], io);
+  1350	    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
+  1351	    const out = io.stderrText() + io.stdoutText();
+  1352	    assert.match(out, /git log master\.\.baton\/wt-a\/subtask-t1/, 'the stale-park message points at git log master..<branch>');
+  1353	    assert.doesNotMatch(out, /\bmain\.\./, 'the stale-park message never ranges over main');
+  1354	  });
+  1355	
+  1356	  it('RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json', async () => {
+  1357	    const git = masterGit();
+  1358	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+  1359	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1360	    io.__runner = io.superviseChild;
+  1361	    await run(['pipeline', 'run'], io);
+  1362	    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
+  1363	    assert.equal(state.trunk, 'master', 'the derived trunk is persisted in state.json for reuse');
+  1364	    assert.equal(git.derivationCalls(), 1, 'the trunk is derived EXACTLY once at init (one root-level derivation)');
+  1365	  });
+  1366	
+  1367	  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
+  1368	    const subtasks = [{ id: 't1', title: 'only' }];
+  1369	    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
+  1370	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1371	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1372	    io.__runner = io.superviseChild;
+  1373	    // A prior run already derived + stamped the trunk.
+  1374	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', trunk: 'master' });
+  1375	    const code = await run(['pipeline', 'run'], io);
+  1376	    assert.equal(code, 0, `resume completes using the stamped trunk without re-deriving; stderr: ${io.stderrText()}`);
+  1377	    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed run reached DONE');
+  1378	    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the resumed run uses the stamped master everywhere');
+  1379	    assert.equal(git.derivationCalls(), 0, 'a stamped resume NEVER re-derives the trunk (not even to catch-and-fallback)');
+  1380	  });
+  1381	
+  1382	  it('RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal', async () => {
+  1383	    const subtasks = [{ id: 't1', title: 'only' }];
+  1384	    const git = masterGit();
+  1385	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1386	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1387	    io.__runner = io.superviseChild;
+  1388	    // A pre-trunk stamped state: flavor + specDigest present, but NO trunk field.
+  1389	    // Missing trunk alone is NOT the I3 legacy-unstamped refusal.
+  1390	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running' });
+  1391	    const code = await run(['pipeline', 'run'], io);
+  1392	    assert.notEqual(code, 2, 'a missing trunk field is additive migration, not a legacy-unstamped refusal');
+  1393	    assert.equal(code, 0, `the run migrates and completes; stderr: ${io.stderrText()}`);
+  1394	    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
+  1395	    assert.equal(state.trunk, 'master', 'the trunk is derived once and stamped on migration');
+  1396	    assert.equal(git.derivationCalls(), 1, 'migration derives the trunk EXACTLY once, then stamps it');
+  1397	  });
+  1398	
+  1399	  it('RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv', async () => {
+  1400	    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+  1401	    const t1Branch = 'baton/wt-a/subtask-t1';
+  1402	    // t1 is genuinely merged under master: is-ancestor true, empty master..t1,
+  1403	    // AND a receipt. t2 is unmerged and runs normally.
+  1404	    const git = masterGit({ merged: [t1Branch] });
+  1405	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1406	    io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+  1407	    io.__runner = io.superviseChild;
+  1408	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2, status: 'running', trunk: 'master' });
+  1409	    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+  1410	    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId: 't1', branch: t1Branch, mergedAt: T0 }) + '\n');
+  1411	
+  1412	    const code = await run(['pipeline', 'run'], io);
+  1413	    assert.equal(code, 0, `the receipt-backed t1 auto-advances and t2 completes; stderr: ${io.stderrText()}`);
+  1414	    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed merged subtask is not mistaken for empty/stale under master');
+  1415	    const writers = writersOf(io.__runner);
+  1416	    assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+  1417	    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — receipt-backed t1 was recognized as merged and skipped');
+  1418	    assert.ok(!writers.some((c) => argsOf(c).join(' ').includes("subtask 't1'")), 'no writer ran for the already-merged t1');
+  1419	    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the already-merged recognizer and merge path use master — no main anywhere');
+  1420	  });
+  1421	});
+  1422	
+  1423	// ===========================================================================
+  1424	// H5 (B4) — state flavor + spec binding across loop/pipeline.
+  1425	describe('pipeline — H5: state flavor + spec-digest binding', () => {
+  1426	  it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+  1427	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+  1428	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1429	    io.__runner = io.superviseChild;
+  1430	    seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+  1431	    const code = await run(['pipeline', 'run'], io);
+  1432	    assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+  1433	    assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+  1434	    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+  1435	  });
+
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import * as nodeFs from 'node:fs';
+     4	import { fileURLToPath } from 'node:url';
+     5	import { join, dirname } from 'node:path';
+     6	import { makeIo } from '../helpers/fakeio.mjs';
+     7	import { cmdLoop } from '../../core/src/commands/loop.mjs';
+     8	import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
+     9	import { dedupeKey } from '../../core/src/util/ids.mjs';
+    10	
+    11	// ---------------------------------------------------------------------------
+    12	// RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
+    13	// core/src/commands/loop.mjs with the `run` subcommand that COMPOSES the loop
+    14	// modules (spec/state/children/failover) over the real command machinery.
+    15	// Source: docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop
+    16	// (Layer 2)", §"Smoke gate", §"Caps", §"Supervisor lifetime and recovery".
+    17	//
+    18	// INJECTION SEAM (pinned): the command runs children via
+    19	//   io.superviseChild ?? superviseChild
+    20	// so tests inject a scripted fake runner that returns the next queued result
+    21	// and records the {command, args, env} it was invoked with. Everything else
+    22	// drives the real modules over memfs.
+    23	//
+    24	// The `run` subcommand does not exist yet: `loop run` currently exits 2
+    25	// ("unknown subcommand 'run'"). Reds assert TARGET behavior (exit codes, spawn
+    26	// counts, persisted state, ESCALATION/SMOKE-REVIEW files) — distinguished from
+    27	// today's generic exit 2. --detach is OUT of unit scope (deferred to e2e).
+    28	//
+    29	// PINNED EXIT CODES: done 0 · awaiting-smoke-approval 0 · escalated 3 ·
+    30	// parked 4 · live-lock refusal 1 · usage error 2.
+    31	// ---------------------------------------------------------------------------
+    32	
+    33	const here = dirname(fileURLToPath(import.meta.url));
+    34	const repoRoot = join(here, '..', '..');
+    35	const SIG_ABS = join(repoRoot, 'core', 'data', 'signatures.v1.json');
+    36	const SIG_CONTENT = nodeFs.readFileSync(SIG_ABS, 'utf8');
+    37	
+    38	const T0 = '2026-07-19T00:00:00.000Z';
+    39	const CC_LIMIT = "You've hit your session limit · resets 3pm"; // claude-code usage-limit signature
+    40	const MODEL_UNAVAIL = 'not supported when using Codex with a ChatGPT account';
+    41	
+    42	const CONFIG = {
+    43	  schema: 'baton/config@1',
+    44	  roles: {
+    45	    planner: ['claude-code/claude-fable-5'],
+    46	    'plan-reviewer': ['codex/gpt-5.6-sol@xhigh', 'claude-code/claude-fable-5@xhigh'],
+    47	    'test-author': ['claude-code/claude-opus-4-8', 'codex/gpt-5.5@xhigh'],
+    48	    'test-verifier': ['codex/gpt-5.5@xhigh', 'claude-code/claude-opus-4-8'],
+    49	    implementer: ['claude-code/claude-fable-5', 'codex/gpt-5.6-sol@xhigh', 'cursor/composer'],
+    50	    'final-reviewer-a': ['codex/gpt-5.6-sol@xhigh', 'codex/gpt-5.5@xhigh'],
+    51	    'final-reviewer-b': ['claude-code/claude-fable-5@xhigh', 'claude-code/claude-opus-4-8'],
+    52	  },
+    53	  platforms: { 'claude-code': {}, codex: {}, cursor: {} },
+    54	  defaults: { 'claude-code': 'claude-fable-5', codex: 'gpt-5.6-sol', cursor: 'composer' },
+    55	};
+    56	
+    57	const loopSpec = (over = {}) => ({
+    58	  schema: 'baton/loop@1',
+    59	  goal: 'Ship the loop',
+    60	  constraints: [],
+    61	  smoke: { cmd: null, expect: null },
+    62	  phases: [
+    63	    { id: 'plan', role: 'planner' },
+    64	    { id: 'gate-1', role: 'plan-reviewer' },
+    65	  ],
+    66	  budgets: { iterationCap: 5, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 },
+    67	  ...over,
+    68	});
+    69	
+    70	function ownedBundle(originPlatform = 'claude-code', status = 'open') {
+    71	  return {
+    72	    schema: 'baton/bundle@1',
+    73	    bundleId: 'b_looprun00000000',
+    74	    generation: 1,
+    75	    createdAt: T0,
+    76	    updatedAt: T0,
+    77	    origin: { platform: originPlatform, model: 'm', sessionHint: 'loop-sup', unstable: false },
+    78	    task: { goal: 'Ship the loop', constraints: [], acceptance: [] },
+    79	    plan: { steps: [] },
+    80	    decisions: [],
+    81	    files: { touched: [] },
+    82	    roles: { assignments: {} },
+    83	    git: null,
+    84	    handoff:
+    85	      status === 'sealed'
+    86	        ? { status: 'sealed', reason: 'seal', reasonClass: 'usage-limit', toPlatformHint: null, finalizedAt: T0, receive_log: [] }
+    87	        : { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+    88	    journalSeq: 0,
+    89	    compaction: { droppedDecisions: 0, note: null },
+    90	    dedupeRing: [],
+    91	  };
+    92	}
+    93	
+    94	/**
+    95	 * Scripted fake child runner honoring the injection seam. Each call shifts the
+    96	 * next result off the queue, writes its logContent to opts.logPath (so the
+    97	 * command reads the transcript from the child's LOG file), and records the
+    98	 * spawn spec.
+    99	 */
+   100	function fakeRunner(io, script) {
+   101	  const queue = [...script];
+   102	  const calls = /** @type {any[]} */ ([]);
+   103	  const fn = (/** @type {any} */ spec, /** @type {any} */ opts = {}) => {
+   104	    calls.push({ spec, opts, args: spec?.args ?? [], command: spec?.command, env: spec?.env });
+   105	    const r = queue.shift() ?? { timedOut: false, exitCode: 0, verdict: 'APPROVED', findings: '' };
+   106	    // No fallback: the command MUST pass a real logPath (asserted below).
+   107	    const logPath = opts.logPath;
+   108	    if (typeof r.logContent === 'string') {
+   109	      const dir = logPath.slice(0, logPath.lastIndexOf('/'));
+   110	      io.fs.mkdirSync(dir, { recursive: true });
+   111	      io.fs.writeFileSync(logPath, r.logContent);
+   112	    }
+   113	    return Promise.resolve({ timedOut: r.timedOut ?? false, exitCode: r.exitCode ?? 0, verdict: r.verdict ?? 'APPROVED', findings: r.findings ?? '', logPath });
+   114	  };
+   115	  fn.calls = calls;
+   116	  return fn;
+   117	}
+   118	
+   119	function makeLoopRepo({ spec = loopSpec(), files = {}, runner, execFile, env = {} } = {}) {
+   120	  const io = makeIo({
+   121	    now: T0,
+   122	    host: 'loop-host',
+   123	    pid: 4242,
+   124	    startTime: 111000,
+   125	    fencingSeed: 1,
+   126	    env,
+   127	    files: {
+   128	      [SIG_ABS]: SIG_CONTENT,
+   129	      '/repo/baton.config.json': JSON.stringify(CONFIG, null, 2),
+   130	      ...(spec ? { '/repo/loop.json': JSON.stringify(spec, null, 2) + '\n' } : {}),
+   131	      ...files,
+   132	    },
+   133	  });
+   134	  if (execFile) io.execFile = execFile;
+   135	  const fake = runner ?? fakeRunner(io, []);
+   136	  io.superviseChild = fake;
+   137	  io.__runner = fake;
+   138	  return io;
+   139	}
+   140	
+   141	const argsOf = (io, i) => (io.__runner.calls[i]?.args ?? []).map(String);
+   142	const serialize = (io, i) => argsOf(io, i).join(' ');
+   143	const valAfter = (arr, flag) => { const i = arr.indexOf(flag); return i >= 0 ? arr[i + 1] : undefined; };
+   144	const loopFile = (io, name) => io.files()[`${loopPaths('/repo').dir}/${name}`];
+   145	
+   146	// ===========================================================================
+   147	describe('loop run — preconditions', () => {
+   148	  it('no loop.json -> usage error (exit 2) naming loop.json / loop init, ZERO children spawned', async () => {
+   149	    const io = makeLoopRepo({ spec: null }); // no loop.json seeded
+   150	    const code = await cmdLoop(['run'], io);
+   151	    assert.equal(code, 2);
+   152	    assert.match(io.stderrText() + io.stdoutText(), /loop\.json|loop init/i, 'the error points at the missing spec, not a generic unknown-subcommand');
+   153	    assert.equal(io.__runner.calls.length, 0, 'no child spawned when preconditions fail');
+   154	  });
+   155	
+   156	  it('an invalid spec (unknown role) -> exit 2 surfacing validateLoopSpec errors, ZERO children spawned', async () => {
+   157	    // Config MISSING plan-reviewer -> the spec references an unknown role.
+   158	    const cfg = JSON.parse(JSON.stringify(CONFIG));
+   159	    delete cfg.roles['plan-reviewer'];
+   160	    const io = makeLoopRepo({ files: { '/repo/baton.config.json': JSON.stringify(cfg, null, 2) } });
+   161	    const code = await cmdLoop(['run'], io);
+   162	    assert.equal(code, 2);
+   163	    assert.match(io.stderrText() + io.stdoutText(), /unknown role 'plan-reviewer'/, 'the validateLoopSpec error is surfaced');
+   164	    assert.equal(io.__runner.calls.length, 0, 'no child spawned for an invalid spec');
+   165	  });
+   166	});
+   167	
+   168	// ===========================================================================
+   169	describe('loop run — supervisor run lock', () => {
+   170	  it('a LIVE supervisor.lock refuses a second run (exit 1) naming the live pid', async () => {
+   171	    const io = makeLoopRepo({ execFile: undefined });
+   172	    // A different, ALIVE supervisor already holds the lock.
+   173	    io.processAlive = (p) => p === 55555;
+   174	    const p = loopPaths('/repo');
+   175	    io.fs.mkdirSync(p.dir, { recursive: true });
+   176	    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 55555, startTime: 222, runId: 'loop-other' }));
+   177	
+   178	    const code = await cmdLoop(['run'], io);
+   179	    assert.equal(code, 1, 'a live supervisor blocks a second run');
+   180	    assert.match(io.stderrText() + io.stdoutText(), /55555/, 'the refusal names the live supervisor pid');
+   181	    assert.equal(io.__runner.calls.length, 0, 'no child spawned while another supervisor is live');
+   182	  });
+   183	
+   184	  it('a provably-DEAD supervisor.lock is recovered and the run proceeds', async () => {
+   185	    const io = makeLoopRepo({ runner: undefined });
+   186	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   187	    io.__runner = io.superviseChild;
+   188	    // Default processAlive: only this io's own pid is alive; 999999 is dead.
+   189	    const p = loopPaths('/repo');
+   190	    io.fs.mkdirSync(p.dir, { recursive: true });
+   191	    io.fs.writeFileSync(`${p.dir}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'loop-dead' }));
+   192	
+   193	    const code = await cmdLoop(['run'], io);
+   194	    assert.equal(code, 0, 'a dead lock is reclaimed and the run completes');
+   195	    assert.ok(io.__runner.calls.length >= 1, 'children were spawned after recovering the dead lock');
+   196	  });
+   197	});
+   198	
+   199	// ===========================================================================
+   200	describe('loop run — phase driving', () => {
+   201	  it('a 2-phase run (plan -> gate-1), both APPROVED: children on the RESOLVED assignments, status done, state persisted', async () => {
+   202	    const io = makeLoopRepo({ runner: undefined });
+   203	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   204	    io.__runner = io.superviseChild;
+   205	
+   206	    const code = await cmdLoop(['run'], io);
+   207	    assert.equal(code, 0, 'a fully-APPROVED run finishes clean');
+   208	    assert.equal(io.__runner.calls.length, 2, 'exactly one child per phase');
+   209	
+   210	    // Phase 1: planner -> claude-code (chain head), headless -p.
+   211	    assert.equal(io.__runner.calls[0].command, 'claude');
+   212	    assert.ok(argsOf(io, 0).includes('-p'), 'the planner child runs headless');
+   213	    // Phase 2: plan-reviewer -> codex/gpt-5.6-sol, reviewer read-only sandbox.
+   214	    assert.equal(io.__runner.calls[1].command, 'codex');
+   215	    assert.equal(valAfter(argsOf(io, 1), '--model'), 'gpt-5.6-sol', 'the reviewer child carries the resolved model');
+   216	    assert.equal(valAfter(argsOf(io, 1), '-s'), 'read-only', 'the reviewer runs in a read-only sandbox');
+   217	
+   218	    // Every spawn is given a real per-child log path under .handoff/loop/children/
+   219	    // plus its platform and timeout/grace budget.
+   220	    for (const [i] of io.__runner.calls.entries()) {
+   221	      const opts = io.__runner.calls[i].opts;
+   222	      assert.match(String(opts.logPath), /\/\.handoff\/loop\/children\//, `child ${i} log path is under .handoff/loop/children/`);
+   223	      assert.ok(typeof opts.platform === 'string' && opts.platform.length > 0, `child ${i} opts carry the platform`);
+   224	      assert.ok(typeof opts.timeoutMs === 'number' && opts.timeoutMs > 0, `child ${i} opts carry a timeout`);
+   225	      assert.ok(typeof opts.graceMs === 'number' && opts.graceMs > 0, `child ${i} opts carry a grace period`);
+   226	    }
+   227	
+   228	    const { state } = await loadLoopState('/repo', io);
+   229	    assert.equal(state.status, LOOP_STATUS.DONE, 'the run reached done');
+   230	    assert.equal(state.phaseIndex, 2, 'both phases advanced');
+   231	    assert.ok(loopFile(io, 'state.json'), 'loop state persisted under .handoff/loop');
+   232	    assert.ok(io.fs.existsSync(loopPaths('/repo').journal), 'the loop journal persisted');
+   233	  });
+   234	});
+   235	
+   236	// ===========================================================================
+   237	describe('loop run — gate iteration + the 5-cap', () => {
+   238	  const gateSpec = loopSpec({ phases: [{ id: 'gate-1', role: 'plan-reviewer' }] });
+   239	
+   240	  it('BLOCKED re-runs with findings in the retry prompt; the 6th attempt NEVER spawns; escalated + ESCALATION.md; exit 3', async () => {
+   241	    const io = makeLoopRepo({ spec: gateSpec, runner: undefined });
+   242	    // Six BLOCKED results queued; only five may ever be consumed.
+   243	    io.superviseChild = fakeRunner(io, [
+   244	      { verdict: 'BLOCKED', findings: 'FINDING-ALPHA-1' },
+   245	      { verdict: 'BLOCKED', findings: 'FINDING-BETA-2' },
+   246	      { verdict: 'BLOCKED', findings: 'f3' },
+   247	      { verdict: 'BLOCKED', findings: 'f4' },
+   248	      { verdict: 'BLOCKED', findings: 'f5' },
+   249	      { verdict: 'BLOCKED', findings: 'f6' },
+   250	    ]);
+   251	    io.__runner = io.superviseChild;
+   252	
+   253	    const code = await cmdLoop(['run'], io);
+   254	    assert.equal(code, 3, 'escalation exits 3 (defined nonzero)');
+   255	    assert.equal(io.__runner.calls.length, 5, 'exactly five gate attempts — a 6th is never spawned');
+   256	    // Each retry carries the PRECEDING attempt's findings — later findings are
+   257	    // not dropped in favor of the first.
+   258	    assert.match(serialize(io, 1), /FINDING-ALPHA-1/, "the 2nd attempt's prompt carries the 1st attempt's findings");
+   259	    assert.match(serialize(io, 2), /FINDING-BETA-2/, "the 3rd attempt's prompt carries the 2nd attempt's findings (continuity, not just the first)");
+   260	
+   261	    const { state } = await loadLoopState('/repo', io);
+   262	    assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the run escalated at the cap');
+   263	    const esc = loopFile(io, 'ESCALATION.md');
+   264	    assert.ok(esc, 'an ESCALATION.md was written under .handoff/loop');
+   265	    assert.match(esc, /gate-1/, 'the escalation names the exhausted gate');
+   266	  });
+   267	});
+   268	
+   269	// ===========================================================================
+   270	describe('loop run — smoke gate', () => {
+   271	  const smokeSpec = loopSpec({
+   272	    smoke: { cmd: 'npm run smoke', expect: 'ok' },
+   273	    phases: [
+   274	      { id: 'smoke-tests', role: 'test-author' },
+   275	      { id: 'smoke-verify', role: 'test-verifier' },
+   276	      { id: 'smoke-build', role: 'implementer' },
+   277	      { id: 'subtask-implement', role: 'implementer' },
+   278	    ],
+   279	  });
+   280	
+   281	  function smokeExecFile(rec) {
+   282	    return (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+   283	      rec.push([cmd, ...args].join(' '));
+   284	      // git stays unavailable; the smoke command "passes".
+   285	      if (cmd === 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+   286	      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+   287	    };
+   288	  }
+   289	
+   290	  it('after smoke-build: runs smoke.cmd, writes SMOKE-REVIEW.md + a smoke-approval token, awaits, exit 0, no further child', async () => {
+   291	    const rec = [];
+   292	    const io = makeLoopRepo({ spec: smokeSpec, execFile: smokeExecFile(rec), runner: undefined });
+   293	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   294	    io.__runner = io.superviseChild;
+   295	
+   296	    const code = await cmdLoop(['run'], io);
+   297	    assert.equal(code, 0, 'pausing for smoke approval is a clean exit 0');
+   298	    assert.equal(io.__runner.calls.length, 3, 'the smoke slice ran (3 phases); the post-smoke phase did NOT spawn');
+   299	    assert.ok(rec.some((c) => /smoke/.test(c)), 'smoke.cmd was executed via io.execFile');
+   300	
+   301	    assert.ok(loopFile(io, 'SMOKE-REVIEW.md'), 'SMOKE-REVIEW.md was written');
+   302	    const approval = loopFile(io, 'smoke-approval.json');
+   303	    assert.ok(approval, 'a smoke-approval record was written');
+   304	    const token = JSON.parse(approval).token;
+   305	    assert.ok(typeof token === 'string' && token.startsWith('smk1.'), 'the approval carries a smokeApprovalToken over the six inputs');
+   306	
+   307	    const { state } = await loadLoopState('/repo', io);
+   308	    assert.equal(state.status, LOOP_STATUS.AWAITING_SMOKE_APPROVAL, 'the run is awaiting smoke approval');
+   309	  });
+   310	
+   311	  it('--approve-smoke <correct token> resumes into the next phase (a child spawns again)', async () => {
+   312	    const rec = [];
+   313	    const io = makeLoopRepo({ spec: smokeSpec, execFile: smokeExecFile(rec), runner: undefined });
+   314	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   315	    io.__runner = io.superviseChild;
+   316	    assert.equal(await cmdLoop(['run'], io), 0);
+   317	    const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token;
+   318	
+   319	    // Resume with the correct token — a FRESH runner for the continued phase.
+   320	    const runner2 = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+   321	    io.superviseChild = runner2;
+   322	    io.__runner = runner2;
+   323	    const code = await cmdLoop(['run', '--approve-smoke', token], io);
+   324	    assert.equal(code, 0);
+   325	    assert.equal(runner2.calls.length, 1, 'a verified approval continues into the post-smoke phase');
+   326	  });
+   327	
+   328	  it('--approve-smoke with the REAL issued token after a bound input drifted -> refused: exit 4, PARKED, zero spawns', async () => {
+   329	    // A git-aware execFile whose HEAD is a mutable ref — HEAD is a bound token
+   330	    // input, so moving it between issuance and approval is genuine drift.
+   331	    let head = 'HEAD-A';
+   332	    const gitAware = (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+   333	      if (cmd === 'git') {
+   334	        const key = args.join(' ');
+   335	        const out = key === 'rev-parse HEAD' ? head : key === 'rev-parse --abbrev-ref HEAD' ? 'main' : '';
+   336	        return Promise.resolve({ stdout: out + '\n', stderr: '' });
+   337	      }
+   338	      return Promise.resolve({ stdout: 'ok\n', stderr: '' }); // the smoke command
+   339	    };
+   340	    const io = makeLoopRepo({ spec: smokeSpec, execFile: gitAware, runner: undefined });
+   341	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }, { verdict: 'APPROVED' }]);
+   342	    io.__runner = io.superviseChild;
+   343	    assert.equal(await cmdLoop(['run'], io), 0);
+   344	    const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token; // the ACTUAL issued smk1 token
+   345	
+   346	    // Drift a bound input: HEAD moves after the human looked.
+   347	    head = 'HEAD-B';
+   348	    const runner2 = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+   349	    io.superviseChild = runner2;
+   350	    io.__runner = runner2;
+   351	    const code = await cmdLoop(['run', '--approve-smoke', token], io); // the OLD token, now stale
+   352	    assert.equal(code, 4, 'the plan parks on smoke-token drift');
+   353	    assert.equal(runner2.calls.length, 0, 'a drifted approval spawns no child');
+   354	    const { state } = await loadLoopState('/repo', io);
+   355	    assert.equal(state.status, LOOP_STATUS.PARKED, 'drift parks the run (not left silently awaiting)');
+   356	  });
+   357	});
+   358	
+   359	// ===========================================================================
+   360	// D9 (v1.1 item 1) — done-status persistence. A smoke-approve resume that
+   361	// completes the FINAL phase must persist raw status 'done'. Today the last
+   362	// phase's PHASE_ADVANCE flips DONE, SMOKE_AWAIT overwrites it, and SMOKE_APPROVE
+   363	// resumes to RUNNING — nothing re-flips DONE, so the completion path prints
+   364	// done + exits 0 while state.json stays 'running'.
+   365	describe('loop run — D9: done-status persistence', () => {
+   366	  const smokeExec = (rec = []) => (/** @type {string} */ cmd, /** @type {string[]} */ args = []) => {
+   367	    rec.push([cmd, ...args].join(' '));
+   368	    if (cmd === 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+   369	    return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+   370	  };
+   371	  // smoke-build is the LAST phase — no phase after the smoke gate re-flips DONE.
+   372	  const finalSmokeSpec = loopSpec({
+   373	    smoke: { cmd: 'npm run smoke', expect: 'ok' },
+   374	    phases: [{ id: 'work', role: 'implementer' }, { id: 'smoke-build', role: 'implementer' }],
+   375	  });
+   376	
+   377	  it('RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done', async () => {
+   378	    const io = makeLoopRepo({ spec: finalSmokeSpec, execFile: smokeExec(), runner: undefined });
+   379	    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }, { verdict: 'APPROVED' }]); // work + smoke-build
+   380	    io.__runner = io.superviseChild;
+   381	    assert.equal(await cmdLoop(['run'], io), 0, 'the first pass reaches the smoke gate');
+   382	    const token = JSON.parse(loopFile(io, 'smoke-approval.json')).token;
+   383	
+   384	    const runner2 = fakeRunner(io, []); // no phase remains after the smoke gate
+   385	    io.superviseChild = runner2;
+   386	    io.__runner = runner2;
+   387	    const code = await cmdLoop(['run', '--approve-smoke', token], io);
+   388	    assert.equal(code, 0, 'the approved completion exits 0');
+   389	    const raw = JSON.parse(loopFile(io, 'state.json'));
+   390	    assert.equal(raw.status, 'done', 'the completed run persists status done (not left running after SMOKE_APPROVE)');
+   391	  });
+   392	
+   393	  it('GUARD (D9): re-running a completed (done) run still prints done and exits 0, no re-spawn', async () => {
+   394	    const spec = loopSpec({ phases: [{ id: 'work', role: 'implementer' }] });
+   395	    const io = makeLoopRepo({ spec, runner: undefined });
+   396	    io.superviseChild = fakeRunner(io, []);
+   397	    io.__runner = io.superviseChild;
+   398	    const p = loopPaths('/repo');
+   399	    io.fs.mkdirSync(p.dir, { recursive: true });
+   400	    io.fs.writeFileSync(`${p.dir}/state.json`, JSON.stringify({
+   401	      schema: 'baton/loop-state@1', runId: 'loop-done', goal: 'Ship the loop', phaseCount: 1, phaseIndex: 1,
+   402	      iterations: {}, status: 'done', parkReason: null, escalation: null, smokeApproval: null, createdAt: T0, journalSeq: 0,
+   403	      flavor: 'loop', specDigest: dedupeKey(spec.phases),
+   404	    }, null, 2) + '\n');
+   405	    const code = await cmdLoop(['run'], io);
+   406	    assert.equal(code, 0, 'a re-run of a done run exits 0');
+   407	    assert.match(io.stdoutText(), /done/, 'it still prints done');
+   408	    assert.equal(io.__runner.calls.length, 0, 'no child re-spawns for a completed run');
+   409	  });
+   410	});
+   411	
+   412	// ===========================================================================
+   413	describe('loop run — failover integration', () => {
+   414	  it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
+   415	    // implementer chain: [claude-code, codex, cursor]; the claude-code child hits
+   416	    // a session limit -> failover avoids claude-code -> relaunch on codex.
+   417	    const spec = loopSpec({ phases: [{ id: 'subtask-implement', role: 'implementer' }] });
+   418	    const io = makeLoopRepo({ spec, files: { '/repo/.handoff/bundle.json': JSON.stringify(ownedBundle('claude-code', 'open'), null, 2) + '\n' }, runner: undefined });
+   419	    io.superviseChild = fakeRunner(io, [
+   420	      { verdict: 'BLOCKED', exitCode: 1, logContent: `child transcript...\n${CC_LIMIT}\n` }, // the limit lives in the LOG
+   421	      { verdict: 'APPROVED' }, // the relaunched child succeeds
+   422	    ]);
+   423	    io.__runner = io.superviseChild;
+   424	
+   425	    const code = await cmdLoop(['run'], io);
+   426	    assert.equal(io.__runner.calls.length, 2, 'the failover relaunched exactly one follow-up child');
+   427	    assert.equal(io.__runner.calls[0].command, 'claude', 'the first child ran on the claude-code chain head');
+   428	    assert.equal(io.__runner.calls[1].command, 'codex', 'the relaunch ran on the failover target platform (codex)');
+   429	    assert.equal(valAfter(argsOf(io, 1), '--model'), 'gpt-5.6-sol', 'the relaunch used the resolved next-entry model');
+   430	    assert.equal(code, 0, 'the relaunched child completed the phase');
+
+ succeeded in 0ms:
+diff --git a/tests/commands/pipeline-run.test.mjs b/tests/commands/pipeline-run.test.mjs
+index e70d681..b4acc39 100644
+--- a/tests/commands/pipeline-run.test.mjs
++++ b/tests/commands/pipeline-run.test.mjs
+@@ -1098,240 +1098,445 @@ describe('pipeline — D6: reviewer & merger get classify→failover like writer
+   it('RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE', async () => {
+     const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, merger: ['codex/m1@xhigh', 'codex/m2@xhigh'] } };
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), config, runner: undefined });
+     const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': approve, m1: deathMU, m2: approve });
+     io.superviseChild = runner;
+     io.__runner = runner;
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 0, `the merge-check succeeds via re-resolution; stderr: ${io.stderrText()}`);
+     assert.deepEqual(mergerModels(runner), ['m1', 'm2'], `the dead merger entry re-resolved to the next; got ${JSON.stringify(mergerModels(runner))}`);
+     assert.ok(mergeReceipts(io).some((r) => r.subtaskId === 't1'), 'the subtask actually merged (a receipt was written)');
+     const state = (await loadLoopState('/repo', io)).state;
+     assert.equal(state.iterations['subtask-t1-review'] ?? 0, 0, 'a model-unavailable merger death did NOT burn a gate iteration');
+     assert.equal(gateIterationEvents(io, 'subtask-t1-review').length, 0, 'NO gate-iteration event was journaled for the merger death');
+     assert.equal(state.status, LOOP_STATUS.DONE, 'the run completed');
+   });
+ 
+   it('GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged)', async () => {
+     // A clean exit-0 reviewer that BLOCKS on merits (no death signature), then approves.
+     const reviewQ = [{ verdict: 'BLOCKED', exitCode: 0, findings: 'real review finding' }, { verdict: 'APPROVED', exitCode: 0 }];
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+     const runner = byModelRunner(io, { 'wa-model': approve, 'wb-model': () => reviewQ.shift() ?? approve(), 'mg-model': approve });
+     io.superviseChild = runner;
+     io.__runner = runner;
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 0, `the subtask completes after the writer addresses the review; stderr: ${io.stderrText()}`);
+     assert.equal((await loadLoopState('/repo', io)).state.iterations['subtask-t1-review'], 1, 'a genuine BLOCKED review consumes exactly one gate iteration');
+   });
+ 
+   it('RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation', async () => {
+     const config = { ...PIPELINE_CONFIG, roles: { ...PIPELINE_CONFIG.roles, 'worker-a': ['codex/wa-model@xhigh'], 'worker-b': ['codex/r1@xhigh', 'codex/r2@xhigh'] } };
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 3, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }), config, runner: undefined });
+     const runner = byModelRunner(io, { 'wa-model': approve, r1: deathMU, r2: deathMU, 'mg-model': approve }, { bound: 16 });
+     io.superviseChild = runner;
+     io.__runner = runner;
+     let code = 'ran';
+     try { code = await run(['pipeline', 'run'], io); } catch { code = 'unbounded'; }
+     assert.equal(code, 4, 'reviewer chain exhaustion PARKS (exit 4), never a cap-burn escalation');
+     assert.ok(reviewerModels(runner).length <= 4, `reviewer re-resolution is bounded (one pass over the chain), not per-iteration re-run; got ${JSON.stringify(reviewerModels(runner))}`);
+   });
+ });
+ 
+ // ===========================================================================
+ // D7 (dogfood milestone C, attempt 2) — the pipeline's escalation must PERSIST.
+ // Live: the synthesized state spec drops budgets, so the reducer caps at its
+ // default (5) while drivePipeline enforces the spec cap — the run exited 3 with
+ // state.json still status 'running', escalation null.
+ describe('pipeline — D7: escalation persists to state.json', () => {
+   it('RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate', async () => {
+     const subtasks = [{ id: 't1', title: 'only' }];
+     const gate = 'subtask-t1-review';
+     const io = makePipeRepo({
+       spec: pipelineSpec({ subtasks, budgets: { iterationCap: 2, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+       runner: undefined,
+     });
+     io.superviseChild = fakeRunner(io, cleanSubtask());
+     io.__runner = io.superviseChild;
+     // Seed the gate AT the enforced cap (2) — the top-of-loop cap check fires
+     // before any child spawns.
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', iterations: { [gate]: 2 } });
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 3, 'a capped gate escalates (exit 3)');
+     // The RAW snapshot must itself be escalated — loadLoopState replays the
+     // journal over the snapshot, which could MASK a state.json left 'running'.
+     const rawState = JSON.parse(io.files()[loopPaths('/repo').state]);
+     assert.equal(rawState.status, 'escalated', 'the RAW state.json snapshot is escalated (not merely masked by journal replay)');
+     assert.ok(rawState.escalation && rawState.escalation.gate === gate, `the raw snapshot escalation names the gate; got ${JSON.stringify(rawState.escalation)}`);
+     // And the loaded view agrees.
+     const { state } = await loadLoopState('/repo', io);
+     assert.equal(state.status, LOOP_STATUS.ESCALATED, 'the loaded state is escalated — a resume must not see a running run');
+     assert.ok(state.escalation && state.escalation.gate === gate, `the loaded escalation names the gate; got ${JSON.stringify(state.escalation)}`);
+   });
+ });
+ 
+ // ===========================================================================
+ // D8 (dogfood milestone C, attempt 2) — an escalation with EMPTY findings still
+ // records WHY: a bounded tail of the last child's log lands in ESCALATION.md so
+ // the operator is not handed a blank escalation. The findings-present path stays
+ // byte-compatible.
+ describe('pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty', () => {
+   const ESC = `${loopPaths('/repo').dir}/ESCALATION.md`;
+ 
+   it('RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail', async () => {
+     const marker = 'DISTINCTIVE_D8_TAIL_MARKER_Q9Z';
+     const io = makePipeRepo({
+       spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+       runner: undefined,
+     });
+     io.superviseChild = fakeRunner(io, [
+       { verdict: 'APPROVED', exitCode: 0 }, // writer passes
+       { verdict: 'BLOCKED', exitCode: 0, findings: '', logContent: `review scratch…\n${marker}\n` }, // reviewer BLOCKS with EMPTY findings but a telling log
+     ]);
+     io.__runner = io.superviseChild;
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 3, 'the gate escalates at the cap');
+     const esc = io.files()[ESC];
+     assert.ok(esc, 'ESCALATION.md was written');
+     assert.match(esc, new RegExp(marker), 'an empty-findings escalation includes the last child’s log tail so the operator sees WHY');
+   });
+ 
+   it('GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged)', async () => {
+     const finding = 'CONCRETE_FINDING_TEXT_D8';
+     const io = makePipeRepo({
+       spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }], budgets: { iterationCap: 1, perRoleTimeoutMin: 30, maxChildrenPerPhase: 10 } }),
+       runner: undefined,
+     });
+     io.superviseChild = fakeRunner(io, [
+       { verdict: 'APPROVED', exitCode: 0 }, // writer
+       { verdict: 'BLOCKED', exitCode: 0, findings: finding }, // reviewer BLOCKS with concrete findings
+     ]);
+     io.__runner = io.superviseChild;
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 3, 'the gate escalates at the cap');
+     const esc = io.files()[ESC];
+     // Byte-for-byte the current findings-present format (pipeline.mjs:408) — a
+     // format change OR an appended log tail on THIS path fails the guard.
+     const expected = `# Pipeline escalation\n\nGate 'subtask-t1-review' exhausted its 1-iteration cap.\nLast findings:\n\n${finding}\n`;
+     assert.equal(esc, expected, 'the findings-present ESCALATION.md is byte-identical to today (no appended tail when findings exist)');
+   });
+ });
+ 
++// ===========================================================================
++// ITEM 2 (v1.1) — trunk derivation. Replace hardcoded 'main' with the repo's
++// actual default branch (git symbolic-ref refs/remotes/origin/HEAD → fallback
++// rev-parse --abbrev-ref HEAD at setup), recorded in state and reused, never
++// re-derived mid-run. Pinned in a MASTER-trunk fake repo — the observable is
++// "master used everywhere; one derivation", not the exact command.
++
++// A fake git modeling a MASTER-trunk repo: the default branch is 'master'
++// (symbolic-ref refs/remotes/origin/HEAD → origin/master; fallback rev-parse
++// --abbrev-ref HEAD at the ROOT → master). It answers 'main' refs LENIENTLY
++// (same sha/ranges) so a main-hardcoded impl still runs end to end — the pin's
++// teeth are that NO 'main' appears in the recorded git argv. deriveThrows makes
++// the default-branch derivation fail (to prove a resume reuses a stamped trunk).
++function masterGit({ merged = [], existingBranches = [], dirtyCwds = [], log = CLEAN_LOG, deriveThrows = false } = {}) {
++  const added = /** @type {Map<string,string>} */ (new Map());
++  const branchAt = /** @type {Map<string,string>} */ (new Map());
++  const branches = new Set(existingBranches);
++  const dirty = new Set(dirtyCwds);
++  const mergedSet = new Set(merged);
++  const calls = /** @type {any[]} */ ([]);
++  const lockProbeRef = { fn: /** @type {null | (() => boolean)} */ (null) };
++  const list = () => {
++    const entries = [{ path: '/repo', branch: 'master' }];
++    for (const [path, branch] of added) entries.push({ path, branch: branchAt.get(path) ?? branch });
++    return entries.map((e) => `worktree ${e.path}\nHEAD ${MAIN_SHA}\nbranch refs/heads/${e.branch}\n`).join('\n');
++  };
++  const fn = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
++    const argstr = args.join(' ');
++    calls.push({ cmd, args, argstr, cwd: opts?.cwd, lockPresent: lockProbeRef.fn ? lockProbeRef.fn() : undefined });
++    if (cmd !== 'git') return Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
++    // ---- trunk derivation (both forms) ----
++    if (argstr === 'symbolic-ref refs/remotes/origin/HEAD') {
++      if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: no origin/HEAD'), { code: 128, stderr: 'no origin/HEAD\n' }));
++      return Promise.resolve({ stdout: 'refs/remotes/origin/master\n', stderr: '' });
++    }
++    if (argstr === 'rev-parse --abbrev-ref HEAD') {
++      if (opts?.cwd === '/repo') {
++        if (deriveThrows) return Promise.reject(Object.assign(new Error('fatal: HEAD'), { code: 128 }));
++        return Promise.resolve({ stdout: 'master\n', stderr: '' }); // fallback derivation at root
++      }
++      return Promise.resolve({ stdout: `${branchAt.get(opts?.cwd) ?? 'master'}\n`, stderr: '' }); // seat HEAD
++    }
++    if (argstr.startsWith('worktree list')) return Promise.resolve({ stdout: list(), stderr: '' });
++    if (argstr.startsWith('worktree add')) {
++      const path = args.find((a) => a.startsWith('/repo/.worktrees/'));
++      const bi = args.indexOf('-b');
++      const branch = bi >= 0 ? args[bi + 1] : 'baton/wt-x/base';
++      if (path) { added.set(path, branch); branchAt.set(path, branch); }
++      return Promise.resolve({ stdout: '', stderr: '' });
++    }
++    if (argstr.startsWith('worktree prune') || argstr.startsWith('worktree remove')) return Promise.resolve({ stdout: '', stderr: '' });
++    if (argstr.startsWith('checkout -b')) {
++      const target = args[args.indexOf('-b') + 1];
++      if (branches.has(target)) return Promise.reject(Object.assign(new Error(`fatal: a branch named '${target}' already exists`), { code: 128, stderr: `fatal: a branch named '${target}' already exists\n` }));
++      branches.add(target);
++      if (opts?.cwd) branchAt.set(opts.cwd, target);
++      return Promise.resolve({ stdout: '', stderr: '' });
++    }
++    if (argstr.startsWith('status --porcelain')) return Promise.resolve({ stdout: dirty.has(opts?.cwd) ? ' M dirty.txt\n' : '', stderr: '' });
++    // merge-base --is-ancestor <branch> <trunk>: exit 0 iff branch already merged.
++    if (argstr.startsWith('merge-base --is-ancestor')) {
++      const b = args[args.indexOf('--is-ancestor') + 1];
++      return mergedSet.has(b) ? Promise.resolve({ stdout: '', stderr: '' }) : Promise.reject(Object.assign(new Error('not an ancestor'), { code: 1, stdout: '', stderr: '' }));
++    }
++    // Lenient: rev-parse of ANY single ref (master OR main) resolves to the sha.
++    if (argstr.startsWith('rev-parse')) return Promise.resolve({ stdout: `${MAIN_SHA}\n`, stderr: '' });
++    if (argstr.startsWith('log ')) {
++      const range = args.find((a) => /\.\./.test(String(a))) ?? '';
++      const branch = String(range).split('..')[1];
++      if (branch && mergedSet.has(branch)) return Promise.resolve({ stdout: '', stderr: '' }); // merged → empty
++      return Promise.resolve({ stdout: log, stderr: '' });
++    }
++    if (argstr.startsWith('merge')) return Promise.resolve({ stdout: 'Fast-forward', stderr: '' }); // merge <branch> and merge --ff-only <trunk>
++    if (argstr.startsWith('branch -D')) return Promise.resolve({ stdout: '', stderr: '' });
++    return Promise.reject(Object.assign(new Error(`unstubbed git: ${argstr}`), { code: 'ENOSTUB' }));
++  };
++  fn.calls = calls;
++  fn.git = () => calls.filter((c) => c.cmd === 'git');
++  fn.mainCalls = () => fn.git().filter((c) => c.argstr.includes('main'));
++  // Root-level trunk derivation: symbolic-ref origin/HEAD, or the abbrev-ref
++  // fallback issued AT the repo root (seat abbrev-ref HEAD checks are excluded
++  // by the cwd filter). Counts every attempt so "derive once, never re-derive"
++  // is pinned by the call count, not just the observable trunk.
++  fn.derivationCalls = () =>
++    fn.git().filter(
++      (c) => c.argstr === 'symbolic-ref refs/remotes/origin/HEAD' || (c.argstr === 'rev-parse --abbrev-ref HEAD' && c.cwd === '/repo'),
++    ).length;
++  fn.setLockProbe = (/** @type {() => boolean} */ f) => { lockProbeRef.fn = f; };
++  return fn;
++}
++
++describe('pipeline — trunk derivation (v1.1 item 2)', () => {
++  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
++  const mergeReceiptsOf = (io) => {
++    const raw = io.files()[MERGES];
++    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
++  };
++
++  it('RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master', async () => {
++    const git = masterGit();
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `a master-trunk run completes; stderr: ${io.stderrText()}`);
++    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the run reached DONE');
++    // Teeth: NO trunk touchpoint used the hardcoded 'main'.
++    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'every trunk git call targets master — no main anywhere');
++    // Reviewer prompt ranges over master..branch.
++    const rev = reviewersOf(io.__runner)[0];
++    assert.ok(rev, 'a reviewer ran');
++    const revPrompt = argsOf(rev).join(' ');
++    assert.match(revPrompt, /git diff master\.\.baton\/wt-a\/subtask-t1/, 'the reviewer prompt ranges over master..<branch>');
++    assert.doesNotMatch(revPrompt, /\bmain\.\./, 'the reviewer prompt never ranges over main');
++    // Merger prompt names master as the trunk.
++    const merger = io.__runner.calls.find((c) => argsOf(c).join(' ').includes('You are the merger'));
++    assert.ok(merger, 'a merger ran');
++    assert.match(argsOf(merger).join(' '), /against master/, 'the merger prompt names master as the trunk');
++    // Receipt shape unchanged.
++    assert.ok(
++      mergeReceiptsOf(io).some((r) => r.subtaskId === 't1' && r.branch === 'baton/wt-a/subtask-t1' && typeof r.mergedAt === 'string'),
++      'the merge receipt keeps its {subtaskId, branch, mergedAt} shape',
++    );
++  });
++
++  it('RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main', async () => {
++    const branch = 'baton/wt-a/subtask-t1';
++    const git = masterGit({ merged: [branch] }); // is-ancestor true, empty master..branch, and NO receipt → stale park
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 4, 'an ancestor-without-receipt stale branch parks');
++    const out = io.stderrText() + io.stdoutText();
++    assert.match(out, /git log master\.\.baton\/wt-a\/subtask-t1/, 'the stale-park message points at git log master..<branch>');
++    assert.doesNotMatch(out, /\bmain\.\./, 'the stale-park message never ranges over main');
++  });
++
++  it('RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json', async () => {
++    const git = masterGit();
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    await run(['pipeline', 'run'], io);
++    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
++    assert.equal(state.trunk, 'master', 'the derived trunk is persisted in state.json for reuse');
++    assert.equal(git.derivationCalls(), 1, 'the trunk is derived EXACTLY once at init (one root-level derivation)');
++  });
++
++  it('RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails)', async () => {
++    const subtasks = [{ id: 't1', title: 'only' }];
++    const git = masterGit({ deriveThrows: true }); // deriving would fail now — the resume must not need it
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    // A prior run already derived + stamped the trunk.
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running', trunk: 'master' });
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `resume completes using the stamped trunk without re-deriving; stderr: ${io.stderrText()}`);
++    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'the resumed run reached DONE');
++    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the resumed run uses the stamped master everywhere');
++    assert.equal(git.derivationCalls(), 0, 'a stamped resume NEVER re-derives the trunk (not even to catch-and-fallback)');
++  });
++
++  it('RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal', async () => {
++    const subtasks = [{ id: 't1', title: 'only' }];
++    const git = masterGit();
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask());
++    io.__runner = io.superviseChild;
++    // A pre-trunk stamped state: flavor + specDigest present, but NO trunk field.
++    // Missing trunk alone is NOT the I3 legacy-unstamped refusal.
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 1, status: 'running' });
++    const code = await run(['pipeline', 'run'], io);
++    assert.notEqual(code, 2, 'a missing trunk field is additive migration, not a legacy-unstamped refusal');
++    assert.equal(code, 0, `the run migrates and completes; stderr: ${io.stderrText()}`);
++    const state = JSON.parse(io.files()[loopPaths('/repo').state]);
++    assert.equal(state.trunk, 'master', 'the trunk is derived once and stamped on migration');
++    assert.equal(git.derivationCalls(), 1, 'migration derives the trunk EXACTLY once, then stamps it');
++  });
++
++  it('RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv', async () => {
++    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
++    const t1Branch = 'baton/wt-a/subtask-t1';
++    // t1 is genuinely merged under master: is-ancestor true, empty master..t1,
++    // AND a receipt. t2 is unmerged and runs normally.
++    const git = masterGit({ merged: [t1Branch] });
++    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
++    io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
++    io.__runner = io.superviseChild;
++    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2, status: 'running', trunk: 'master' });
++    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
++    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId: 't1', branch: t1Branch, mergedAt: T0 }) + '\n');
++
++    const code = await run(['pipeline', 'run'], io);
++    assert.equal(code, 0, `the receipt-backed t1 auto-advances and t2 completes; stderr: ${io.stderrText()}`);
++    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed merged subtask is not mistaken for empty/stale under master');
++    const writers = writersOf(io.__runner);
++    assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
++    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — receipt-backed t1 was recognized as merged and skipped');
++    assert.ok(!writers.some((c) => argsOf(c).join(' ').includes("subtask 't1'")), 'no writer ran for the already-merged t1');
++    assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the already-merged recognizer and merge path use master — no main anywhere');
++  });
++});
++
+ // ===========================================================================
+ // H5 (B4) — state flavor + spec binding across loop/pipeline.
+ describe('pipeline — H5: state flavor + spec-digest binding', () => {
+   it('RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns', async () => {
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+     io.superviseChild = fakeRunner(io, cleanSubtask());
+     io.__runner = io.superviseChild;
+     seedPipelineState(io, { flavor: 'loop', phaseCount: 1 });
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 2, 'a loop-flavored state cannot be resumed as a pipeline');
+     assert.match(io.stderrText() + io.stdoutText(), /flavor|loop|mismatch/i, 'the refusal names the flavor mismatch');
+     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a flavor mismatch');
+   });
+ 
+   it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+     io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+     io.__runner = io.superviseChild;
+     // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+     // the current subtasks, so resuming its phaseIndex would misalign.
+     const oldSubtasks = [{ id: 't1', title: 'a' }, { id: 'REMOVED', title: 'gone' }, { id: 't2', title: 'b' }];
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+     assert.match(io.stderrText() + io.stdoutText(), /subtask|spec|changed|digest/i, 'the refusal names the spec change');
+     assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+   });
+ });
+ 
+ // ===========================================================================
+ // I1 (A1/B1) — auto-advance requires a supervisor-owned MERGE RECEIPT, not just
+ // is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
+ // must PARK, not silently skip the subtask.
+ //
+ // Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
+ // one line per merged subtask `{ subtaskId, branch, mergedAt }`. Auto-advance on
+ // resume requires is-ancestor(branch, main) AND a receipt for that subtask.
+ describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
+   const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+   const seedReceipt = (io, subtaskId, branch) => {
+     io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+     io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId, branch, mergedAt: T0 }) + '\n');
+   };
+   const receipts = (io) => {
+     const raw = io.files()[MERGES];
+     return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+   };
+ 
+   it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
+     const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+     // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
+     const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+     io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+     io.__runner = io.superviseChild;
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+     seedReceipt(io, 't1', 'baton/wt-a/subtask-t1');
+ 
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+     assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+     const writers = writersOf(io.__runner);
+     assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+     assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
+   });
+ 
+   it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+     const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+     // t1's branch is empty at main's tip: is-ancestor true, empty main..t1 — but
+     // NO merge receipt (the writer crashed before its first commit).
+     const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+     io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+     io.__runner = io.superviseChild;
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+     // No receipt seeded.
+ 
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+     const out = io.stderrText() + io.stdoutText();
+     assert.match(out, /stale/i, 'the park names the stale branch');
+     assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
+     // J2: the message must hedge BOTH causes — each pinned SEPARATELY so a
+     // single-cause misdiagnosis cannot pass — point at the range to inspect, and
+     // account for the branch still being checked out in the writer seat (a bare
+     // "delete the branch" fails while it is checked out).
+     assert.match(out, /crashed before committing|before.*first commit|pre-?commit/i, 'names the pre-commit-crash cause');
+     assert.match(out, /merged without a receipt|merge.*receipt.*missing|not.*recorded/i, 'ALSO names the merged-without-receipt cause (no single-cause misdiagnosis)');
+     assert.match(out, /git log main\.\.baton\/wt-a\/subtask-t1/, 'points at `git log main..<branch>` to disambiguate');
+     assert.match(out, /seat|worktree|checked out|checkout/i, 'remediation accounts for the branch still being checked out in the writer seat');
+   });
+ 
+   it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
+     const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+     // A receipt exists for t1, but the branch is NOT an ancestor of main (the
+     // merge did not actually land — e.g. main was rewound). A receipt-ONLY
+     // advance would skip t1; the required conjunction re-runs it.
+     const git = pipelineGit({ mergedBranches: [] }); // is-ancestor FALSE for every branch
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+     io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+     io.__runner = io.superviseChild;
+     seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+     seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
+ 
+     const code = await run(['pipeline', 'run'], io);
+     assert.equal(code, 0, `the run completes by re-running t1; stderr: ${io.stderrText()}`);
+     const writers = writersOf(io.__runner);
+     assert.ok(writers.length >= 1, 'a writer ran');
+     assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
+   });
+ 
+   it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
+     const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+     io.superviseChild = fakeRunner(io, cleanSubtask());
+     io.__runner = io.superviseChild;
+ 
+     // Ordering hook: at each phase-advance journal write, capture whether the t1
+     // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
+     const journalPath = `${loopPaths('/repo').dir}/journal.ndjson`;
+     const receiptAtAdvance = [];
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/pipeline-run.test.mjs | sed -n '1435,1570p'" in /Users/saksham/baton
+ succeeded in 0ms:
+  1435	  });
+  1436	
+  1437	  it('RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex', async () => {
+  1438	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+  1439	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  1440	    io.__runner = io.superviseChild;
+  1441	    // A prior run over a DIFFERENT subtask list: its specDigest no longer matches
+  1442	    // the current subtasks, so resuming its phaseIndex would misalign.
+  1443	    const oldSubtasks = [{ id: 't1', title: 'a' }, { id: 'REMOVED', title: 'gone' }, { id: 't2', title: 'b' }];
+  1444	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(oldSubtasks), phaseIndex: 1 });
+  1445	    const code = await run(['pipeline', 'run'], io);
+  1446	    assert.equal(code, 2, 'a resume against a changed subtask list refuses rather than resuming a misaligned position');
+  1447	    assert.match(io.stderrText() + io.stdoutText(), /subtask|spec|changed|digest/i, 'the refusal names the spec change');
+  1448	    assert.equal(io.__runner.calls.length, 0, 'no child spawned on a spec-digest mismatch');
+  1449	  });
+  1450	});
+  1451	
+  1452	// ===========================================================================
+  1453	// I1 (A1/B1) — auto-advance requires a supervisor-owned MERGE RECEIPT, not just
+  1454	// is-ancestor: a stale empty branch at main's tip is is-ancestor-true too, and
+  1455	// must PARK, not silently skip the subtask.
+  1456	//
+  1457	// Merge-receipt shape (I1 design): append-only `.handoff/loop/merges.ndjson`,
+  1458	// one line per merged subtask `{ subtaskId, branch, mergedAt }`. Auto-advance on
+  1459	// resume requires is-ancestor(branch, main) AND a receipt for that subtask.
+  1460	describe('pipeline — I1: merge-receipt-gated auto-advance', () => {
+  1461	  const MERGES = `${loopPaths('/repo').dir}/merges.ndjson`;
+  1462	  const seedReceipt = (io, subtaskId, branch) => {
+  1463	    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+  1464	    io.fs.writeFileSync(MERGES, JSON.stringify({ subtaskId, branch, mergedAt: T0 }) + '\n');
+  1465	  };
+  1466	  const receipts = (io) => {
+  1467	    const raw = io.files()[MERGES];
+  1468	    return typeof raw === 'string' ? raw.split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l)) : [];
+  1469	  };
+  1470	
+  1471	  it('RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park)', async () => {
+  1472	    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+  1473	    // t1 is genuinely merged: is-ancestor true, empty main..t1, AND a receipt.
+  1474	    const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+  1475	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1476	    io.superviseChild = fakeRunner(io, cleanSubtask()); // enough for t2 only
+  1477	    io.__runner = io.superviseChild;
+  1478	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+  1479	    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1');
+  1480	
+  1481	    const code = await run(['pipeline', 'run'], io);
+  1482	    assert.equal(code, 0, `a receipt-backed merged subtask advances and the run completes; stderr: ${io.stderrText()}`);
+  1483	    assert.doesNotMatch(io.stderrText() + io.stdoutText(), /EMPTY branch|nothing to review or merge|stale/i, 'a receipt-backed subtask is not mistaken for empty/stale');
+  1484	    const writers = writersOf(io.__runner);
+  1485	    assert.ok(writers.length >= 1, 'the unmerged subtask still runs a writer');
+  1486	    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — t1 was recognized as merged (receipt) and skipped');
+  1487	  });
+  1488	
+  1489	  it('RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances', async () => {
+  1490	    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+  1491	    // t1's branch is empty at main's tip: is-ancestor true, empty main..t1 — but
+  1492	    // NO merge receipt (the writer crashed before its first commit).
+  1493	    const git = pipelineGit({ mergedBranches: ['baton/wt-a/subtask-t1'] });
+  1494	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1495	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  1496	    io.__runner = io.superviseChild;
+  1497	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+  1498	    // No receipt seeded.
+  1499	
+  1500	    const code = await run(['pipeline', 'run'], io);
+  1501	    assert.equal(code, 4, 'a receipt-less is-ancestor branch parks as stale rather than silently skipping the subtask');
+  1502	    const out = io.stderrText() + io.stdoutText();
+  1503	    assert.match(out, /stale/i, 'the park names the stale branch');
+  1504	    assert.equal(io.__git.matching(/^merge baton\//).length, 0, 'nothing is merged for a stale empty branch');
+  1505	    // J2: the message must hedge BOTH causes — each pinned SEPARATELY so a
+  1506	    // single-cause misdiagnosis cannot pass — point at the range to inspect, and
+  1507	    // account for the branch still being checked out in the writer seat (a bare
+  1508	    // "delete the branch" fails while it is checked out).
+  1509	    assert.match(out, /crashed before committing|before.*first commit|pre-?commit/i, 'names the pre-commit-crash cause');
+  1510	    assert.match(out, /merged without a receipt|merge.*receipt.*missing|not.*recorded/i, 'ALSO names the merged-without-receipt cause (no single-cause misdiagnosis)');
+  1511	    assert.match(out, /git log main\.\.baton\/wt-a\/subtask-t1/, 'points at `git log main..<branch>` to disambiguate');
+  1512	    assert.match(out, /seat|worktree|checked out|checkout/i, 'remediation accounts for the branch still being checked out in the writer seat');
+  1513	  });
+  1514	
+  1515	  it('GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped', async () => {
+  1516	    const subtasks = [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }];
+  1517	    // A receipt exists for t1, but the branch is NOT an ancestor of main (the
+  1518	    // merge did not actually land — e.g. main was rewound). A receipt-ONLY
+  1519	    // advance would skip t1; the required conjunction re-runs it.
+  1520	    const git = pipelineGit({ mergedBranches: [] }); // is-ancestor FALSE for every branch
+  1521	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks }), git, runner: undefined });
+  1522	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  1523	    io.__runner = io.superviseChild;
+  1524	    seedPipelineState(io, { flavor: 'pipeline', specDigest: dedupeKey(subtasks), phaseIndex: 0, phaseCount: 2 });
+  1525	    seedReceipt(io, 't1', 'baton/wt-a/subtask-t1'); // receipt present, ancestor absent
+  1526	
+  1527	    const code = await run(['pipeline', 'run'], io);
+  1528	    assert.equal(code, 0, `the run completes by re-running t1; stderr: ${io.stderrText()}`);
+  1529	    const writers = writersOf(io.__runner);
+  1530	    assert.ok(writers.length >= 1, 'a writer ran');
+  1531	    assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_A, 'the FIRST writer is t1 (wt-a) — a receipt alone did NOT skip it (is-ancestor is a required conjunct)');
+  1532	  });
+  1533	
+  1534	  it('RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled', async () => {
+  1535	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+  1536	    io.superviseChild = fakeRunner(io, cleanSubtask());
+  1537	    io.__runner = io.superviseChild;
+  1538	
+  1539	    // Ordering hook: at each phase-advance journal write, capture whether the t1
+  1540	    // receipt is ALREADY on disk (durable before the advance, not merely by EOR).
+  1541	    const journalPath = `${loopPaths('/repo').dir}/journal.ndjson`;
+  1542	    const receiptAtAdvance = [];
+  1543	    const realAppend = io.fs.appendFileSync.bind(io.fs);
+  1544	    io.fs.appendFileSync = (/** @type {any} */ path, /** @type {any} */ data) => {
+  1545	      if (String(path) === journalPath && /"type":"phase-advance"/.test(String(data))) {
+  1546	        receiptAtAdvance.push(receipts(io).some((r) => r.subtaskId === 't1'));
+  1547	      }
+  1548	      return realAppend(path, data);
+  1549	    };
+  1550	
+  1551	    const code = await run(['pipeline', 'run'], io);
+  1552	    assert.equal(code, 0);
+  1553	    const rec = receipts(io).find((r) => r.subtaskId === 't1');
+  1554	    assert.ok(rec, 'a merge receipt is persisted after the subtask merges');
+  1555	    assert.equal(rec.branch, 'baton/wt-a/subtask-t1', 'the receipt names the merged branch');
+  1556	    assert.ok(typeof rec.mergedAt === 'string' && rec.mergedAt.length > 0, 'the receipt records mergedAt');
+  1557	    assert.ok(receiptAtAdvance.length >= 1 && receiptAtAdvance.every(Boolean), 'the receipt is durable on disk BEFORE the phase advance is journaled (crash-safe)');
+  1558	  });
+  1559	});
+  1560	
+  1561	// ===========================================================================
+  1562	// I3 (A2/B4) — an EXISTING unstamped state (no flavor/specDigest) is refused by
+  1563	// pipeline run, with the archive instruction, zero spawns.
+  1564	describe('pipeline — I3: unstamped legacy state is refused', () => {
+  1565	  it('RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns', async () => {
+  1566	    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'a' }, { id: 't2', title: 'b' }] }), runner: undefined });
+  1567	    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]);
+  1568	    io.__runner = io.superviseChild;
+  1569	    io.fs.mkdirSync(loopPaths('/repo').dir, { recursive: true });
+  1570	    io.fs.writeFileSync(
+
+codex
+The iteration-2 changes added the missing derivation-count assertions and the new `trunk-5` recognizer scenario. I’m running the permitted test slice and typecheck next; if the environment blocks temporary files, I’ll treat that as sandbox noise and ground the verdict in the test code plus any usable output.
+exec
+/bin/zsh -lc "nl -ba docs/plans/2026-07-20-v1.1-hardening.md | sed -n '1,120p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	# v1.1 hardening — plan (Milestone D)
+     2	
+     3	Goal: close every deferral recorded at the Milestone B gate plus the open
+     4	dogfood finding, without changing any shipped contract (exit codes, file
+     5	layouts, token formats, and the AGENTS.md invariants are frozen). Method:
+     6	the standing TDD flow — test-author pins → verifier (cap 5 per series) →
+     7	implement → per-item commit — with Gate 2 dual review at the end of the
+     8	milestone. Everything below is falsifiable; each item names its acceptance.
+     9	
+    10	## Scope (dependency-ordered)
+    11	
+    12	1. **D9 — done-status persistence.** A smoke-approve resume that completes
+    13	   the final phase must persist status `done` (today the completion path
+    14	   prints done, exits 0, and leaves `running`). Accept: raw state.json
+    15	   reads `done` after the approved run completes; re-run still prints done.
+    16	2. **Trunk derivation.** Replace hardcoded `'main'` in the pipeline/worktree
+    17	   layer with the repo's actual default branch (`git symbolic-ref
+    18	   refs/remotes/origin/HEAD` → fallback `git rev-parse --abbrev-ref HEAD`
+    19	   at setup, recorded in state and reused, never re-derived mid-run).
+    20	   Accept: in a master-trunk repo, EVERY trunk touchpoint uses the persisted
+    21	   trunk — worktree setup/preflight/merge git calls, reviewer/merger prompts
+    22	   (`git diff <trunk>..<branch>`), the stale-branch park message, the
+    23	   already-merged recognizer, receipts, and resume — pinned end-to-end;
+    24	   the existing main-trunk suite passes unchanged; an EXISTING state.json
+    25	   without a trunk field derives once at resume and stamps it (additive
+    26	   migration — never a refusal).
+    27	3. **Per-phase child budgets.** `budgets.maxChildrenPerPhase` currently
+    28	   gates a global product; enforce it per phase/subtask. Accept: a phase
+    29	   exhausting its own budget parks naming the phase; other phases unaffected.
+    30	4. **Findings persistence.** Review findings currently live only in memory
+    31	   between iterations; persist per-gate findings history to
+    32	   `.handoff/loop/findings/<gate>.ndjson` (append-only) so a resumed run
+    33	   re-prompts with the last findings instead of an empty string. Accept:
+    34	   (a) park → resume mid-gate carries the prior findings into the next
+    35	   child prompt; (b) the actual deferred failure mode — a supervisor
+    36	   crash/re-invoke after a BLOCKED gate iteration with status still
+    37	   `running` — re-prompts with the persisted findings, pinned for BOTH
+    38	   `loop run` and `pipeline run`; (c) escalations embed the latest
+    39	   persisted findings.
+    40	4b. **Review artifacts from gate children (G9 deferral).** Each gate
+    41	   child's prompt and verdict land under
+    42	   `reviews/<runId>/<gate>/iteration-NN/{prompt.md, verdict.md}` in the
+    43	   repo (the wt-* convention the methodology already uses), written by the
+    44	   supervisor after each verdict parse. Accept: a two-iteration gate leaves
+    45	   two iteration directories whose verdict.md matches the parsed verdict
+    46	   and findings; artifact writes never block the run (fail-open with a
+    47	   warning); the layout matches reviews/README.md.
+    48	5. **Streaming log caps.** superviseChild buffers child output in memory
+    49	   before the capped write; stream to the log with the cap enforced during
+    50	   capture so a runaway child cannot balloon the supervisor. Accept: a
+    51	   fixture child emitting >cap output holds supervisor memory bounded
+    52	   (observable via the capped file plus a recording-fake byte counter).
+    53	6. **Child-log redaction + purge.** Child logs under `.handoff/loop/children/`
+    54	   bypass the secret-redaction filter and the purge walk. Route the capped
+    55	   log write through the existing redaction pass and include the loop tree
+    56	   in `purge-transcript`. Accept: a planted secret in a child transcript is
+    57	   absent from the written log; the whole-tree purge test covers loop logs.
+    58	7. **Live codex marker fixture.** The `tokens used` verdict-region marker is
+    59	   pinned only against synthetic fixtures; record a real transcript
+    60	   (attempt-3 dogfood child logs are on disk) as a committed fixture and pin
+    61	   parseVerdict + tail-classification against it. Accept: the live fixture
+    62	   parses to the observed verdict.
+    63	8. **Probe integration.** `loop run`/`pipeline run` currently resolve with
+    64	   `probes: null`; feed the doctor's cached availability probes into
+    65	   resolveRoles so a rate-limited platform is skipped at spawn time (probe
+    66	   staleness > 15 min ignored, degraded flag preserved). Accept: a cached
+    67	   rate-limited probe diverts (a) the first spawn AND (b) every failover
+    68	   relaunch — writer, reviewer, and merger paths all pass the same fresh
+    69	   cache into runFailover — with the existing `degraded` audit trail;
+    70	   missing or stale cache resolves exactly as today (offline-degraded,
+    71	   never blocked).
+    72	9. **Pipeline smoke gate.** Optional `smoke.cmd` support for pipelines:
+    73	   after the FINAL subtask merges, run the smoke command and pause for the
+    74	   same token approval as the loop (shared implementation; same drift
+    75	   binding; `pipeline resume`/`--approve-smoke` flows reused). Accept: a
+    76	   pipeline with smoke.cmd stops awaiting approval after the last merge and
+    77	   completes only on a verified token.
+    78	10. **`--detach` (last — largest surface).** `baton loop run --detach` and
+    79	    `baton pipeline run --detach`: fork the supervisor into a background
+    80	    process group that survives the invoking terminal, write
+    81	    `.handoff/loop/supervisor.out` (capped) and print the pid + tail
+    82	    command. The run lock, reclaim, and children registry already handle
+    83	    the lifecycle; detach only changes who owns the tty. Accept (POSIX
+    84	    integration; Windows documented unsupported for v1.1): (a) the parent
+    85	    returns promptly AFTER the detached supervisor owns the run lock;
+    86	    (b) a second `run` while the detached supervisor is live refuses exit 1;
+    87	    (c) a killed detached supervisor is reclaimed by the next run, which
+    88	    kills its recorded in-flight child groups; (d) the lock is released on
+    89	    detached completion; (e) supervisor.out exists and respects its cap.
+    90	
+    91	## Out of scope
+    92	
+    93	Adapters beyond what the above touches; multi-bundle `.handoff`; team
+    94	bundles; any renaming (Milestone E owns ship polish and the npm publish).
+    95	
+    96	## Risks
+    97	
+    98	- Trunk derivation touches merge/preflight paths proven live — pins must
+    99	  cover the master-trunk case AND re-run the main-trunk suite unchanged.
+   100	- Probe integration must never make offline resolution fail (degraded, not
+   101	  blocked) — the Gate-1-approved availability rules apply verbatim.
+   102	- Detach is platform-sensitive; keep it last so everything else lands even
+   103	  if it parks.
+   104	
+   105	## Acceptance for the milestone
+   106	
+   107	All ten items green with verifier-approved pins; full suite + typecheck
+   108	green; one live re-run of the pipeline dogfood (fresh clone) confirming no
+   109	regression in the proven flow; Gate 2 dual review APPROVED/WITH_NOTES with
+   110	notes folded.
+
+exec
+/bin/zsh -lc 'node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'npm run typecheck' in /Users/saksham/baton
+ exited 1 in 153ms:
+▶ pipeline — CLI routing & flags
+  ✔ no subcommand -> usage error (exit 2) naming a subcommand, not "unknown command" (1.10125ms)
+  ✔ an unknown subcommand exits 2 naming it (0.159333ms)
+  ✔ a stray positional / unknown flag exits 2 with zero spawns (0.190375ms)
+  ✔ BATON_SUPERVISED_CHILD does NOT suppress pipeline run (supervisor-side) (5.028541ms)
+✔ pipeline — CLI routing & flags (7.073958ms)
+▶ pipeline — preconditions
+  ✔ no loop.json -> exit 2 naming loop.json, zero spawns (0.178459ms)
+  ✔ missing / empty subtasks -> exit 2 naming subtasks, zero spawns (0.198958ms)
+  ✔ malformed subtask items exit 2 naming the offender, with zero spawns (0.3735ms)
+  ✔ setupWorktrees runs before subtask 1 (worktree adds recorded) and only once (1.123375ms)
+✔ pipeline — preconditions (2.02475ms)
+▶ pipeline — seat alternation (writer)
+  ✔ subtask 1 writes in wt-a on baton/wt-a/subtask-t1 (worker-a model); subtask 2 writes in wt-b on baton/wt-b/subtask-t2 (worker-b model) (1.2435ms)
+✔ pipeline — seat alternation (writer) (1.313917ms)
+▶ pipeline — reviewer seat (read-only, other seat)
+  ✔ both reviewers, in order: t1 = wb-model/WT_B/read-only, t2 = wa-model/WT_A/read-only, each under the subtask-reviewer role (1.35775ms)
+  ✔ RED (G7): the reviewer prompt instructs the git RANGE review (git diff main..baton/wt-<seat>/subtask-<id>) (0.492125ms)
+✔ pipeline — reviewer seat (read-only, other seat) (1.917ms)
+▶ pipeline — verdict flow
+  ✔ reviewer APPROVED -> the MERGER child runs (merger model); on its APPROVED the SUPERVISOR merges via mergeSubtask (0.78525ms)
+  ✔ reviewer BLOCKED -> the SAME writer seat re-runs with the findings in its prompt (0.687209ms)
+  ✔ review-gate cap exhaustion -> escalated, ESCALATION.md, exit 3, no 6th spawn (0.859833ms)
+  ✔ merger BLOCKED -> the writer retries (same gate-cap discipline) (0.687125ms)
+✔ pipeline — verdict flow (3.101834ms)
+▶ pipeline — merge failures park
+  ✔ a merge CONFLICT from mergeSubtask parks the run (exit 4) (0.486917ms)
+  ✔ an attribution violation (foreign committer) blocks the merge and parks — no merge git call lands (0.380792ms)
+✔ pipeline — merge failures park (0.912042ms)
+▶ pipeline — worktree guard composition (preflight/postflight)
+  ✔ (a) a DIRTY writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.77075ms)
+  ✔ (b) a WRONG-branch writer seat -> preflight refusal BEFORE any spawn: zero children, parked, exit 4 (0.249541ms)
+  ✔ (c) POSTFLIGHT drift (the writer child moves main) -> parked, exit 4, no reviewer/merger, no merge (0.301584ms)
+✔ pipeline — worktree guard composition (preflight/postflight) (1.372083ms)
+▶ pipeline — completion
+  ✔ both subtasks merged -> state done, exit 0; loop state + journal persisted under .handoff/loop (0.500292ms)
+✔ pipeline — completion (0.525708ms)
+▶ pipeline — G1: a claude-code worker seat writer carries model + seat cwd
+  ✔ RED (G1): the claude writer for the wt-b subtask runs in wt-b (spec.cwd) with --model cc-writer (0.611209ms)
+✔ pipeline — G1: a claude-code worker seat writer carries model + seat cwd (0.637541ms)
+▶ pipeline — G2: cap validation / resume / run-lock / stale branch
+  ✔ RED (G2): iterationCap 6 in loop.json is REJECTED (exit 2) BEFORE any spawn (the 5-cap is a hard invariant) (0.123083ms)
+  ✔ RED (G2): a LIVE supervisor.lock refuses pipeline run (exit 1), zero spawns (0.136375ms)
+  ✔ RED (G2): a stale pre-existing subtask branch PARKS (exit 4) instead of crashing (0.372917ms)
+  ✔ RED (G2): a second pipeline run RESUMES loadLoopState — cap counters survive re-invocation (no refund) (1.015666ms)
+✔ pipeline — G2: cap validation / resume / run-lock / stale branch (1.712291ms)
+▶ pipeline — G3: writer result handling
+  ✔ RED (G3): a writer BLOCKED retries the WRITER without spawning a reviewer for the failed attempt (0.464792ms)
+  ✔ RED (G3): a writer whose LOG carries the claude session-limit banner routes to failover (not a plain review) (6.164916ms)
+  ✔ RED (G3): a writer that commits NOTHING (empty branch) is refused/parked — an empty branch never merges (0.315125ms)
+✔ pipeline — G3: writer result handling (7.006417ms)
+▶ pipeline — G5: reviewer-seat preflight + self-heal
+  ✔ RED (G5): a DIRTY reviewer seat parks BEFORE the reviewer spawns (0.352125ms)
+  ✔ RED (G5): a listed-but-raw-deleted seat self-heals (prune + re-add), not a crash (0.443542ms)
+✔ pipeline — G5: reviewer-seat preflight + self-heal (0.833542ms)
+▶ pipeline — H1: writer prompt carries the verdict-tail contract
+  ✔ RED (H1): the writer prompt contains "End with exactly" and "VERDICT:" (a writer with no verdict parses BLOCKED-unparseable) (0.315083ms)
+✔ pipeline — H1: writer prompt carries the verdict-tail contract (0.338875ms)
+▶ pipeline — H2: bounded failover (avoid carries; exhaustion parks)
+  ✔ RED (H2a): always-model-unavailable on a two-entry codex chain never re-picks a rejected model; all rejected -> PARK (bounded) (0.921917ms)
+  ✔ RED (H2b): always-usage-limit across a cross-platform chain parks within a bounded child budget (no infinite loop) (4.535416ms)
+✔ pipeline — H2: bounded failover (avoid carries; exhaustion parks) (5.510958ms)
+▶ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root
+  ✔ RED (D2): the write-capable writer child runs in its SEAT cwd yet gets the MAIN /repo/.git in sandbox_workspace_write.writable_roots (0.5315ms)
+✔ pipeline — D2: the writer spawn passes the main .git as a sandbox writable root (0.569625ms)
+▶ pipeline — D1: classification uses the transcript tail, not the body
+  ✔ RED (D1): a writer whose LOG BODY carries a usage-limit signature but whose TAIL is a clean exit-0 APPROVED is treated OK (proceeds to review, NO failover) (0.478083ms)
+  ✔ GUARD (D1): a death banner at the END of the log still classifies and routes to failover (0.842625ms)
+✔ pipeline — D1: classification uses the transcript tail, not the body (1.378209ms)
+▶ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry
+  ✔ RED (D4): after a model-unavailable relaunch onto wa2, a later BLOCKED retry re-runs wa2 (NOT the avoided wa1) — exactly one wa1 attempt (0.779167ms)
+✔ pipeline — D4: avoided entries carry into a plain BLOCKED writer retry (0.820125ms)
+▶ pipeline — D5: failover sessionHint is the runId (no double loop- prefix)
+  ✔ RED (D5): after a usage-limit failover the received bundle is owned by the runId, not loop-<runId> (2.251708ms)
+✔ pipeline — D5: failover sessionHint is the runId (no double loop- prefix) (2.290083ms)
+▶ pipeline — D6: reviewer & merger get classify→failover like writers
+  ✔ RED (D6a): a model-unavailable subtask-reviewer re-resolves the next chain entry (one r1 then r2), no gate burn, run DONE (0.708291ms)
+  ✔ RED (D6b): a model-unavailable merger re-resolves the next chain entry (one m1 then m2), the merge lands, run DONE (0.543375ms)
+  ✔ GUARD (D6c): a genuine BLOCKED reviewer verdict STILL consumes a gate iteration (retry-with-findings unchanged) (0.474666ms)
+  ✔ RED (D6d): a reviewer chain that is FULLY model-unavailable PARKS (bounded), not a cap-burn escalation (0.995291ms)
+✔ pipeline — D6: reviewer & merger get classify→failover like writers (2.804625ms)
+▶ pipeline — D7: escalation persists to state.json
+  ✔ RED (D7): hitting the enforced cap exits 3 AND persists status escalated naming the gate (0.500583ms)
+✔ pipeline — D7: escalation persists to state.json (0.541875ms)
+▶ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty
+  ✔ RED (D8): an empty-findings escalation includes the dead child’s distinctive log tail (0.438125ms)
+  ✔ GUARD (D8): when findings are present they appear in ESCALATION.md as today (findings path unchanged) (0.321791ms)
+✔ pipeline — D8: ESCALATION.md carries the last-child log tail when findings are empty (0.801333ms)
+▶ pipeline — trunk derivation (v1.1 item 2)
+  ✖ RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master (1.5305ms)
+  ✖ RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main (0.302291ms)
+  ✖ RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json (0.4815ms)
+  ✖ RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails) (0.490958ms)
+  ✖ RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal (0.388584ms)
+  ✖ RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv (0.535834ms)
+✖ pipeline — trunk derivation (v1.1 item 2) (3.841542ms)
+▶ pipeline — H5: state flavor + spec-digest binding
+  ✔ RED (H5a): a state.json created by `loop run` (flavor loop) is REFUSED by pipeline run (exit 2 naming the mismatch), zero spawns (0.178833ms)
+  ✔ RED (H5b): a changed subtasks list (stale specDigest) on resume REFUSES (exit 2), rather than misaligning phaseIndex (0.15925ms)
+✔ pipeline — H5: state flavor + spec-digest binding (0.37825ms)
+▶ pipeline — I1: merge-receipt-gated auto-advance
+  ✔ RED (I1b): a receipt-backed already-merged subtask ADVANCES on resume (no writer, no empty-branch park) (0.417375ms)
+  ✔ RED (I1a): a stale EMPTY branch at main tip (is-ancestor true, NO receipt) PARKS as stale — never auto-advances (0.291292ms)
+  ✔ GUARD (I1 conjunction): a receipt WITHOUT is-ancestor does NOT auto-advance — the subtask is re-run, never silently skipped (1.398375ms)
+  ✔ RED (I1c): a clean merge PERSISTS a durable receipt {subtaskId, branch, mergedAt} BEFORE the phase-advance is journaled (0.563042ms)
+✔ pipeline — I1: merge-receipt-gated auto-advance (2.741125ms)
+▶ pipeline — I3: unstamped legacy state is refused
+  ✔ RED (I3): an unstamped state.json (no flavor/specDigest) refuses exit 2 with the archive instruction, zero spawns (0.197625ms)
+✔ pipeline — I3: unstamped legacy state is refused (0.227209ms)
+▶ pipeline — J1: pipeline resume
+  ✔ RED (J1a): resume transitions a PARKED run to running — the same subtask re-runs its writer, gate counters intact (no refund) (0.468292ms)
+  ✔ RED (J1b): resume refuses an ESCALATED run (exit 3, operator-only), zero spawns (0.145708ms)
+  ✔ RED (J1c): pipeline resume refuses a loop-flavored state (exit 2, flavor guard), zero spawns (0.152292ms)
+  ✔ GREEN (J1d companion): `baton loop resume` still refuses a pipeline-flavored state (exit 2), zero spawns — the boundary holds both ways (0.793833ms)
+  ✔ RED (J1e): resume with NOTHING to resume REFUSES (exit 2) and never initializes a fresh run (0.151833ms)
+✔ pipeline — J1: pipeline resume (1.777ms)
+ℹ tests 102
+ℹ suites 47
+ℹ pass 95
+ℹ fail 7
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 136.162417
+
+✖ failing tests:
+
+test at tests/commands/loop-run.test.mjs:377:3
+✖ RED (D9): a smoke-approved run that completes its FINAL phase persists raw status done (1.205291ms)
+  AssertionError [ERR_ASSERTION]: the completed run persists status done (not left running after SMOKE_APPROVE)
+  
+  'running' !== 'done'
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/loop-run.test.mjs:390:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 'running',
+    expected: 'done',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1316:3
+✖ RED (trunk-1): a master-trunk pipeline completes DONE using master everywhere — no "main" in any git argv; prompts range over master (1.5305ms)
+  AssertionError [ERR_ASSERTION]: every trunk git call targets master — no main anywhere
+  + actual - expected
+  
+  + [
+  +   'merge-base --is-ancestor baton/wt-a/subtask-t1 main',
+  +   'rev-parse main',
+  +   'rev-parse main',
+  +   'log main..baton/wt-a/subtask-t1 --format=%H',
+  +   'log main..baton/wt-a/subtask-t1 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e',
+  +   'merge --ff-only main',
+  +   'merge --ff-only main'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1325:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Promise.all (index 0)
+      at async Suite.run (node:internal/test_runner/test:1771:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'merge-base --is-ancestor baton/wt-a/subtask-t1 main', 'rev-parse main', 'rev-parse main', 'log main..baton/wt-a/subtask-t1 --format=%H', 'log main..baton/wt-a/subtask-t1 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e', 'merge --ff-only main', 'merge --ff-only main' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1343:3
+✖ RED (trunk-2): the stale-branch park message names the trunk (git log master..<branch>), not main (0.302291ms)
+  AssertionError [ERR_ASSERTION]: the stale-park message points at git log master..<branch>
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1352:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: "baton pipeline run: parked — subtask 't1' has a stale branch 'baton/wt-a/subtask-t1' whose tip is already contained in main, with no merge receipt — either its writer crashed before committing, or the branch was merged without a receipt being recorded. Inspect `git log main..baton/wt-a/subtask-t1` to tell which. Remediation: the branch may still be checked out in its writer seat worktree — checkout the seat's base branch there first, then delete 'baton/wt-a/subtask-t1' and continue with: baton pipeline resume\n",
+    expected: /git log master\.\.baton\/wt-a\/subtask-t1/,
+    operator: 'match',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1356:3
+✖ RED (trunk-3a): a fresh master-trunk run STAMPS the derived trunk into state.json (0.4815ms)
+  AssertionError [ERR_ASSERTION]: the derived trunk is persisted in state.json for reuse
+  + actual - expected
+  
+  + undefined
+  - 'master'
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1363:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'master',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1367:3
+✖ RED (trunk-3b): resume REUSES the stamped trunk and does not re-derive (completes even when derivation now fails) (0.490958ms)
+  AssertionError [ERR_ASSERTION]: the resumed run uses the stamped master everywhere
+  + actual - expected
+  
+  + [
+  +   'merge-base --is-ancestor baton/wt-a/subtask-t1 main',
+  +   'rev-parse main',
+  +   'rev-parse main',
+  +   'log main..baton/wt-a/subtask-t1 --format=%H',
+  +   'log main..baton/wt-a/subtask-t1 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e',
+  +   'merge --ff-only main',
+  +   'merge --ff-only main'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1378:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'merge-base --is-ancestor baton/wt-a/subtask-t1 main', 'rev-parse main', 'rev-parse main', 'log main..baton/wt-a/subtask-t1 --format=%H', 'log main..baton/wt-a/subtask-t1 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e', 'merge --ff-only main', 'merge --ff-only main' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1382:3
+✖ RED (trunk-4): a stamped state WITHOUT a trunk field migrates — derives once and stamps it, never a refusal (0.388584ms)
+  AssertionError [ERR_ASSERTION]: the trunk is derived once and stamped on migration
+  + actual - expected
+  
+  + undefined
+  - 'master'
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1395:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: undefined,
+    expected: 'master',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/commands/pipeline-run.test.mjs:1399:3
+✖ RED (trunk-5): a receipt-backed already-merged subtask auto-advances under master (no t1 writer), zero main in argv (0.535834ms)
+  AssertionError [ERR_ASSERTION]: the already-merged recognizer and merge path use master — no main anywhere
+  + actual - expected
+  
+  + [
+  +   'merge-base --is-ancestor baton/wt-a/subtask-t1 main',
+  +   'merge-base --is-ancestor baton/wt-b/subtask-t2 main',
+  +   'rev-parse main',
+  +   'rev-parse main',
+  +   'log main..baton/wt-b/subtask-t2 --format=%H',
+  +   'log main..baton/wt-b/subtask-t2 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e',
+  +   'merge --ff-only main',
+  +   'merge --ff-only main'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1419:12)
+      at async Test.run (node:internal/test_runner/test:1313:7)
+      at async Suite.processPendingSubtests (node:internal/test_runner/test:897:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'merge-base --is-ancestor baton/wt-a/subtask-t1 main', 'merge-base --is-ancestor baton/wt-b/subtask-t2 main', 'rev-parse main', 'rev-parse main', 'log main..baton/wt-b/subtask-t2 --format=%H', 'log main..baton/wt-b/subtask-t2 --format=%H%x00%an%x00%ae%x00%cn%x00%ce%x00%B%x1e', 'merge --ff-only main', 'merge --ff-only main' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }
+
+2026-07-20T03:09:20.732464Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+ succeeded in 719ms:
+codex
+Verifier metadata: codex/gpt-5.5@xhigh, Codex, 2026-07-20, degraded as stated.
+
+Verified facts: D9’s fixture now puts `smoke-build` as the last phase at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:371), approves with no remaining runner at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:384), and asserts raw `state.json` is `done` at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:390). The trunk fake records all git argv before stubbing at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1246), scans all git argv for `main` at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1296), and `trunk-5` seeds the master-stamped receipt path at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1408) with assertions for t2-first/no-t1-writer/zero-main at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1417).
+
+Validation: `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` produced 102 tests, 95 pass, 7 expected reds: D9 plus trunk-1 through trunk-5. `npm run typecheck` passed.
+
+Hypothesis checked: the new derivation count still has one adversarial hole. Non-root `rev-parse --abbrev-ref HEAD` calls are excluded from `derivationCalls()` at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1303), while the fake only makes `deriveThrows` fail for `/repo` fallback derivation at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1254) and otherwise returns a non-root branch/default at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1258). That means the stamped-resume “never re-derives” assertion at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1379) can miss a wrong implementation that re-derives through a seat cwd before the fake has a seat branch recorded.
+
+VERDICT: BLOCKED
+FINDINGS: 1. [high] — `derivationCalls()` can miss a non-root `rev-parse --abbrev-ref HEAD` re-derivation because those calls are excluded and `deriveThrows` does not fail them — Fix: make the stamped-resume fake reject or count non-root abbrev-ref fallback attempts unless they are known expected seat branch probes, then assert the expected seat probes separately.
+tokens used
+66,877
+Verifier metadata: codex/gpt-5.5@xhigh, Codex, 2026-07-20, degraded as stated.
+
+Verified facts: D9’s fixture now puts `smoke-build` as the last phase at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:371), approves with no remaining runner at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:384), and asserts raw `state.json` is `done` at [loop-run.test.mjs](/Users/saksham/baton/tests/commands/loop-run.test.mjs:390). The trunk fake records all git argv before stubbing at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1246), scans all git argv for `main` at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1296), and `trunk-5` seeds the master-stamped receipt path at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1408) with assertions for t2-first/no-t1-writer/zero-main at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1417).
+
+Validation: `node --test tests/commands/pipeline-run.test.mjs tests/commands/loop-run.test.mjs` produced 102 tests, 95 pass, 7 expected reds: D9 plus trunk-1 through trunk-5. `npm run typecheck` passed.
+
+Hypothesis checked: the new derivation count still has one adversarial hole. Non-root `rev-parse --abbrev-ref HEAD` calls are excluded from `derivationCalls()` at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1303), while the fake only makes `deriveThrows` fail for `/repo` fallback derivation at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1254) and otherwise returns a non-root branch/default at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1258). That means the stamped-resume “never re-derives” assertion at [pipeline-run.test.mjs](/Users/saksham/baton/tests/commands/pipeline-run.test.mjs:1379) can miss a wrong implementation that re-derives through a seat cwd before the fake has a seat branch recorded.
+
+VERDICT: BLOCKED
+FINDINGS: 1. [high] — `derivationCalls()` can miss a non-root `rev-parse --abbrev-ref HEAD` re-derivation because those calls are excluded and `deriveThrows` does not fail them — Fix: make the stamped-resume fake reject or count non-root abbrev-ref fallback attempts unless they are known expected seat branch probes, then assert the expected seat probes separately.
