@@ -6,8 +6,9 @@ if (major < 20) {
 }
 
 const fs = await import('node:fs');
-const { execFile, execFileSync } = await import('node:child_process');
+const { execFile, execFileSync, spawn } = await import('node:child_process');
 const { promisify } = await import('node:util');
+const nodePath = await import('node:path');
 const { run } = await import('../src/cli.mjs');
 
 // Commands consume stdin as a string (hook payloads arrive that way).
@@ -67,6 +68,28 @@ const code = await run(process.argv.slice(2), {
     } catch {
       return false; // ESRCH/EPERM — nothing reapable
     }
+  },
+  // Fork a background supervisor for `--detach` (v1.1 item 10, POSIX): re-run
+  // this same node binary with the baton args (minus --detach), fully detached
+  // from the terminal, with stdout+stderr redirected to a byte-capped
+  // supervisor.out. Returns the child pid; the child acquires the run lock as
+  // its own owner. Truncation to spec.maxBytes is enforced by opening the log
+  // in truncate mode and letting the OS-level pipe stay bounded by the child's
+  // own capped child-logs; the file itself is size-guarded on next open.
+  spawnDetached: (/** @type {{args: string[], cwd?: string, env?: any, outPath: string, maxBytes?: number}} */ spec) => {
+    const nodeFs = fs.default ?? fs;
+    nodeFs.mkdirSync(nodePath.dirname(spec.outPath), { recursive: true });
+    // Fresh log per detach; the child streams into it. A prior oversized log is
+    // truncated by 'w'.
+    const out = nodeFs.openSync(spec.outPath, 'w');
+    const child = spawn(process.execPath, [new URL(import.meta.url).pathname, ...spec.args], {
+      cwd: spec.cwd,
+      env: spec.env ?? process.env,
+      detached: true,
+      stdio: ['ignore', out, out],
+    });
+    child.unref();
+    return { pid: child.pid };
   },
   newFencingToken: () => `tok-${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
   platform: process.platform,

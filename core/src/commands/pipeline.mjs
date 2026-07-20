@@ -14,9 +14,13 @@ import {
   applyLoopEvent,
   writeLoopState,
   appendLoopEvent,
+  smokeApprovalToken,
+  verifySmokeToken,
   LOOP_EVENT,
   LOOP_STATUS,
 } from '../loop/state.mjs';
+import { atomicWriteJson } from '../util/fsx.mjs';
+import { snapshot as gitSnapshot } from '../git/snapshot.mjs';
 import { buildChildArgv, superviseChild } from '../loop/children.mjs';
 import { setupWorktrees, preflightWorktree, postflightWorktree, mergeSubtask, selfHealWorktree, worktreePaths } from '../loop/worktrees.mjs';
 import { resolveRoles } from '../roles/resolve.mjs';
@@ -29,16 +33,21 @@ import { atomicWriteText, ensureDir, safeReadJson } from '../util/fsx.mjs';
 import { appendEntry } from '../util/jsonl.mjs';
 import { dedupeKey } from '../util/ids.mjs';
 import { emitEnvelope, usageError, parseFlagsStrict, resolveRoot } from './shared.mjs';
-import { acquireSupervisorLock } from './loop.mjs';
+import { acquireSupervisorLock, detachSupervisor } from './loop.mjs';
 import { loadLoopState } from '../loop/state.mjs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 
 const BUILTIN_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'data', 'signatures.v1.json');
 
-const STRING_FLAGS = new Set(['root']);
+const STRING_FLAGS = new Set(['root', 'approve-smoke']);
 const EXIT_ESCALATED = 3;
 const EXIT_PARKED = 4;
+
+/** @param {any} g */
+const gitHeadOf = (g) => g?.headSha ?? 'none';
+/** @param {any} g */
+const gitContentOf = (g) => g?.contentDigest ?? dedupeKey(g ?? null);
 
 /**
  * @param {string[]} args @param {any} io
@@ -61,7 +70,7 @@ export async function cmdPipeline(args, io) {
       positionals.push(a);
     }
   }
-  const parsed = parseFlagsStrict(flagTokens, {});
+  const parsed = parseFlagsStrict(flagTokens, { 'approve-smoke': 'string', detach: 'boolean' });
   if (parsed.error !== undefined) return usageError(io, parsed.flags, 'pipeline', parsed.error);
   const flags = parsed.flags;
 
@@ -69,7 +78,14 @@ export async function cmdPipeline(args, io) {
   if (sub === undefined) return usageError(io, flags, 'pipeline', 'a subcommand is required — try: baton pipeline run');
   if (sub !== 'run' && sub !== 'resume') return usageError(io, flags, 'pipeline', `unknown subcommand '${sub}' (supported: run, resume)`);
   if (positionals.length > 1) return usageError(io, flags, 'pipeline', `unexpected argument '${positionals[1]}'`);
+  if (flags['approve-smoke'] === '') return usageError(io, flags, 'pipeline', '--approve-smoke requires a value (the token from smoke-approval.json)');
   if (sub === 'resume') flags.__resume = true;
+  // --detach: same POSIX background-supervisor path as `loop run` (v1.1 item
+  // 10), sharing the lock precheck/reclaim contract.
+  if (flags.detach === true && process.platform !== 'win32') {
+    return detachSupervisor(resolveRoot(io, flags), io, { cmdLabel: 'pipeline run', batonArgs: ['pipeline', sub] });
+  }
+  if (flags.detach === true) io.stderr.write('baton pipeline run: --detach is POSIX-only; running attached on this platform\n');
 
   return runPipeline(flags, io);
 }
@@ -200,6 +216,14 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
     }
   }
   const trunk = state.trunk;
+  /** Current trunk sha — the smoke token's drift anchor (item 9). @returns {Promise<string>} */
+  const trunkSha = async () => {
+    try {
+      return String((await io.execFile('git', ['rev-parse', trunk], { cwd: root })).stdout).trim();
+    } catch {
+      return 'none';
+    }
+  };
   const transition = async (/** @type {any} */ ev) => {
     const next = applyLoopEvent(state, ev);
     const seq = await appendLoopEvent(root, ev, io);
@@ -300,6 +324,38 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
     }
   }
 
+  // --approve-smoke: verify the presented token against RECOMPUTED inputs and
+  // complete the run (v1.1 item 9); drift parks (the human approved a state
+  // that no longer exists). Reuses the loop's smoke token machinery.
+  if (typeof flags['approve-smoke'] === 'string') {
+    if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+      return usageError(io, flags, 'pipeline', `--approve-smoke only applies while the run awaits smoke approval (status: ${state.status})`);
+    }
+    const record = safeReadJson(io.fs, `${p.dir}/smoke-approval.json`);
+    if (!record.ok) return usageError(io, flags, 'pipeline', 'no smoke-approval.json found — run the pipeline to the smoke gate first');
+    const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+    const currentInputs = {
+      stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+      smokeCmd: String(spec.smoke?.cmd ?? ''),
+      smokeOutputDigest: String(record.value?.inputs?.smokeOutputDigest ?? ''),
+      // A pipeline's merge target is the TRUNK — the base a reviewer signed off
+      // on. Binding gitHead to the trunk sha (not HEAD) makes a trunk that
+      // moved after review a detected drift that parks the approval (item 9).
+      gitHead: await trunkSha(),
+      gitContentDigest: gitContentOf(git),
+      childAssignment: String(record.value?.inputs?.childAssignment ?? ''),
+    };
+    const verify = verifySmokeToken(String(flags['approve-smoke']), currentInputs);
+    if (verify.ok !== true) {
+      const drifted = 'driftedInputs' in verify ? verify.driftedInputs.join(', ') : 'unknown';
+      await transition({ type: LOOP_EVENT.PARK, reason: `smoke approval token is stale — drifted inputs: ${drifted}; re-run the smoke gate` });
+      io.stderr.write(`baton pipeline run: smoke approval REFUSED — inputs drifted since the token was issued (${drifted}); the run is parked for a fresh smoke pass\n`);
+      return EXIT_PARKED;
+    }
+    await transition({ type: LOOP_EVENT.SMOKE_APPROVE, token: flags['approve-smoke'], verified: true });
+    io.stdout.write('baton pipeline run: smoke approval verified — pipeline complete\n');
+  }
+
   if (state.status === LOOP_STATUS.ESCALATED) {
     io.stderr.write(`baton pipeline run: the run is escalated (gate ${state.escalation?.gate}) — see ${p.dir}/ESCALATION.md\n`);
     return EXIT_ESCALATED;
@@ -307,6 +363,14 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
   if (state.status === LOOP_STATUS.PARKED) {
     io.stderr.write(`baton pipeline run: the run is parked — ${state.parkReason ?? 'no reason recorded'} (resume with: baton pipeline resume)\n`);
     return EXIT_PARKED;
+  }
+  if (state.status === LOOP_STATUS.AWAITING_SMOKE_APPROVAL) {
+    io.stdout.write(`baton pipeline run: awaiting smoke approval — resume with: baton pipeline run --approve-smoke <token from ${p.dir}/smoke-approval.json>\n`);
+    return 0;
+  }
+  if (state.status === LOOP_STATUS.DONE) {
+    io.stdout.write(`baton pipeline run: done — ${subtasks.length} subtask(s) merged\n`);
+    return 0;
   }
   const runner = io.superviseChild ?? superviseChild;
   const seats = worktreePaths(root).seats;
@@ -648,6 +712,41 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
     }
 
     await transition({ type: LOOP_EVENT.PHASE_ADVANCE });
+  }
+
+  // Smoke gate (v1.1 item 9): with smoke.cmd set, the run does NOT finish when
+  // the final subtask merges — it runs the smoke command once, awaits a human
+  // token bound to the current state/output/git, and completes only on a
+  // verified token (approval handled above on the next invocation). Reuses the
+  // loop's token machinery; drift parks.
+  if (state.status === LOOP_STATUS.DONE && typeof spec.smoke?.cmd === 'string' && spec.smoke.cmd.length > 0 && !state.smokeApproval) {
+    const [cmd, ...cmdArgs] = spec.smoke.cmd.split(/\s+/);
+    let smokeOut = '';
+    try {
+      const r = await io.execFile(cmd, cmdArgs, { cwd: root });
+      smokeOut = `${r?.stdout ?? ''}${r?.stderr ?? ''}`;
+    } catch (err) {
+      smokeOut = `smoke command failed: ${/** @type {any} */ (err)?.message ?? String(err)}`;
+    }
+    await transition({ type: LOOP_EVENT.SMOKE_AWAIT });
+    const git = await gitSnapshot({ execFile: io.execFile, cwd: root, fs: io.fs });
+    const inputs = {
+      stateDigest: dedupeKey(io.fs.readFileSync(p.state, 'utf8')),
+      smokeCmd: spec.smoke.cmd,
+      smokeOutputDigest: dedupeKey(smokeOut),
+      gitHead: await trunkSha(),
+      gitContentDigest: gitContentOf(git),
+      childAssignment: JSON.stringify({ flavor: 'pipeline', subtasks: subtasks.length }),
+    };
+    const token = smokeApprovalToken(inputs);
+    atomicWriteJson(io.fs, `${p.dir}/smoke-approval.json`, { token, inputs, issuedAt: io.now() });
+    atomicWriteText(
+      io.fs,
+      `${p.dir}/SMOKE-REVIEW.md`,
+      `# Smoke gate — human approval required\n\nRun: ${state.runId}\nCommand: \`${spec.smoke.cmd}\`\nExpected: ${spec.smoke.expect ?? '(unspecified)'}\n\n## Output\n\n\`\`\`\n${smokeOut}\n\`\`\`\n\nApprove with:\n\n    baton pipeline run --approve-smoke ${token}\n\nThe token is bound to the current state/output/git — any drift refuses it.\n`,
+    );
+    io.stdout.write(`baton pipeline run: smoke gate reached — review ${p.dir}/SMOKE-REVIEW.md and approve with --approve-smoke <token>\n`);
+    return 0;
   }
 
   if (flags.json) emitEnvelope(io, { ok: true, data: { status: state.status, subtasks: subtasks.length } });

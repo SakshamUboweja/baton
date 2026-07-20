@@ -744,6 +744,104 @@ describe('loop run — probe integration (item 8)', () => {
 });
 
 // ===========================================================================
+// ITEM 10 (v1.1) — --detach. `baton loop run --detach` forks a background
+// supervisor that survives the invoking terminal; the parent returns promptly
+// once the detached child owns the run lock, printing its pid + a tail hint.
+//
+// SEAM JUDGMENT CALL (flagged for the verifier): a REAL fork is not honestly
+// unit-testable (an orphaned process, timing), so these pin the behavior through
+// an injected `io.spawnDetached(spec) -> { pid }` seam the implementation should
+// honor (default: a real detached child_process.spawn). Assumptions pinned:
+//   - the PARENT checks the run lock (refuse-live / reclaim-dead) BEFORE forking;
+//   - the DETACHED CHILD owns the lock (the fake writes it naming the child pid);
+//   - spawnDetached receives the capped supervisor.out output path.
+// Windows: --detach is POSIX-only (documented unsupported) — SKIP_WIN.
+describe('loop run — --detach (item 10)', () => {
+  const SKIP_WIN = process.platform === 'win32';
+  const DIR = loopPaths('/repo').dir;
+  const detachSeam = (io, pid, { writeLock = true } = {}) => {
+    const rec = { calls: [] };
+    io.spawnDetached = (/** @type {any} */ spec) => {
+      rec.calls.push(spec);
+      if (writeLock) {
+        io.fs.mkdirSync(DIR, { recursive: true });
+        io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: io.host, pid, startTime: 1, runId: `sup-${pid}` }));
+      }
+      return { pid };
+    };
+    return rec;
+  };
+
+  it('RED (10-1): --detach forks a detached supervisor; the parent exits 0 after the child owns the lock, printing pid + tail hint', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    const DETACHED_PID = 424242;
+    const seam = detachSeam(io, DETACHED_PID);
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(code, 0, `the parent returns promptly with exit 0; stderr: ${io.stderrText()}`);
+    assert.equal(seam.calls.length, 1, 'the supervisor was forked via the detach seam exactly once');
+    const lock = JSON.parse(io.files()[`${DIR}/supervisor.lock`]);
+    assert.equal(lock.pid, DETACHED_PID, 'the run lock names the detached supervisor pid');
+    assert.match(io.stdoutText(), new RegExp(String(DETACHED_PID)), 'stdout prints the detached pid');
+    assert.match(io.stdoutText(), /supervisor\.out/, 'stdout prints a tail hint for .handoff/loop/supervisor.out');
+  });
+
+  it('RED (10-2): --detach refuses (exit 1) when a LIVE supervisor already holds the lock — no fork', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    io.processAlive = (/** @type {number} */ pid) => pid === 55555;
+    const seam = detachSeam(io, 1);
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 55555, startTime: 222, runId: 'live' }));
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(code, 1, 'a live lock refuses the detached run (exit 1)');
+    assert.equal(seam.calls.length, 0, 'no detached supervisor is forked while the lock is held live');
+  });
+
+  it('RED (10-3): --detach reclaims a DEAD lock, killing recorded in-flight child groups BEFORE forking', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    // ONE shared ordered event log — the -9001 kill must precede the fork.
+    const events = /** @type {any[]} */ ([]);
+    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { events.push({ kind: 'kill', pid, sig }); return true; };
+    io.processAlive = (/** @type {number} */ pid) => pid === 9001; // orphan group alive; lock pid 999999 dead
+    io.spawnDetached = (/** @type {any} */ spec) => {
+      events.push({ kind: 'fork', spec });
+      io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: io.host, pid: 7, startTime: 1, runId: 'sup-7' }));
+      return { pid: 7 };
+    };
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'loop-host', pid: 999999, startTime: 7, runId: 'crashed' }));
+    io.fs.writeFileSync(`${DIR}/children.ndjson`, JSON.stringify({ childId: '001-plan', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n');
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(code, 0, `the reclaiming detached run starts; stderr: ${io.stderrText()}`);
+    const killIdx = events.findIndex((e) => e.kind === 'kill' && e.pid === -9001);
+    const forkIdx = events.findIndex((e) => e.kind === 'fork');
+    assert.ok(killIdx >= 0, `the orphan group 9001 was killed on reclaim; events: ${JSON.stringify(events)}`);
+    assert.ok(forkIdx >= 0, 'the detached supervisor was forked after reclaiming');
+    assert.ok(killIdx < forkIdx, `the orphan kill (-9001) precedes the fork; events: ${JSON.stringify(events)}`);
+  });
+
+  it('GUARD (10-4): a completing run releases the lock — the release contract a detached supervisor reuses', { skip: SKIP_WIN }, async () => {
+    // The detached child runs the same supervisor body; isolating its release
+    // needs a real child, so this pins the reused contract on the attached path.
+    const io = makeLoopRepo({ spec: loopSpec({ phases: [{ id: 'work', role: 'implementer' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, [{ verdict: 'APPROVED' }]);
+    io.__runner = io.superviseChild;
+    const code = await cmdLoop(['run'], io);
+    assert.equal(code, 0, `the run completes; stderr: ${io.stderrText()}`);
+    assert.ok(!io.fs.existsSync(`${DIR}/supervisor.lock`), 'a completing run releases the supervisor.lock');
+  });
+
+  it('RED (10-5): --detach directs the detached output to a byte-capped .handoff/loop/supervisor.out', { skip: SKIP_WIN }, async () => {
+    const io = makeLoopRepo({ runner: undefined });
+    const seam = detachSeam(io, 7);
+    await cmdLoop(['run', '--detach'], io);
+    assert.equal(seam.calls.length, 1, 'the detach seam was invoked');
+    const spec = seam.calls[0];
+    assert.match(String(spec.outPath ?? ''), /\.handoff\/loop\/supervisor\.out$/, 'spec.outPath directs the detached output to .handoff/loop/supervisor.out');
+    assert.ok(typeof spec.maxBytes === 'number' && spec.maxBytes > 0, `spec.maxBytes is a positive byte cap for supervisor.out; got ${JSON.stringify(spec.maxBytes)}`);
+  });
+});
+
+// ===========================================================================
 describe('loop run — failover integration', () => {
   it('a usage-limit child (limit banner in its LOG) relaunches on the NEW platform (next child argv)', async () => {
     // implementer chain: [claude-code, codex, cursor]; the claude-code child hits

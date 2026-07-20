@@ -59,7 +59,7 @@ export async function cmdLoop(args, io) {
     }
   }
 
-  const parsed = parseFlagsStrict(flagTokens, { 'dry-run': 'boolean', 'approve-smoke': 'string' });
+  const parsed = parseFlagsStrict(flagTokens, { 'dry-run': 'boolean', 'approve-smoke': 'string', detach: 'boolean' });
   if (parsed.error !== undefined) return usageError(io, parsed.flags, 'loop', parsed.error);
   const flags = parsed.flags;
 
@@ -69,6 +69,12 @@ export async function cmdLoop(args, io) {
     if (positionals.length > 1) return usageError(io, flags, 'loop', `unexpected argument '${positionals[1]}'`);
     if (flags['approve-smoke'] === '') return usageError(io, flags, 'loop', '--approve-smoke requires a value (the token from smoke-approval.json)');
     if (sub === 'resume') flags.__resume = true;
+    // --detach: fork a background supervisor that outlives this terminal
+    // (v1.1 item 10, POSIX). Windows is unsupported — fall back to attached.
+    if (flags.detach === true && process.platform !== 'win32') {
+      return detachSupervisor(resolveRoot(io, flags), io, { cmdLabel: 'loop run', batonArgs: ['loop', sub] });
+    }
+    if (flags.detach === true) io.stderr.write('baton loop run: --detach is POSIX-only; running attached on this platform\n');
     return runLoop(flags, io);
   }
   if (sub !== 'init') return usageError(io, flags, 'loop', `unknown subcommand '${sub}' (supported: init, run, resume)`);
@@ -222,6 +228,49 @@ export async function acquireSupervisorLock(root, io, cmdLabel) {
   }
   io.stderr.write(`baton ${cmdLabel}: could not acquire the run lock after reclaiming — another supervisor keeps winning\n`);
   return { ok: false, code: 1 };
+}
+
+// The detached supervisor's console output is byte-capped so a runaway
+// background run can't fill the disk with .handoff/loop/supervisor.out.
+const SUPERVISOR_OUT_CAP = 1_000_000;
+
+/**
+ * `--detach` (v1.1 item 10, POSIX): fork a background supervisor that survives
+ * the invoking terminal, then return. Shared by `loop run` and `pipeline run`.
+ * The PARENT does the lock precheck via acquireSupervisorLock — refusing a live
+ * owner (exit 1) and reaping a provably-dead owner's orphan child groups BEFORE
+ * forking — then releases so the detached child acquires the lock as its own
+ * (child-owned lock). Output is redirected to a capped supervisor.out.
+ * @param {string} root @param {any} io
+ * @param {{cmdLabel: string, batonArgs: string[]}} opts
+ * @returns {Promise<number>}
+ */
+export async function detachSupervisor(root, io, { cmdLabel, batonArgs }) {
+  const p = loopPaths(root);
+  ensureDir(io.fs, p.dir);
+  // Precheck + provably-dead reclaim (kills recorded orphan groups) — a live
+  // owner refuses exit 1 and NOTHING is forked.
+  const lock = await acquireSupervisorLock(root, io, cmdLabel);
+  if (lock.ok !== true) return lock.code;
+  // Release immediately: the detached child re-acquires the lock so it, not
+  // this exiting parent, owns the run.
+  lock.release();
+  if (typeof io.spawnDetached !== 'function') {
+    io.stderr.write(`baton ${cmdLabel}: --detach is unavailable in this environment (no spawnDetached) — run attached instead\n`);
+    return 2;
+  }
+  const outPath = `${p.dir}/supervisor.out`;
+  const lockPath = `${p.dir}/supervisor.lock`;
+  const { pid } = io.spawnDetached({ command: 'baton', args: batonArgs, env: io.env, cwd: root, outPath, maxBytes: SUPERVISOR_OUT_CAP });
+  // Return only AFTER the detached child owns the lock (plan item 10): the
+  // parent released so the child could acquire, and there is a brief window
+  // where neither holds it — poll (bounded) until the child's lock appears so
+  // a caller never observes an ownerless run.
+  for (let i = 0; i < 100 && !io.fs.existsSync(lockPath); i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  io.stdout.write(`baton ${cmdLabel}: detached supervisor started (pid ${pid}); follow it with: tail -f ${outPath}\n`);
+  return 0;
 }
 
 /**

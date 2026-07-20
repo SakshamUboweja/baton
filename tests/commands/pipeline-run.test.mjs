@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { makeIo } from '../helpers/fakeio.mjs';
 import { run } from '../../core/src/cli.mjs';
-import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT } from '../../core/src/loop/state.mjs';
+import { loadLoopState, loopPaths, LOOP_STATUS, LOOP_EVENT, smokeApprovalToken } from '../../core/src/loop/state.mjs';
 import { dedupeKey } from '../../core/src/util/ids.mjs';
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1318,189 @@ describe('pipeline — review artifacts (item 4b)', () => {
       assert.match(v.header.date ?? '', /^\d{4}-\d{2}-\d{2}$/, `${role} verdict header: date`);
       assert.ok('degraded' in v.header, `${role} verdict header: degraded field present`);
     }
+  });
+});
+
+// ===========================================================================
+// ITEM 9 (v1.1) — pipeline smoke gate. After the FINAL subtask merges, a
+// pipeline whose loop.json sets smoke.cmd reuses the loop's smoke machinery
+// (smokeApprovalToken/verifySmokeToken, SMOKE_AWAIT/SMOKE_APPROVE, --approve-smoke):
+// run smoke.cmd, await a drift-bound token, complete only on a verified token.
+describe('pipeline — smoke gate (item 9)', () => {
+  const DIR = loopPaths('/repo').dir;
+  // A git that also answers the smoke command (non-git → 'ok'), so merges work
+  // AND the smoke.cmd runs through io.execFile. Records every non-git (smoke)
+  // exec with a snapshot of the merge receipts AT that moment, so a test can
+  // prove the smoke command ran ONLY after the final subtask's merge.
+  const smokeAwareIo = (spec, { git = pipelineGit() } = {}) => {
+    const io = makePipeRepo({ spec, git, runner: undefined });
+    const baseExec = io.execFile;
+    const smokeRuns = /** @type {Array<{cmd: string, args: string[], line: string, mergesAtRun: string}>} */ ([]);
+    io.execFile = (/** @type {string} */ cmd, /** @type {string[]} */ args = [], /** @type {any} */ opts = {}) => {
+      if (cmd === 'git') return baseExec(cmd, args, opts);
+      smokeRuns.push({ cmd, args: args.map(String), line: [cmd, ...args.map(String)].join(' '), mergesAtRun: io.files()[`${DIR}/merges.ndjson`] ?? '' });
+      return Promise.resolve({ stdout: 'ok\n', stderr: '' });
+    };
+    io.__smokeRuns = smokeRuns;
+    io.superviseChild = fakeRunner(io, [...cleanSubtask(), ...cleanSubtask()]); // two subtasks
+    io.__runner = io.superviseChild;
+    return io;
+  };
+  const smokeSpec = () => pipelineSpec({ subtasks: [{ id: 't1', title: 'first' }, { id: 't2', title: 'second' }], smoke: { cmd: 'npm run smoke', expect: 'ok' } });
+
+  it('RED (9-1): smoke.cmd RUNS only after the FINAL subtask merges, then the run AWAITS a genuine token', async () => {
+    const io = smokeAwareIo(smokeSpec());
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `awaiting smoke approval is a clean exit 0; stderr: ${io.stderrText()}`);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.AWAITING_SMOKE_APPROVAL, 'the run awaits smoke approval, not DONE');
+    // The smoke command ran EXACTLY once, and only after BOTH subtasks merged.
+    assert.equal(io.__smokeRuns.length, 1, 'smoke.cmd ran exactly once');
+    // ...and it was the CONFIGURED command (not a hardcoded post-merge command).
+    assert.equal(io.__smokeRuns[0].line, smokeSpec().smoke.cmd, 'the exec ran the configured spec.smoke.cmd verbatim (cmd + args)');
+    assert.match(io.__smokeRuns[0].mergesAtRun, /"subtaskId":"t1"/, 'smoke ran after t1 merged');
+    assert.match(io.__smokeRuns[0].mergesAtRun, /"subtaskId":"t2"/, 'smoke ran only after the FINAL subtask (t2) merged');
+    assert.ok(io.files()[`${DIR}/SMOKE-REVIEW.md`], 'SMOKE-REVIEW.md was written');
+    // The issued token is a genuine smokeApprovalToken over the recorded inputs.
+    const approval = JSON.parse(io.files()[`${DIR}/smoke-approval.json`]);
+    assert.ok(approval && typeof approval.token === 'string' && approval.token.startsWith('smk1.'), 'a smk token is issued');
+    assert.equal(approval.token, smokeApprovalToken(approval.inputs), 'the token is a genuine smokeApprovalToken over the recorded inputs');
+  });
+
+  it('RED (9-2): pipeline run --approve-smoke <token> verifies and completes the run DONE', async () => {
+    const io = smokeAwareIo(smokeSpec());
+    assert.equal(await run(['pipeline', 'run'], io), 0);
+    const approval = io.files()[`${DIR}/smoke-approval.json`];
+    assert.ok(approval, 'run 1 reached the smoke gate and issued a token');
+    const token = JSON.parse(approval).token;
+
+    const code = await run(['pipeline', 'run', '--approve-smoke', token], io);
+    assert.equal(code, 0, `an approved pipeline completes; stderr: ${io.stderrText()}`);
+    const raw = JSON.parse(io.files()[loopPaths('/repo').state]);
+    assert.equal(raw.status, 'done', 'the approved run persists status done');
+  });
+
+  it('RED (9-2b): a BOGUS token with NO drift is still refused — the run does NOT complete', async () => {
+    const io = smokeAwareIo(smokeSpec());
+    assert.equal(await run(['pipeline', 'run'], io), 0);
+    const approval = io.files()[`${DIR}/smoke-approval.json`];
+    assert.ok(approval, 'run 1 issued a token');
+    // No drift — the ONLY defect is a wrong token value.
+    const code = await run(['pipeline', 'run', '--approve-smoke', 'smk1.BOGUS-NOT-THE-ISSUED-TOKEN'], io);
+    assert.notEqual(code, 0, 'a bogus token is refused (not a clean completion)');
+    assert.notEqual(JSON.parse(io.files()[loopPaths('/repo').state]).status, 'done', 'a bogus token never marks the run done');
+  });
+
+  it('RED (9-3): a DRIFTED smoke token is refused and the pipeline PARKS (exit 4)', async () => {
+    const git = pipelineGit();
+    const io = smokeAwareIo(smokeSpec(), { git });
+    assert.equal(await run(['pipeline', 'run'], io), 0);
+    const approval = io.files()[`${DIR}/smoke-approval.json`];
+    assert.ok(approval, 'run 1 issued a token');
+    const token = JSON.parse(approval).token;
+    // A bound input drifts: main moves after the human looked.
+    git.moveMain('DRIFTED-SHA-9-3-AAAAAAAAAAAAAAAAAAAA');
+    const code = await run(['pipeline', 'run', '--approve-smoke', token], io);
+    assert.equal(code, 4, 'a drifted token parks the pipeline (exit 4)');
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.PARKED, 'drift parks the run');
+  });
+
+  it('GUARD (9-4): a pipeline with NO smoke.cmd completes straight to DONE (no regression)', async () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0);
+    assert.equal((await loadLoopState('/repo', io)).state.status, LOOP_STATUS.DONE, 'no smoke.cmd → straight to DONE');
+    assert.ok(!io.files()[`${DIR}/smoke-approval.json`], 'no smoke gate is armed when smoke.cmd is unset');
+  });
+
+  it('GUARD (9-5): a pipeline spec with smoke.cmd and NO phases is ACCEPTED — the loop smoke-build rule never gates pipelines', async () => {
+    const spec = smokeSpec();
+    assert.ok(!('phases' in spec), 'precondition: the pipeline spec has subtasks, no phases');
+    const io = smokeAwareIo(spec);
+    const code = await run(['pipeline', 'run'], io);
+    assert.notEqual(code, 2, 'smoke.cmd + no phases is NOT a validation error for a pipeline (no smoke-build refusal)');
+    assert.ok(io.__runner.calls.length >= 1, 'it ran past validation and spawned the subtask');
+  });
+});
+
+// ===========================================================================
+// ITEM 10 (v1.1) — --detach (pipeline half). Mirrors the loop detach contract
+// through the same injected `io.spawnDetached` seam (see loop-run.test.mjs for
+// the full seam rationale). POSIX-only — SKIP_WIN.
+describe('pipeline — --detach (item 10)', () => {
+  const SKIP_WIN = process.platform === 'win32';
+  const DIR = loopPaths('/repo').dir;
+  const basePipe = () => {
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    return io;
+  };
+  const detachSeam = (io, pid, { writeLock = true } = {}) => {
+    const rec = { calls: [] };
+    io.spawnDetached = (/** @type {any} */ spec) => {
+      rec.calls.push(spec);
+      if (writeLock) {
+        io.fs.mkdirSync(DIR, { recursive: true });
+        io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: io.host, pid, startTime: 1, runId: `sup-${pid}` }));
+      }
+      return { pid };
+    };
+    return rec;
+  };
+
+  it('RED (10-1 pipeline): pipeline run --detach forks a detached supervisor; parent exits 0, lock names the detached pid, stdout prints pid + tail hint', { skip: SKIP_WIN }, async () => {
+    const io = basePipe();
+    const DETACHED_PID = 515151;
+    const seam = detachSeam(io, DETACHED_PID);
+    const code = await run(['pipeline', 'run', '--detach'], io);
+    assert.equal(code, 0, `the parent returns promptly with exit 0; stderr: ${io.stderrText()}`);
+    assert.equal(seam.calls.length, 1, 'the supervisor was forked via the detach seam exactly once');
+    assert.equal(JSON.parse(io.files()[`${DIR}/supervisor.lock`]).pid, DETACHED_PID, 'the run lock names the detached supervisor pid');
+    assert.match(io.stdoutText(), new RegExp(String(DETACHED_PID)), 'stdout prints the detached pid');
+    assert.match(io.stdoutText(), /supervisor\.out/, 'stdout prints a tail hint for .handoff/loop/supervisor.out');
+  });
+
+  it('RED (10-2 pipeline): pipeline run --detach refuses (exit 1) under a LIVE lock — no fork (parity via the shared lock path)', { skip: SKIP_WIN }, async () => {
+    const io = basePipe();
+    io.processAlive = (/** @type {number} */ pid) => pid === 55555;
+    const seam = detachSeam(io, 1);
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'pipe-host', pid: 55555, startTime: 222, runId: 'live' }));
+    const code = await run(['pipeline', 'run', '--detach'], io);
+    assert.equal(code, 1, 'a live lock refuses the detached pipeline run (exit 1)');
+    assert.equal(seam.calls.length, 0, 'no detached supervisor is forked while the lock is held live');
+  });
+
+  it('RED (10-3 pipeline): pipeline run --detach reclaims a DEAD lock, killing recorded child groups BEFORE forking', { skip: SKIP_WIN }, async () => {
+    const io = basePipe();
+    const events = /** @type {any[]} */ ([]);
+    io.processKill = (/** @type {number} */ pid, /** @type {any} */ sig) => { events.push({ kind: 'kill', pid, sig }); return true; };
+    io.processAlive = (/** @type {number} */ pid) => pid === 9001;
+    io.spawnDetached = (/** @type {any} */ spec) => {
+      events.push({ kind: 'fork', spec });
+      io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: io.host, pid: 7, startTime: 1, runId: 'sup-7' }));
+      return { pid: 7 };
+    };
+    io.fs.mkdirSync(DIR, { recursive: true });
+    io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: 'pipe-host', pid: 999999, startTime: 7, runId: 'crashed' }));
+    io.fs.writeFileSync(`${DIR}/children.ndjson`, JSON.stringify({ childId: '001-t1-writer', pid: 8001, pgid: 9001, startedAt: T0 }) + '\n');
+    const code = await run(['pipeline', 'run', '--detach'], io);
+    assert.equal(code, 0, `the reclaiming detached run starts; stderr: ${io.stderrText()}`);
+    const killIdx = events.findIndex((e) => e.kind === 'kill' && e.pid === -9001);
+    const forkIdx = events.findIndex((e) => e.kind === 'fork');
+    assert.ok(killIdx >= 0 && forkIdx >= 0 && killIdx < forkIdx, `the orphan kill (-9001) precedes the fork; events: ${JSON.stringify(events)}`);
+  });
+
+  it('RED (10-5 pipeline): pipeline run --detach directs output to a byte-capped .handoff/loop/supervisor.out', { skip: SKIP_WIN }, async () => {
+    const io = basePipe();
+    const seam = detachSeam(io, 7);
+    await run(['pipeline', 'run', '--detach'], io);
+    assert.equal(seam.calls.length, 1, 'the detach seam was invoked');
+    const spec = seam.calls[0];
+    assert.match(String(spec.outPath ?? ''), /\.handoff\/loop\/supervisor\.out$/, 'spec.outPath directs output to supervisor.out');
+    assert.ok(typeof spec.maxBytes === 'number' && spec.maxBytes > 0, `spec.maxBytes is a positive byte cap; got ${JSON.stringify(spec.maxBytes)}`);
   });
 });
 
