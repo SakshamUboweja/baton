@@ -267,8 +267,17 @@ export async function detachSupervisor(root, io, { cmdLabel, batonArgs }) {
   // "lock exists" alone races — a freshly-written state.json is the durable
   // proof it got going). For a fresh detach state.json does not pre-exist.
   const stateBefore = io.fs.existsSync(p.state);
-  const started = () => io.fs.existsSync(lockPath) || (!stateBefore && io.fs.existsSync(p.state));
   const { pid } = io.spawnDetached({ command: 'baton', args: batonArgs, env: io.env, cwd: root, outPath, maxBytes: SUPERVISOR_OUT_CAP });
+  // OWNER-BOUND start signal (gate-2 fix): the lock existing is NOT proof OUR
+  // child started — a foreign supervisor could hold it after we released. The
+  // detached child writes its own pid into supervisor.lock, so require the
+  // recorded owner to be the pid we forked (or the durable proof of a fresh
+  // state.json for a fast child that acquired → ran → released before we sampled).
+  const lockOwnedByChild = () => {
+    const parsed = safeReadJson(io.fs, lockPath);
+    return parsed.ok === true && Number(parsed.value?.pid) === Number(pid);
+  };
+  const started = () => lockOwnedByChild() || (!stateBefore && io.fs.existsSync(p.state));
   // Poll (bounded, injectable so the failure path doesn't sleep the full
   // budget in tests — N1) until the child provably started.
   const attempts = typeof io.detachPollAttempts === 'number' ? io.detachPollAttempts : 100;
@@ -410,7 +419,7 @@ async function runLoop(flags, io) {
     const header = [
       `role: ${assignment.role}`,
       `model: ${assignment.platform}/${assignment.model}${assignment.effort ? `@${assignment.effort}` : ''}`,
-      `platform: ${assignment.platform}`,
+      `harness: ${assignment.platform}`,
       `date: ${String(io.now()).slice(0, 10)}`,
       `verdict: ${verdict}`,
       `degraded: ${assignment.mode && assignment.mode !== 'native' ? String(assignment.mode) : 'none'}`,

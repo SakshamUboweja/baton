@@ -172,6 +172,17 @@ export function superviseChild(spec, opts) {
     // frozen and the last half rolls — death banners and verdict tails live
     // at the END of a log, so both classification and parsing survive.
     const half = Math.max(64, Math.floor(maxLogBytes / 2));
+    // Cap decisions are in UTF-8 BYTES, not UTF-16 code units (gate-2 fix): a
+    // string's `.length` undercounts multibyte text (CJK ~3×, emoji ~2×), so a
+    // char-gated cap let a runaway CJK child write ~3× maxLogBytes to disk.
+    // clampBytes keeps at most `maxBytes` UTF-8 bytes from either end; a cut
+    // that splits a multibyte sequence yields U+FFFD, fine for a truncated log.
+    const byteLen = (/** @type {string} */ s) => Buffer.byteLength(s, 'utf8');
+    const clampBytes = (/** @type {string} */ s, /** @type {number} */ maxBytes, /** @type {boolean} */ fromEnd) => {
+      const buf = Buffer.from(s, 'utf8');
+      if (buf.length <= maxBytes) return s;
+      return (fromEnd ? buf.subarray(buf.length - maxBytes) : buf.subarray(0, maxBytes)).toString('utf8');
+    };
     let head = '';
     let tail = '';
     let truncated = false;
@@ -183,15 +194,15 @@ export function superviseChild(spec, opts) {
       const s = c.toString();
       if (!truncated) {
         head += s;
-        if (head.length > maxLogBytes) {
-          tail = head.slice(half);
-          head = head.slice(0, half);
+        if (byteLen(head) > maxLogBytes) {
+          tail = clampBytes(head, half, true);
+          head = clampBytes(head, half, false);
           truncated = true;
         }
       } else {
         tail += s;
       }
-      if (truncated && tail.length > half) tail = tail.slice(-half);
+      if (truncated && byteLen(tail) > half) tail = clampBytes(tail, half, true);
     };
     child.stdout?.on('data', onChunk);
     child.stderr?.on('data', onChunk);

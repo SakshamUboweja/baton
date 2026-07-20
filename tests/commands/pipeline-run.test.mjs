@@ -1316,6 +1316,10 @@ describe('pipeline — review artifacts (item 4b)', () => {
       assert.equal(v.header.verdict, 'APPROVED', `${role} verdict header: exact verdict`);
       assert.match(v.header.model ?? '', new RegExp(model), `${role} verdict header: concrete model`);
       assert.match(v.header.date ?? '', /^\d{4}-\d{2}-\d{2}$/, `${role} verdict header: date`);
+      // TIGHTENED (finding 2): reviews/README.md:26 mandates a `harness:` line
+      // (how the child was invoked); a `platform:` line does not satisfy it.
+      assert.ok('harness' in v.header, `${role} verdict header: a harness: line is present (reviews/README.md:26 mandates harness:, not platform:)`);
+      assert.match(v.header.harness ?? '', /codex/i, `${role} verdict header: harness names how the child was invoked`);
       assert.ok('degraded' in v.header, `${role} verdict header: degraded field present`);
     }
   });
@@ -1896,6 +1900,27 @@ describe('pipeline — trunk derivation (v1.1 item 2)', () => {
     assert.equal(valAfter(argsOf(writers[0]), '-C'), WT_B, 'the first writer is t2 (wt-b) — receipt-backed t1 was recognized as merged and skipped');
     assert.ok(!writers.some((c) => argsOf(c).join(' ').includes("subtask 't1'")), 'no writer ran for the already-merged t1');
     assert.deepEqual(git.mainCalls().map((c) => c.argstr), [], 'the already-merged recognizer and merge path use master — no main anywhere');
+  });
+
+  it('RED (trunk-6): setup forks the seat branches FROM the persisted trunk — worktree add carries master as the start-point, not root HEAD', async () => {
+    // The persisted trunk is master (derived via origin/HEAD); the seat branches
+    // must fork from it, so `git worktree add -b <branch> <path>` MUST name master
+    // as the start-point. Without it, seats fork from root's current HEAD, which
+    // may diverge from the reviewed/merged trunk (cross-vendor finding 1).
+    const git = masterGit();
+    const io = makePipeRepo({ spec: pipelineSpec({ subtasks: [{ id: 't1', title: 'only' }] }), git, runner: undefined });
+    io.superviseChild = fakeRunner(io, cleanSubtask());
+    io.__runner = io.superviseChild;
+    const code = await run(['pipeline', 'run'], io);
+    assert.equal(code, 0, `the master-trunk run completes; stderr: ${io.stderrText()}`);
+    const adds = git.git().filter((c) => /^worktree add\b/.test(c.argstr));
+    assert.equal(adds.length, 2, 'both seat worktrees are added');
+    for (const c of adds) {
+      // argv shape: ['worktree','add','-b',<branch>,<path>,<start-point>] — the
+      // LAST token is the persisted trunk. Today setupWorktrees omits it (the
+      // last token is the seat path), so this pins the missing start-point.
+      assert.equal(c.args[c.args.length - 1], 'master', `worktree add forks the seat branch from the persisted trunk (start-point 'master'); argv: ${c.argstr}`);
+    }
   });
 });
 

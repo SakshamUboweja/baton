@@ -8,6 +8,7 @@ import { cmdLoop } from '../../core/src/commands/loop.mjs';
 import { loadLoopState, loopPaths, LOOP_STATUS } from '../../core/src/loop/state.mjs';
 import { dedupeKey } from '../../core/src/util/ids.mjs';
 import { redactSecrets } from '../../core/src/util/redact.mjs';
+import { readProbeCache, PROBE_CACHE_MS } from '../../core/src/roles/availability.mjs';
 
 // ---------------------------------------------------------------------------
 // RED — `baton loop run` supervisor state machine (subtask loop-run). Extends
@@ -619,7 +620,10 @@ describe('loop run — review artifacts from gate children (item 4b)', () => {
     assert.equal(v1.header.role, 'plan-reviewer', 'verdict header: exact role');
     assert.match(v1.header.model ?? '', /gpt-5\.6-sol/, 'verdict header: concrete model');
     assert.match(v1.header.model ?? '', /xhigh/, 'verdict header: the effort actually used');
-    assert.match(`${v1.header.harness ?? ''}${v1.header.platform ?? ''}`, /codex/i, 'verdict header: harness/platform');
+    // reviews/README.md:26 mandates a `harness:` line (how the child was invoked).
+    // TIGHTENED (finding 2): require harness: exactly — a platform: line no longer satisfies it.
+    assert.ok('harness' in v1.header, 'verdict header: a harness: line is present (reviews/README.md:26 mandates harness:, not platform:)');
+    assert.match(v1.header.harness ?? '', /codex/i, 'verdict header: harness names how the child was invoked');
     assert.equal(v1.header.date, '2026-07-19', 'verdict header: date (YYYY-MM-DD from io.now())');
     assert.equal(v1.header.verdict, 'BLOCKED', 'verdict header: exact verdict');
     assert.ok('degraded' in v1.header, 'verdict header: degraded field present');
@@ -633,7 +637,9 @@ describe('loop run — review artifacts from gate children (item 4b)', () => {
     assert.equal(v2.header.role, 'plan-reviewer', 'iteration-02 verdict header: exact role');
     assert.match(v2.header.model ?? '', /gpt-5\.6-sol/, 'iteration-02 verdict header: concrete model');
     assert.match(v2.header.model ?? '', /xhigh/, 'iteration-02 verdict header: the effort actually used');
-    assert.match(`${v2.header.harness ?? ''}${v2.header.platform ?? ''}`, /codex/i, 'iteration-02 verdict header: harness/platform');
+    // TIGHTENED (finding 2): require harness: exactly (reviews/README.md:26).
+    assert.ok('harness' in v2.header, 'iteration-02 verdict header: a harness: line is present (reviews/README.md:26 mandates harness:, not platform:)');
+    assert.match(v2.header.harness ?? '', /codex/i, 'iteration-02 verdict header: harness names how the child was invoked');
     assert.equal(v2.header.date, '2026-07-19', 'iteration-02 verdict header: exact date');
     assert.equal(v2.header.verdict, 'APPROVED', 'iteration-02 verdict header: exact verdict');
     assert.ok('degraded' in v2.header, 'iteration-02 verdict header: degraded field present');
@@ -741,6 +747,20 @@ describe('loop run — probe integration (item 8)', () => {
     const code = await cmdLoop(['run'], io);
     assert.equal(code, 0, 'an unverifiable-but-not-rate-limited head is not blocked');
     assert.equal(io.__runner.calls[0].command, 'claude', 'installed/ok is selectable (degraded) — the head still spawns, never skipped');
+  });
+
+  it('RED (8-6): a cache aged EXACTLY PROBE_CACHE_MS reads as FRESH (inclusive boundary), not stale', () => {
+    // readProbeCache gates freshness on `now - at < PROBE_CACHE_MS` (strict) — so
+    // a cache exactly 15 minutes old (a probe written precisely at the window
+    // edge) wrongly reads as stale/null. The boundary must be inclusive (<=)
+    // (cross-vendor finding 4). Driven directly against readProbeCache.
+    const io = makeLoopRepo({ spec: soloImpl(), runner: undefined });
+    const at = new Date(Date.parse(T0) - PROBE_CACHE_MS).toISOString(); // exactly PROBE_CACHE_MS before io.now()
+    seedCache(io, [{ platform: 'claude-code', capability: 'installed', outcome: 'rate-limited' }], at);
+    assert.equal(Date.parse(io.now()) - Date.parse(at), PROBE_CACHE_MS, 'precondition: the cache is aged EXACTLY PROBE_CACHE_MS');
+    const probes = readProbeCache('/repo', io);
+    assert.ok(probes, `a cache exactly ${PROBE_CACHE_MS}ms old must read as FRESH (non-null), not stale`);
+    assert.deepEqual(probes['claude-code'], { capability: 'installed', outcome: 'rate-limited' }, 'the boundary-fresh records are returned intact');
   });
 });
 
@@ -861,6 +881,37 @@ describe('loop run — --detach (item 10)', () => {
     const spec = seam.calls[0];
     assert.match(String(spec.outPath ?? ''), /\.handoff\/loop\/supervisor\.out$/, 'spec.outPath directs the detached output to .handoff/loop/supervisor.out');
     assert.ok(typeof spec.maxBytes === 'number' && spec.maxBytes > 0, `spec.maxBytes is a positive byte cap for supervisor.out; got ${JSON.stringify(spec.maxBytes)}`);
+  });
+
+  it('RED (10-6): a FOREIGN-owned lock (owner pid ≠ the spawned child) is NOT read as our child having started — warn + non-zero', { skip: SKIP_WIN }, async () => {
+    // After the parent releases its own lock, `started()` gates on
+    // existsSync(supervisor.lock) — so ANY lock present (even one owned by an
+    // unrelated process that grabbed it, not our forked child) reads as "our
+    // child started." The start signal must be bound to the SPAWNED child's lock
+    // ownership: a lock whose recorded owner pid differs from the pid
+    // io.spawnDetached returned is NOT proof our child got going (finding 5).
+    const io = makeLoopRepo({ runner: undefined });
+    // Bound the poll so the not-started path doesn't sleep the full budget.
+    io.detachPollAttempts = 2;
+    const SPAWNED_PID = 424242;
+    const FOREIGN_PID = 999999;
+    const rec = { calls: [] };
+    io.spawnDetached = (/** @type {any} */ spec) => {
+      rec.calls.push(spec);
+      // A DIFFERENT process holds the lock after the parent released — NOT our
+      // spawned child (which never acquired it and never wrote fresh state.json).
+      io.fs.mkdirSync(DIR, { recursive: true });
+      io.fs.writeFileSync(`${DIR}/supervisor.lock`, JSON.stringify({ host: io.host, pid: FOREIGN_PID, startTime: 1, runId: `sup-${FOREIGN_PID}` }));
+      return { pid: SPAWNED_PID };
+    };
+    const code = await cmdLoop(['run', '--detach'], io);
+    assert.equal(rec.calls.length, 1, 'the fork was attempted');
+    const lock = JSON.parse(io.files()[`${DIR}/supervisor.lock`]);
+    assert.equal(lock.pid, FOREIGN_PID, 'precondition: the present lock is owned by a FOREIGN pid, not the spawned child');
+    assert.notEqual(lock.pid, SPAWNED_PID, 'precondition: the lock owner ≠ the spawned child pid');
+    assert.notEqual(code, 0, 'a foreign-owned lock is NOT proof the spawned child started — detach returns NON-ZERO');
+    assert.doesNotMatch(io.stdoutText(), /detached supervisor started/, 'no false "started" success when only a foreign lock is present');
+    assert.match(io.stderrText(), /lock|never|failed|did not|could not/i, 'a stderr warning names the start-acquire failure');
   });
 });
 

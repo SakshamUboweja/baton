@@ -59,10 +59,13 @@ function parseWorktreeList(out) {
 /**
  * Ensure both seat worktrees exist on their namespaced branches and that
  * `.worktrees/` is gitignored. Idempotent: an existing seat is left alone.
- * @param {string} root @param {any} io
+ * New seat branches fork from the persisted `trunk` (item-2 gate-2 fix): with
+ * no start-point `git worktree add -b` bases the branch on the root's CURRENT
+ * HEAD, so a root checked out off-trunk would seed seats from the wrong base.
+ * @param {string} root @param {any} io @param {string} [trunk]
  * @returns {Promise<{ok: boolean, worktrees: Array<{seat: string, path: string, branch: string}>, gitignoreChanged: boolean}>}
  */
-export async function setupWorktrees(root, io) {
+export async function setupWorktrees(root, io, trunk = 'main') {
   const p = worktreePaths(root);
 
   const gitignorePath = `${root}/.gitignore`;
@@ -81,7 +84,7 @@ export async function setupWorktrees(root, io) {
       continue;
     }
     const branch = seatBranch(seat);
-    await git(io, root, ['worktree', 'add', '-b', branch, path]);
+    await git(io, root, ['worktree', 'add', '-b', branch, path, trunk]);
     worktrees.push({ seat, path, branch });
   }
   return { ok: true, worktrees, gitignoreChanged: ensured.changed };

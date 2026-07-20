@@ -269,7 +269,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
     const header = [
       `role: ${assignment.role}`,
       `model: ${assignment.platform}/${assignment.model}${assignment.effort ? `@${assignment.effort}` : ''}`,
-      `platform: ${assignment.platform}`,
+      `harness: ${assignment.platform}`,
       `date: ${String(io.now()).slice(0, 10)}`,
       `verdict: ${verdict}`,
       `degraded: ${assignment.mode && assignment.mode !== 'native' ? String(assignment.mode) : 'none'}`,
@@ -382,7 +382,7 @@ async function drivePipeline(flags, io, { root, p, spec, config, cap, timeoutMs,
   /** @type {string | null} */
   let lastChildLogPath = null;
 
-  await setupWorktrees(root, io);
+  await setupWorktrees(root, io, trunk);
 
   // Supervisor-owned merge receipts (I1): one appended line per merged
   // subtask, written BEFORE the phase advance is journaled, so a crash

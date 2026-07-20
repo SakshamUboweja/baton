@@ -219,6 +219,53 @@ describe('superviseChild — streaming log cap (item 5)', () => {
 });
 
 // ===========================================================================
+// FINDING 3 (Gate-2 cross-vendor) — the streaming cap is a BYTE budget, not a
+// UTF-16 length. children.mjs gates on `head.length` (UTF-16 code units) while
+// maxLogBytes is a byte budget, so multibyte UTF-8 output (CJK/emoji) whose
+// .length stays under the cap but whose UTF-8 byte length far exceeds it slips
+// past uncapped — the written log balloons to ~3× the byte budget. The fix
+// gates on Buffer.byteLength(…, 'utf8'). Reuses the real-process + injected-fs
+// pattern above (nothing existing is modified).
+describe('superviseChild — the log cap is a BYTE budget, not a UTF-16 length (finding 3)', () => {
+  it('RED (F3): multibyte CJK output under the UTF-16 cap but over the BYTE cap is still byte-bounded on disk', { skip: SKIP_WIN }, async () => {
+    const { superviseChild } = M();
+    const dir = scratch();
+    const cap = 4000;
+    // 65 lines × (60 CJK chars + newline). UTF-16 .length ≈ 65×61 = 3965 (< cap
+    // → the buggy .length gate NEVER fires), while UTF-8 bytes ≈ 65×(60×3+1) =
+    // 11765 (≫ cap). A byte-correct cap MUST truncate this; a char-based one won't.
+    const line = '漢'.repeat(60);
+    const body = Array.from({ length: 65 }, () => line).join('\n') + '\n';
+    assert.ok(body.length < cap, `precondition: UTF-16 length (${body.length}) is under the cap — the buggy char gate would not fire`);
+    assert.ok(Buffer.byteLength(body, 'utf8') > cap, `precondition: UTF-8 byte length (${Buffer.byteLength(body, 'utf8')}) exceeds the cap`);
+    const script = join(dir, 'cjk.cjs');
+    writeFileSync(
+      script,
+      [
+        `process.stdout.write(${JSON.stringify(body)});`,
+        'process.stdout.write("tokens used: 1\\nVERDICT: APPROVED\\nFINDINGS: none\\n"); // verdict tail at the END',
+        'process.exit(0);',
+      ].join('\n'),
+    );
+    const logPath = join(dir, 'cjk.log');
+    const result = await superviseChild(
+      { command: process.execPath, args: [script], cwd: dir },
+      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex' },
+    );
+    const writtenBytes = Buffer.byteLength(readFileSync(logPath, 'utf8'), 'utf8');
+    // Bounded in BYTES: a byte-correct head+tail+marker stays within one cap of
+    // the budget (≤ 2× cap even allowing a full chunk of slack + the marker).
+    // The buggy UTF-16 gate never truncates and writes ~3× the byte budget
+    // (≈11.7 KB) — RED today.
+    assert.ok(
+      writtenBytes <= cap * 2,
+      `the written log must be byte-bounded (≤ 2× cap = ${cap * 2}); got ${writtenBytes} bytes — the UTF-16 gate lets ~3× the byte budget through`,
+    );
+    assert.equal(result.verdict, 'APPROVED', 'the verdict tail still parses from the (byte-)capped transcript');
+  });
+});
+
+// ===========================================================================
 // ITEM 6 (v1.1) — child-log redaction at write. superviseChild must route the
 // capped log write through the existing secret-redaction filter so a planted
 // credential never lands in .handoff/loop/children/*.log.

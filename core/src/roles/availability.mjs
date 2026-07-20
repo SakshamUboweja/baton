@@ -15,7 +15,9 @@ export const PROBE_CACHE_MS = 15 * 60 * 1000;
 export function readProbeCache(root, io) {
   const cached = safeReadJson(io.fs, `${root}/.handoff/log/probe-cache.json`);
   if (!cached.ok || typeof cached.value?.at !== 'string' || !Array.isArray(cached.value.records)) return null;
-  if (!(Date.parse(io.now()) - Date.parse(cached.value.at) < PROBE_CACHE_MS)) return null;
+  // Inclusive boundary (gate-2 fix): the contract is "staleness > 15 min is
+  // ignored", so a cache aged EXACTLY PROBE_CACHE_MS is still fresh.
+  if (!(Date.parse(io.now()) - Date.parse(cached.value.at) <= PROBE_CACHE_MS)) return null;
   /** @type {Record<string, {capability: string, outcome: string}>} */
   const out = {};
   for (const r of cached.value.records) {
