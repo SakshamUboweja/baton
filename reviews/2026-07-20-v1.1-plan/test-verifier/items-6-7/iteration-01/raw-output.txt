@@ -1,0 +1,1880 @@
+Reading additional input from stdin...
+OpenAI Codex v0.144.1
+--------
+workdir: /Users/saksham/baton
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: xhigh
+reasoning summaries: none
+session id: 019f7e3e-d4ec-73b0-a2a9-d15c1aec358a
+--------
+user
+<task>
+
+> degraded: gpt-5.6-sol/5.6 unavailable (account tier) — test-verifier runs on its configured lead codex/gpt-5.5@xhigh.
+You are the test-verifier for the baton repo, items-6-7 series iteration 1 of 5, auditing the Milestone-D build pins for plan items 6 (child-log redaction + purge) and 7 (live codex marker fixture) BEFORE implementation. Authority: docs/plans/2026-07-20-v1.1-hardening.md. Baseline 3d85fae (items 1-5+4b landed; suite 1231 green). Uncommitted: tests/integration/loop-children-spawn.test.mjs (6-1 + guard), tests/commands/purge-transcript.test.mjs (6-2), tests/unit/loop-children.test.mjs (item-7 pins), tests/fixtures/codex-live-child.log (new fixture). Claimed totals: suite 1236, 1234 pass / 2 red (6-1, 6-2), item-7 pins GREEN by design (reality/regression pins), typecheck green. NOTE: your sandbox cannot mkdtemp — the integration file is judged by reading; the purge and unit suites run for you.
+
+The pins:
+- 6-1 (RED, integration): a child emitting a planted sk-style secret → the WRITTEN .handoff/loop/children log contains the redaction placeholder, not the secret; verdict still parses. (superviseChild currently writes without redactSecrets.)
+- 6-2 (RED, purge suite): a seeded child *.log (raw text) + findings/*.ndjson (secret in the findings field) → after purge-transcript the secret is absent from the ENTIRE .handoff tree; existing whole-tree assertions untouched (new sibling test).
+- 6 GUARD (green): secret-free child log byte-identical.
+- 7-1/7-2 (GREEN reality pins): tests/fixtures/codex-live-child.log is a ~16 KB tail slice of a REAL gpt-5.5 supervised-writer transcript from the Milestone-C dogfood (provenance in the test comment; the coordinator read the full fixture and cleared it — no secrets, only repo-own paths/identities). parseVerdict extracts APPROVED_WITH_NOTES + the findings substring; classify(transcriptTail, exit 0, codex) === ok. NOTE the fixture contains a decoy VERDICT line BEFORE the last 'tokens used' marker — confirm the pins genuinely exercise region-bounding (the body verdict must NOT be what passes the pin).
+- Green pins are acceptable for item 7 per the plan (the fixture's value is marker-drift regression protection).
+
+Audit adversarially:
+1. Would a WRONG implementation pass? (a) 6-1 — is the planted secret shaped to match the real redactSecrets patterns (word-boundary anchored), and does the pin assert the PLACEHOLDER present (not merely secret absent)? (b) 6-2 — does the purge pin assert the secret absent from the WHOLE tree (walk), and does it protect the non-secret content of those files (purge must scrub, not delete/corrupt — is that pinned or acceptable)? (c) 7-1 — verify the fixture's last-marker region parse (read the fixture's tail yourself).
+2. Red-phase integrity: the 2 reds behavioral; guards meaningful; baseline unaffected.
+3. Coverage vs plan items 6-7: anything unpinned (e.g. redaction interaction with the item-5 truncation marker; purge of loop findings preserving valid JSON lines)?
+
+You may run: node --test tests/commands/purge-transcript.test.mjs tests/unit/loop-children.test.mjs, npm run typecheck.
+</task>
+<grounding_rules>Cite file:line for every claim. Distinguish verified facts from hypotheses.</grounding_rules>
+<structured_output_contract>
+End with exactly:
+VERDICT: APPROVED | APPROVED_WITH_NOTES | BLOCKED
+FINDINGS: numbered [high|medium|low] — <what is wrong> — Fix: <specific change>
+(FINDINGS may be empty only with APPROVED.)
+</structured_output_contract>
+codex
+Review phase. I’ll audit the test pins against the plan and live files, then run the allowed targeted validation where the sandbox permits it.
+exec
+/bin/zsh -lc 'rg --files core tests docs | rg "(loop-children|purge-transcript|2026-07-20-v1.1-hardening|codex-live-child|redact|transcript)"' in /Users/saksham/baton
+exec
+/bin/zsh -lc 'rg -n "item 6|item 7|child-log|purge|codex-live|redact|truncate|truncation|Milestone-D|findings" docs/plans/2026-07-20-v1.1-hardening.md tests/integration/loop-children-spawn.test.mjs tests/commands/purge-transcript.test.mjs tests/unit/loop-children.test.mjs tests/fixtures/codex-live-child.log' in /Users/saksham/baton
+ succeeded in 0ms:
+docs/plans/2026-07-20-v1.1-hardening.md
+tests/commands/purge-transcript.test.mjs
+tests/integration/loop-children-spawn.test.mjs
+core/src/commands/purge-transcript.mjs
+tests/unit/redact.test.mjs
+tests/unit/loop-children.test.mjs
+core/src/util/redact.mjs
+
+ succeeded in 0ms:
+tests/unit/loop-children.test.mjs:21://   parseVerdict(transcript, {platform})     -> {verdict, findings, reason?}
+tests/unit/loop-children.test.mjs:225:    assert.match(r.findings, /tautological/, 'FINDINGS text is captured');
+tests/unit/loop-children.test.mjs:254:  it('truncated transcript with NO tokens-used marker -> BLOCKED-unparseable (never APPROVED)', () => {
+tests/unit/loop-children.test.mjs:273:      assert.match(r.findings, /captured finding X/);
+tests/unit/loop-children.test.mjs:285:    assert.match(r.findings, /issue Z/);
+tests/unit/loop-children.test.mjs:320:    assert.match(capped, /truncat/i, 'a truncation marker replaces the middle');
+tests/unit/loop-children.test.mjs:331:    assert.match(capped, /truncat/i, 'the middle is still marked as truncated');
+tests/unit/loop-children.test.mjs:372:// ITEM 7 (v1.1) — live codex marker fixture. tests/fixtures/codex-live-child.log
+tests/unit/loop-children.test.mjs:382:const LIVE_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'codex-live-child.log');
+tests/unit/loop-children.test.mjs:389:describe('parseVerdict + classify — LIVE codex transcript fixture (item 7)', () => {
+tests/unit/loop-children.test.mjs:395:    // A distinctive substring of the real findings tail (guards marker/region drift).
+tests/unit/loop-children.test.mjs:396:    assert.match(parsed.findings, /17 unrelated spawn\/integration failures/, 'the parsed findings carry the live findings tail verbatim');
+tests/integration/loop-children-spawn.test.mjs:18://   result= {timedOut, exitCode, verdict?, findings?, logPath}
+tests/integration/loop-children-spawn.test.mjs:139:    assert.match(result.findings, /rename a variable/, 'the parsed FINDINGS tail is carried on the result');
+tests/integration/loop-children-spawn.test.mjs:217:    assert.equal(readFileSync(logPath, 'utf8'), body, 'a sub-cap child log is written verbatim (no truncation marker, no regression)');
+tests/integration/loop-children-spawn.test.mjs:222:// ITEM 6 (v1.1) — child-log redaction at write. superviseChild must route the
+tests/integration/loop-children-spawn.test.mjs:223:// capped log write through the existing secret-redaction filter so a planted
+tests/integration/loop-children-spawn.test.mjs:225:describe('superviseChild — child-log secret redaction (item 6)', () => {
+tests/integration/loop-children-spawn.test.mjs:229:    const secret = 'sk-PLANTED-CHILDLOG-ABC123XYZ456'; // matches the sk-… redaction pattern
+tests/integration/loop-children-spawn.test.mjs:248:    assert.match(log, /\[redacted\]/, 'the secret was replaced with the redaction marker');
+tests/integration/loop-children-spawn.test.mjs:249:    assert.equal(result.verdict, 'APPROVED', 'the verdict still parses after redaction (tail structure preserved)');
+tests/integration/loop-children-spawn.test.mjs:252:  it('GUARD (6): a secret-free child log is byte-identical (no false-positive redaction)', { skip: SKIP_WIN }, async () => {
+tests/integration/loop-children-spawn.test.mjs:263:    assert.equal(readFileSync(logPath, 'utf8'), body, 'a secret-free sub-cap log is written verbatim — no false-positive redaction');
+tests/commands/purge-transcript.test.mjs:4:import { cmdPurgeTranscript } from '../../core/src/commands/purge-transcript.mjs';
+tests/commands/purge-transcript.test.mjs:9:// Command-level contract for core/src/commands/purge-transcript.mjs. Direct
+tests/commands/purge-transcript.test.mjs:14:// TARGET MODULE: core/src/commands/purge-transcript.mjs (sole target — its
+tests/commands/purge-transcript.test.mjs:19:// Source of truth: plan §Transcript policy ("baton purge-transcript removes the
+tests/commands/purge-transcript.test.mjs:23:// afterward") + §Diagnostics logging ("inclusion in the whole-tree purge test");
+tests/commands/purge-transcript.test.mjs:24:// §rotation ("the same marker pattern governs ... interrupted purges (purge
+tests/commands/purge-transcript.test.mjs:29://       bundle-schema field list: "transcript field (opt-in, redacted)"). Purge
+tests/commands/purge-transcript.test.mjs:34://       rotated history journal + a log line. After purge, NO file anywhere under
+tests/commands/purge-transcript.test.mjs:39://   P4. MARKER-BASED RESUME. Purge is marker-guarded: during a fresh run a purge
+tests/commands/purge-transcript.test.mjs:40://       marker (a file under .handoff whose name contains "purge" and "marker")
+tests/commands/purge-transcript.test.mjs:42://       INTERRUPTED purge — a leftover marker plus a partially-scrubbed tree — is
+tests/commands/purge-transcript.test.mjs:46://   P5. UNDER LOCK. A live foreign lock blocks the purge: it fails (exit 1) and
+tests/commands/purge-transcript.test.mjs:50://   P6. NO-OP. A tree with no transcript anywhere purges cleanly (exit 0) and
+tests/commands/purge-transcript.test.mjs:53://       retained copy SURVIVES the purge with its non-transcript content intact:
+tests/commands/purge-transcript.test.mjs:71:    bundleId: 'b_purge000000000',
+tests/commands/purge-transcript.test.mjs:76:    task: { goal: 'Wire the purge command', constraints: [], acceptance: [] },
+tests/commands/purge-transcript.test.mjs:134:describe('purge-transcript — whole-tree secret removal', () => {
+tests/commands/purge-transcript.test.mjs:144:    assert.equal(code, 0, `purge should succeed; stderr: ${io.stderrText()}`);
+tests/commands/purge-transcript.test.mjs:154:  it('RED (item 6): purge also scrubs the planted secret from loop children/*.log and findings/*.ndjson', async () => {
+tests/commands/purge-transcript.test.mjs:159:        // Raw child transcript log (item 6 routes these through redaction) + a
+tests/commands/purge-transcript.test.mjs:160:        // findings line whose SECRET lives in the `findings` field (not a
+tests/commands/purge-transcript.test.mjs:163:        [`${LOOP.dir}/findings/gate-1.ndjson`]: JSON.stringify({ iteration: 1, findings: `leak: ${SECRET}`, at: T0 }) + '\n',
+tests/commands/purge-transcript.test.mjs:166:    // Precondition: the loop tree carries the secret before purge.
+tests/commands/purge-transcript.test.mjs:168:    assert.ok(io.files()[`${LOOP.dir}/findings/gate-1.ndjson`].includes(SECRET), 'the findings ndjson is seeded with the secret');
+tests/commands/purge-transcript.test.mjs:171:    assert.equal(code, 0, `purge should succeed; stderr: ${io.stderrText()}`);
+tests/commands/purge-transcript.test.mjs:175:      'the secret is gone from the ENTIRE .handoff tree, including .handoff/loop/children/*.log and findings/*.ndjson',
+tests/commands/purge-transcript.test.mjs:185:    assert.equal(snap.task.goal, 'Wire the purge command', 'the goal is preserved');
+tests/commands/purge-transcript.test.mjs:193:describe('purge-transcript — marker-based interruption recovery', () => {
+tests/commands/purge-transcript.test.mjs:194:  it('writes and then clears a purge marker during a fresh run (marker-backed operation)', async () => {
+tests/commands/purge-transcript.test.mjs:199:    const isMarker = (k) => /\.handoff\//.test(k) && /purge/i.test(k) && /marker/i.test(k);
+tests/commands/purge-transcript.test.mjs:201:    assert.ok(iWritten !== -1, 'a purge marker is written at some point (marker-backed, not a lucky one-shot)');
+tests/commands/purge-transcript.test.mjs:203:    assert.ok(iCleared !== -1, 'the purge marker is cleared once the whole tree is clean');
+tests/commands/purge-transcript.test.mjs:206:  it('resumes an interrupted purge (leftover marker + partially-scrubbed tree) until the whole tree is clean', async () => {
+tests/commands/purge-transcript.test.mjs:207:    // Simulate a crash mid-purge: the snapshot was already scrubbed, but the .bak,
+tests/commands/purge-transcript.test.mjs:214:        // a leftover purge marker from the interrupted run
+tests/commands/purge-transcript.test.mjs:215:        [`${paths.dir}/purge.marker.json`]: JSON.stringify({ startedAt: T0 }),
+tests/commands/purge-transcript.test.mjs:219:    assert.ok(treeContainsSecret(io).length >= 4, 'the partially-purged tree still leaks the secret before resume');
+tests/commands/purge-transcript.test.mjs:225:    const markerStillThere = allFiles(io, paths.dir).some((f) => /purge/i.test(f.path) && /marker/i.test(f.path));
+tests/commands/purge-transcript.test.mjs:226:    assert.equal(markerStillThere, false, 'the purge marker is cleared after a successful resume');
+tests/commands/purge-transcript.test.mjs:231:describe('purge-transcript — runs under the repo lock', () => {
+tests/commands/purge-transcript.test.mjs:232:  it('(F7) a live foreign lock blocks the purge: exit 1 and the ENTIRE memfs is byte-identical', async () => {
+tests/commands/purge-transcript.test.mjs:243:    assert.notEqual(code, 0, 'a live foreign lock makes purge a command failure (not a hook — it hard-fails)');
+tests/commands/purge-transcript.test.mjs:245:    // no scrub, no marker, no log entry. A half-done purge that left some copies
+tests/commands/purge-transcript.test.mjs:247:    assert.deepEqual(io.files(), before, 'a lock-refused purge leaves the ENTIRE memfs byte-identical (deep-equal, every file)');
+tests/commands/purge-transcript.test.mjs:252:describe('purge-transcript — (F8) retained copies are preserved, not deleted', () => {
+tests/commands/purge-transcript.test.mjs:286:          assert.fail(`purge left an unparseable journal line in ${f.path}: ${line}`);
+tests/commands/purge-transcript.test.mjs:292:    assert.ok(k1, 'the transcript-free journal event (k1) survives the purge');
+tests/commands/purge-transcript.test.mjs:299:    assert.ok(h1, 'the rotated-history journal event (h1) survives the purge');
+tests/commands/purge-transcript.test.mjs:304:    assert.ok(logFiles.length > 0, 'the log file survives the purge');
+tests/commands/purge-transcript.test.mjs:316:describe('purge-transcript — no transcript anywhere', () => {
+tests/commands/purge-transcript.test.mjs:317:  it('a clean tree purges as a no-op: exit 0, bundle byte-identical', async () => {
+docs/plans/2026-07-20-v1.1-hardening.md:30:4. **Findings persistence.** Review findings currently live only in memory
+docs/plans/2026-07-20-v1.1-hardening.md:31:   between iterations; persist per-gate findings history to
+docs/plans/2026-07-20-v1.1-hardening.md:32:   `.handoff/loop/findings/<gate>.ndjson` (append-only) so a resumed run
+docs/plans/2026-07-20-v1.1-hardening.md:33:   re-prompts with the last findings instead of an empty string. Accept:
+docs/plans/2026-07-20-v1.1-hardening.md:34:   (a) park → resume mid-gate carries the prior findings into the next
+docs/plans/2026-07-20-v1.1-hardening.md:37:   `running` — re-prompts with the persisted findings, pinned for BOTH
+docs/plans/2026-07-20-v1.1-hardening.md:39:   persisted findings.
+docs/plans/2026-07-20-v1.1-hardening.md:46:   and findings; artifact writes never block the run (fail-open with a
+docs/plans/2026-07-20-v1.1-hardening.md:53:6. **Child-log redaction + purge.** Child logs under `.handoff/loop/children/`
+docs/plans/2026-07-20-v1.1-hardening.md:54:   bypass the secret-redaction filter and the purge walk. Route the capped
+docs/plans/2026-07-20-v1.1-hardening.md:55:   log write through the existing redaction pass and include the loop tree
+docs/plans/2026-07-20-v1.1-hardening.md:56:   in `purge-transcript`. Accept: a planted secret in a child transcript is
+docs/plans/2026-07-20-v1.1-hardening.md:57:   absent from the written log; the whole-tree purge test covers loop logs.
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/saksham/baton
+ succeeded in 0ms:
+ M tests/commands/purge-transcript.test.mjs
+ M tests/integration/loop-children-spawn.test.mjs
+ M tests/unit/loop-children.test.mjs
+?? reviews/2026-07-20-v1.1-plan/test-verifier/items-6-7/
+
+codex
+I found the expected uncommitted test files and the plan authority. Next I’m reading the exact assertions and the redaction implementation so the verdict is tied to line-level evidence, not the handoff claim.
+exec
+/bin/zsh -lc "nl -ba tests/unit/loop-children.test.mjs | sed -n '340,430p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   340	  // reimplementation that could drift on any matcher family or precedence rule.
+   341	  const table = {
+   342	    schema: 'baton/signatures@1',
+   343	    updated: '2026-07-19',
+   344	    signatures: [
+   345	      { id: 'codex/usage', platform: 'codex', class: 'usage-limit', confidence: 'high', matcher: { kind: 'substring', value: "You've hit your usage limit" } },
+   346	      { id: 'cc/model-limit', platform: 'claude-code', class: 'usage-limit', confidence: 'medium', matcher: { kind: 'regex', pattern: "You've hit your \\S+ limit" } },
+   347	      { id: 'cc/throttle', platform: 'claude-code', class: 'throttle', confidence: 'high', matcher: { kind: 'substring', value: 'Server is temporarily limiting requests' } },
+   348	      { id: 'cursor/too-many', platform: 'cursor', class: 'throttle', confidence: 'medium', matcher: { kind: 'json-field', path: 'error', equals: 'Too Many Requests' } },
+   349	    ],
+   350	  };
+   351	
+   352	  const CASES = [
+   353	    ['substring match (codex usage-limit)', "You've hit your usage limit. Try again at 6PM.", 0, 'codex'],
+   354	    ['regex match (claude-code model-limit)', "You've hit your Opus limit", 0, 'claude-code'],
+   355	    ['json-field match (cursor throttle)', '{"error":"Too Many Requests"}', 1, 'cursor'],
+   356	    ['precedence: usage-limit + throttle both match -> usage-limit', "Server is temporarily limiting requests — also You've hit your Opus limit", 0, 'claude-code'],
+   357	    ['platform mismatch: a codex string under claude-code does not fire', "You've hit your usage limit", 0, 'claude-code'],
+   358	    ['generic nonzero exit, no evidence -> other-error', 'Error: build failed with 3 errors', 1, 'codex'],
+   359	    ['clean zero exit, no evidence -> ok', 'all good, nothing to report', 0, 'codex'],
+   360	  ];
+   361	
+   362	  for (const [label, text, exitCode, platform] of CASES) {
+   363	    it(`${label} — classifyChildExit === classify().class`, () => {
+   364	      const { classifyChildExit } = M();
+   365	      const expected = classify({ text, exitCode, platform, table }).class;
+   366	      assert.equal(classifyChildExit(text, exitCode, platform, table), expected, `must equal core classify() for: ${label}`);
+   367	    });
+   368	  }
+   369	});
+   370	
+   371	// ===========================================================================
+   372	// ITEM 7 (v1.1) — live codex marker fixture. tests/fixtures/codex-live-child.log
+   373	// is a ~16 KB TAIL SLICE of a live gpt-5.5 supervised-writer transcript — the
+   374	// last chunk of genuine body, the real "tokens used" marker line, and the
+   375	// verbatim verdict tail. It pins parseVerdict's region parse and the D1 tail-only
+   376	// classification against reality (regression protection against marker drift).
+   377	// Provenance: /Users/saksham/baton-dogfood-3/.handoff/loop-archive-pipeline/
+   378	// children/002-doc-loop-writer.log (attempt-3 pipeline dogfood, 2026-07-20);
+   379	// trimmed to a tail slice so the tracked surface is small and hand-verifiable —
+   380	// plain build/test/README-editing chatter, no tokens/keys/personal data beyond
+   381	// the repo's own paths. These pin REALITY (not a new feature): GREEN pins today.
+   382	const LIVE_FIXTURE = join(dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'codex-live-child.log');
+   383	const liveTranscript = readFileSync(LIVE_FIXTURE, 'utf8');
+   384	// The SHIPPED signature table — the exact one the loop/pipeline supervisor uses,
+   385	// so 7-2 pins reality against the real signatures, not a toy fixture.
+   386	const SHIPPED_SIGNATURES = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'core', 'data', 'signatures.v1.json');
+   387	const shippedTable = loadSignatures({ builtinPath: SHIPPED_SIGNATURES }, { fs: { readFileSync, existsSync } });
+   388	
+   389	describe('parseVerdict + classify — LIVE codex transcript fixture (item 7)', () => {
+   390	  it('GREEN (7-1): parseVerdict extracts the real verdict the live transcript ends with', () => {
+   391	    const { parseVerdict } = M();
+   392	    const parsed = parseVerdict(liveTranscript, { platform: 'codex' });
+   393	    // The real gpt-5.5 writer ended APPROVED_WITH_NOTES after its "tokens used" marker.
+   394	    assert.equal(parsed.verdict, 'APPROVED_WITH_NOTES', 'the region-bounded parse reads the live verdict after the last "tokens used"');
+   395	    // A distinctive substring of the real findings tail (guards marker/region drift).
+   396	    assert.match(parsed.findings, /17 unrelated spawn\/integration failures/, 'the parsed findings carry the live findings tail verbatim');
+   397	  });
+   398	
+   399	  it('GREEN (7-2): classify(transcriptTail(live), exitCode 0, codex) === ok — the live exit-0 tail false-positives no signature', () => {
+   400	    const cls = classify({ text: transcriptTail(liveTranscript), exitCode: 0, platform: 'codex', table: shippedTable }).class;
+   401	    assert.equal(cls, 'ok', 'a healthy exit-0 live transcript tail must not match any death signature (D1 pinned against reality)');
+   402	  });
+   403	});
+
+exec
+/bin/zsh -lc "nl -ba docs/plans/2026-07-20-v1.1-hardening.md | sed -n '48,70p'" in /Users/saksham/baton
+exec
+/bin/zsh -lc "nl -ba tests/integration/loop-children-spawn.test.mjs | sed -n '1,280p'" in /Users/saksham/baton
+ succeeded in 0ms:
+    48	5. **Streaming log caps.** superviseChild buffers child output in memory
+    49	   before the capped write; stream to the log with the cap enforced during
+    50	   capture so a runaway child cannot balloon the supervisor. Accept: a
+    51	   fixture child emitting >cap output holds supervisor memory bounded
+    52	   (observable via the capped file plus a recording-fake byte counter).
+    53	6. **Child-log redaction + purge.** Child logs under `.handoff/loop/children/`
+    54	   bypass the secret-redaction filter and the purge walk. Route the capped
+    55	   log write through the existing redaction pass and include the loop tree
+    56	   in `purge-transcript`. Accept: a planted secret in a child transcript is
+    57	   absent from the written log; the whole-tree purge test covers loop logs.
+    58	7. **Live codex marker fixture.** The `tokens used` verdict-region marker is
+    59	   pinned only against synthetic fixtures; record a real transcript
+    60	   (attempt-3 dogfood child logs are on disk) as a committed fixture and pin
+    61	   parseVerdict + tail-classification against it. Accept: the live fixture
+    62	   parses to the observed verdict.
+    63	8. **Probe integration.** `loop run`/`pipeline run` currently resolve with
+    64	   `probes: null`; feed the doctor's cached availability probes into
+    65	   resolveRoles so a rate-limited platform is skipped at spawn time (probe
+    66	   staleness > 15 min ignored, degraded flag preserved). Accept: a cached
+    67	   rate-limited probe diverts (a) the first spawn AND (b) every failover
+    68	   relaunch — writer, reviewer, and merger paths all pass the same fresh
+    69	   cache into runFailover — with the existing `degraded` audit trail;
+    70	   missing or stale cache resolves exactly as today (offline-degraded,
+
+ succeeded in 0ms:
+     1	import { describe, it, after } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, appendFileSync, mkdirSync } from 'node:fs';
+     4	import { tmpdir } from 'node:os';
+     5	import { join } from 'node:path';
+     6	
+     7	// ---------------------------------------------------------------------------
+     8	// RED — loop child supervision, REAL-PROCESS parts (subtask loop-children,
+     9	// part B). Mirrors tests/adapters/claude-code-hook-spawn.test.mjs idioms
+    10	// (mkdtempSync scratch dirs, real node child scripts). Source of truth:
+    11	// docs/plans §"Child supervision contract": detached own-process-group spawn,
+    12	// timeout -> SIGTERM group -> grace -> SIGKILL group (no zombie grandchildren),
+    13	// output streamed to a capped log, stdin closed.
+    14	//
+    15	// PINNED: superviseChild(spec, opts) -> Promise<result>
+    16	//   spec  = {command, args, env?, cwd?}
+    17	//   opts  = {timeoutMs, graceMs, logPath, maxLogBytes?, platform?}
+    18	//   result= {timedOut, exitCode, verdict?, findings?, logPath}
+    19	//
+    20	// RED MECHANISM: dynamic-import-with-catch + M() guard.
+    21	// ---------------------------------------------------------------------------
+    22	
+    23	let mod = /** @type {any} */ (null);
+    24	let importError = /** @type {any} */ (null);
+    25	try {
+    26	  mod = await import('../../core/src/loop/children.mjs');
+    27	} catch (e) {
+    28	  importError = e;
+    29	}
+    30	function M() {
+    31	  assert.ok(mod, `core/src/loop/children.mjs must load (import error: ${importError?.message ?? 'none'})`);
+    32	  return mod;
+    33	}
+    34	
+    35	/** @type {string[]} */
+    36	const dirs = [];
+    37	function scratch() {
+    38	  const d = mkdtempSync(join(tmpdir(), 'baton-loop-child-'));
+    39	  dirs.push(d);
+    40	  return d;
+    41	}
+    42	after(() => {
+    43	  for (const d of dirs) rmSync(d, { recursive: true, force: true });
+    44	});
+    45	
+    46	const alive = (/** @type {number} */ pid) => {
+    47	  try {
+    48	    process.kill(pid, 0);
+    49	    return true;
+    50	  } catch (e) {
+    51	    return /** @type {any} */ (e).code !== 'ESRCH';
+    52	  }
+    53	};
+    54	
+    55	// Process-group signalling semantics are POSIX-specific; these are not supported
+    56	// on Windows. Skip there rather than red on the platform.
+    57	const SKIP_WIN = process.platform === 'win32';
+    58	
+    59	const sleep = (/** @type {number} */ ms) => new Promise((r) => setTimeout(r, ms));
+    60	/** Poll up to ~timeoutMs for a pid to become ESRCH (reaping is not instantaneous). */
+    61	async function waitGone(/** @type {number} */ pid, timeoutMs = 2000) {
+    62	  const deadline = Date.now() + timeoutMs;
+    63	  while (Date.now() < deadline) {
+    64	    if (!alive(pid)) return true;
+    65	    await sleep(50);
+    66	  }
+    67	  return !alive(pid);
+    68	}
+    69	
+    70	// ===========================================================================
+    71	describe('superviseChild — timeout kills the whole process group (no zombie grandchild)', () => {
+    72	  it('a SIGTERM-ignoring child that forked a grandchild sleeper is fully reaped on timeout', { skip: SKIP_WIN }, async () => {
+    73	    const { superviseChild } = M();
+    74	    const dir = scratch();
+    75	    // A child that ignores SIGTERM and forks a NON-detached grandchild (same
+    76	    // group), printing both pids so the test can assert both are reaped.
+    77	    const script = join(dir, 'stubborn.cjs');
+    78	    writeFileSync(
+    79	      script,
+    80	      [
+    81	        "const cp = require('node:child_process');",
+    82	        'process.on("SIGTERM", () => {}); // refuse to die on TERM',
+    83	        "const g = cp.spawn(process.execPath, ['-e', 'setInterval(()=>{}, 1e9)'], { stdio: 'ignore' });",
+    84	        'process.stdout.write("CHILD_PID=" + process.pid + "\\n");',
+    85	        'process.stdout.write("GRANDCHILD_PID=" + g.pid + "\\n");',
+    86	        'setInterval(() => {}, 1e9); // hang until killed',
+    87	      ].join('\n'),
+    88	    );
+    89	    const logPath = join(dir, 'child.log');
+    90	
+    91	    const result = await superviseChild(
+    92	      { command: process.execPath, args: [script], cwd: dir },
+    93	      { timeoutMs: 800, graceMs: 400, logPath, platform: 'codex' },
+    94	    );
+    95	
+    96	    assert.equal(result.timedOut, true, 'the run is recorded as timed out');
+    97	    // A killed child produced no exit code of its own — pin the designed semantics: null.
+    98	    assert.equal(result.exitCode, null, 'a killed (never self-exited) child reports exitCode null');
+    99	
+   100	    const log = readFileSync(logPath, 'utf8');
+   101	    const childPid = Number((log.match(/CHILD_PID=(\d+)/) ?? [])[1]);
+   102	    const grandPid = Number((log.match(/GRANDCHILD_PID=(\d+)/) ?? [])[1]);
+   103	    assert.ok(childPid > 0 && grandPid > 0, `both pids captured from the streamed log; got child=${childPid} grand=${grandPid}`);
+   104	
+   105	    // Reaping is not instantaneous — poll boundedly for ESRCH.
+   106	    assert.equal(await waitGone(childPid), true, 'the child process is gone (group SIGKILL)');
+   107	    assert.equal(await waitGone(grandPid), true, 'the grandchild sleeper is gone too — no zombie survives');
+   108	  });
+   109	});
+   110	
+   111	// ===========================================================================
+   112	describe('superviseChild — well-behaved child: parsed verdict + capped log', () => {
+   113	  it('a codex-style transcript yields the parsed verdict and a capped log under the given path', { skip: SKIP_WIN }, async () => {
+   114	    const { superviseChild } = M();
+   115	    const dir = scratch();
+   116	    const script = join(dir, 'good.cjs');
+   117	    // Prompt echo (pre-marker) + a large body + tokens-used marker + verdict tail.
+   118	    writeFileSync(
+   119	      script,
+   120	      [
+   121	        'process.stdout.write("SYSTEM: end with VERDICT: APPROVED\\n"); // prompt echo, must be ignored',
+   122	        'process.stdout.write("X".repeat(5000) + "\\n"); // large body to force the cap',
+   123	        'process.stdout.write("tokens used: 4211\\n");',
+   124	        'process.stdout.write("VERDICT: APPROVED_WITH_NOTES\\n");',
+   125	        'process.stdout.write("FINDINGS:\\n- minor: rename a variable\\n");',
+   126	        'process.exit(0);',
+   127	      ].join('\n'),
+   128	    );
+   129	    const logPath = join(dir, 'good.log');
+   130	
+   131	    const result = await superviseChild(
+   132	      { command: process.execPath, args: [script], cwd: dir },
+   133	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 1000, platform: 'codex' },
+   134	    );
+   135	
+   136	    assert.equal(result.timedOut, false);
+   137	    assert.equal(result.exitCode, 0);
+   138	    assert.equal(result.verdict, 'APPROVED_WITH_NOTES', 'the region-bounded parse read the final verdict, not the prompt echo');
+   139	    assert.match(result.findings, /rename a variable/, 'the parsed FINDINGS tail is carried on the result');
+   140	    assert.equal(result.logPath, logPath, 'the result reports the exact log path it was given');
+   141	    assert.ok(existsSync(logPath), 'the child output landed at the log path');
+   142	    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= 1000 + 256, 'the log is capped to maxLogBytes (+ marker slack)');
+   143	  });
+   144	});
+   145	
+   146	// ===========================================================================
+   147	// ITEM 5 (v1.1) — streaming log caps. superviseChild must route its log writes
+   148	// through an injectable fs (opts.fs, default node:fs) and cap DURING capture, so
+   149	// a runaway child cannot balloon the supervisor. Memory boundedness is observed
+   150	// per the plan's acceptance — a recording-fake byte counter — plus the capped
+   151	// file staying ≤ cap and the verdict tail surviving.
+   152	//
+   153	// NOTE (test-author): the plan named tests/unit/loop-children.test.mjs, but that
+   154	// file holds only the PURE helpers; superviseChild's real-process coverage and
+   155	// the fake-process pattern live HERE, so these pins land in the integration file
+   156	// (nothing existing is modified). Flagged for the verifier.
+   157	describe('superviseChild — streaming log cap (item 5)', () => {
+   158	  // A recording fs that DELEGATES to real node:fs (so the file still lands on
+   159	  // disk) and records every write's path + byte size — the sanctioned
+   160	  // recording-fake byte counter.
+   161	  function recordingFs() {
+   162	    const writes = /** @type {Array<{method: string, path: string, bytes: number}>} */ ([]);
+   163	    return {
+   164	      writes,
+   165	      writeFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'writeFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return writeFileSync(p, d, o); },
+   166	      appendFileSync: (/** @type {any} */ p, /** @type {any} */ d, /** @type {any} */ o) => { writes.push({ method: 'appendFileSync', path: String(p), bytes: Buffer.byteLength(d ?? '') }); return appendFileSync(p, d, o); },
+   167	      mkdirSync: (/** @type {any} */ p, /** @type {any} */ o) => mkdirSync(p, o),
+   168	    };
+   169	  }
+   170	
+   171	  it('RED (5-1): a >>cap child routes its log through the injected fs, caps the file, and keeps the verdict tail', { skip: SKIP_WIN }, async () => {
+   172	    const { superviseChild } = M();
+   173	    const dir = scratch();
+   174	    const cap = 2000;
+   175	    const script = join(dir, 'flood.cjs');
+   176	    // ~5x the cap of body, then the verdict tail at the very END.
+   177	    writeFileSync(
+   178	      script,
+   179	      [
+   180	        'process.stdout.write("SYSTEM: end with VERDICT\\n");',
+   181	        'for (let i = 0; i < 100; i++) process.stdout.write("X".repeat(100) + "\\n"); // ~10 KB body in chunks',
+   182	        'process.stdout.write("tokens used: 9\\n");',
+   183	        'process.stdout.write("VERDICT: APPROVED\\n");',
+   184	        'process.stdout.write("FINDINGS: none\\n");',
+   185	        'process.exit(0);',
+   186	      ].join('\n'),
+   187	    );
+   188	    const logPath = join(dir, 'flood.log');
+   189	    const rec = recordingFs();
+   190	
+   191	    const result = await superviseChild(
+   192	      { command: process.execPath, args: [script], cwd: dir },
+   193	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: cap, platform: 'codex', fs: rec },
+   194	    );
+   195	
+   196	    const logWrites = rec.writes.filter((w) => w.path === logPath);
+   197	    assert.ok(logWrites.length >= 1, 'the log is written through the INJECTED fs (opts.fs), not node:fs directly');
+   198	    const peak = Math.max(...logWrites.map((w) => w.bytes));
+   199	    assert.ok(peak <= cap + 512, `no single log write dumps more than the cap (+slack); peak=${peak}`);
+   200	    assert.ok(Buffer.byteLength(readFileSync(logPath, 'utf8')) <= cap + 512, 'the final log respects maxLogBytes (+ marker slack)');
+   201	    assert.equal(result.verdict, 'APPROVED', 'the verdict tail survives capping (parsed from the capped transcript)');
+   202	  });
+   203	
+   204	  it('GUARD (5-2): a small-output child’s log is byte-identical to today (default fs, no regression)', { skip: SKIP_WIN }, async () => {
+   205	    const { superviseChild } = M();
+   206	    const dir = scratch();
+   207	    const script = join(dir, 'small.cjs');
+   208	    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
+   209	    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
+   210	    const logPath = join(dir, 'small.log');
+   211	
+   212	    const result = await superviseChild(
+   213	      { command: process.execPath, args: [script], cwd: dir },
+   214	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' }, // default fs — no injection
+   215	    );
+   216	    assert.equal(result.exitCode, 0);
+   217	    assert.equal(readFileSync(logPath, 'utf8'), body, 'a sub-cap child log is written verbatim (no truncation marker, no regression)');
+   218	  });
+   219	});
+   220	
+   221	// ===========================================================================
+   222	// ITEM 6 (v1.1) — child-log redaction at write. superviseChild must route the
+   223	// capped log write through the existing secret-redaction filter so a planted
+   224	// credential never lands in .handoff/loop/children/*.log.
+   225	describe('superviseChild — child-log secret redaction (item 6)', () => {
+   226	  it('RED (6-1): a planted secret in child output is REDACTED in the written log; the verdict still parses', { skip: SKIP_WIN }, async () => {
+   227	    const { superviseChild } = M();
+   228	    const dir = scratch();
+   229	    const secret = 'sk-PLANTED-CHILDLOG-ABC123XYZ456'; // matches the sk-… redaction pattern
+   230	    const script = join(dir, 'leaky.cjs');
+   231	    writeFileSync(
+   232	      script,
+   233	      [
+   234	        `process.stdout.write("configuring api_key=" + ${JSON.stringify(secret)} + "\\n");`,
+   235	        'process.stdout.write("tokens used: 3\\n");',
+   236	        'process.stdout.write("VERDICT: APPROVED\\n");',
+   237	        'process.stdout.write("FINDINGS: none\\n");',
+   238	        'process.exit(0);',
+   239	      ].join('\n'),
+   240	    );
+   241	    const logPath = join(dir, 'leaky.log');
+   242	    const result = await superviseChild(
+   243	      { command: process.execPath, args: [script], cwd: dir },
+   244	      { timeoutMs: 5000, graceMs: 400, logPath, platform: 'codex' },
+   245	    );
+   246	    const log = readFileSync(logPath, 'utf8');
+   247	    assert.ok(!log.includes(secret), 'the secret is NOT present verbatim in the written child log');
+   248	    assert.match(log, /\[redacted\]/, 'the secret was replaced with the redaction marker');
+   249	    assert.equal(result.verdict, 'APPROVED', 'the verdict still parses after redaction (tail structure preserved)');
+   250	  });
+   251	
+   252	  it('GUARD (6): a secret-free child log is byte-identical (no false-positive redaction)', { skip: SKIP_WIN }, async () => {
+   253	    const { superviseChild } = M();
+   254	    const dir = scratch();
+   255	    const body = 'SYSTEM: hello\ntokens used: 1\nVERDICT: APPROVED\nFINDINGS: none\n';
+   256	    const script = join(dir, 'clean6.cjs');
+   257	    writeFileSync(script, [`process.stdout.write(${JSON.stringify(body)});`, 'process.exit(0);'].join('\n'));
+   258	    const logPath = join(dir, 'clean6.log');
+   259	    await superviseChild(
+   260	      { command: process.execPath, args: [script], cwd: dir },
+   261	      { timeoutMs: 5000, graceMs: 400, logPath, maxLogBytes: 100000, platform: 'codex' },
+   262	    );
+   263	    assert.equal(readFileSync(logPath, 'utf8'), body, 'a secret-free sub-cap log is written verbatim — no false-positive redaction');
+   264	  });
+   265	});
+   266	
+   267	// ===========================================================================
+   268	describe('superviseChild — stdin is genuinely closed', () => {
+   269	  it('a child that reads stdin does not hang — it gets EOF and exits promptly', { skip: SKIP_WIN }, async () => {
+   270	    const { superviseChild } = M();
+   271	    const dir = scratch();
+   272	    const script = join(dir, 'reader.cjs');
+   273	    // Reading fd 0 must return immediately (stdin closed/ignored), not block.
+   274	    writeFileSync(
+   275	      script,
+   276	      [
+   277	        'try {',
+   278	        "  const fs = require('node:fs');",
+   279	        '  fs.readFileSync(0); // would hang forever on an open pipe with no data',
+   280	        '} catch (_) {}',
+
+exec
+/bin/zsh -lc "nl -ba tests/commands/purge-transcript.test.mjs | sed -n '1,230p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { describe, it } from 'node:test';
+     2	import assert from 'node:assert/strict';
+     3	import { makeIo } from '../helpers/fakeio.mjs';
+     4	import { cmdPurgeTranscript } from '../../core/src/commands/purge-transcript.mjs';
+     5	import { bundlePaths } from '../../core/src/bundle/store.mjs';
+     6	import { loopPaths } from '../../core/src/loop/state.mjs';
+     7	
+     8	// ---------------------------------------------------------------------------
+     9	// Command-level contract for core/src/commands/purge-transcript.mjs. Direct
+    10	// import over fakeio: cmdPurgeTranscript(args, io) -> exit code (awaited; the
+    11	// journal rewrite runs under the repo lock and is sync, but the command is
+    12	// treated as possibly-async for parity with the other commands).
+    13	//
+    14	// TARGET MODULE: core/src/commands/purge-transcript.mjs (sole target — its
+    15	// absence is the only reason this file is RED). It reuses store/lock internals;
+    16	// this file imports ONLY the command plus bundlePaths (an implemented helper) to
+    17	// address the .handoff tree.
+    18	//
+    19	// Source of truth: plan §Transcript policy ("baton purge-transcript removes the
+    20	// [transcript] field from EVERY retained copy — active snapshot, .bak, journal
+    21	// (rewrite-and-rotate under lock), and all history/ freezes — with a test
+    22	// asserting planted secrets are absent from the entire .handoff/ tree
+    23	// afterward") + §Diagnostics logging ("inclusion in the whole-tree purge test");
+    24	// §rotation ("the same marker pattern governs ... interrupted purges (purge
+    25	// resumes from its marker until the whole tree is clean)").
+    26	//
+    27	// PINS (where the plan left the surface open — the implementer conforms):
+    28	//   P1. THE FIELD is the top-level bundle key `transcript` (docs/design/core.md
+    29	//       bundle-schema field list: "transcript field (opt-in, redacted)"). Purge
+    30	//       removes it from every JSON snapshot/freeze and scrubs any transcript-
+    31	//       bearing payload from journal / rotated-journal / log lines.
+    32	//   P2. WHOLE-TREE GUARANTEE. The planted secret lives ONLY inside transcript
+    33	//       fields, seeded across snapshot + .bak + journal + a history freeze + a
+    34	//       rotated history journal + a log line. After purge, NO file anywhere under
+    35	//       <root>/.handoff contains the secret (a recursive walk asserts absence).
+    36	//   P3. SURGICAL. Purge removes ONLY the transcript — the active snapshot keeps
+    37	//       its goal, decisions, handoff block, journalSeq, etc.; `transcript` is
+    38	//       gone; exit 0.
+    39	//   P4. MARKER-BASED RESUME. Purge is marker-guarded: during a fresh run a purge
+    40	//       marker (a file under .handoff whose name contains "purge" and "marker")
+    41	//       is written and later cleared (proven from the memfs mutation history). An
+    42	//       INTERRUPTED purge — a leftover marker plus a partially-scrubbed tree — is
+    43	//       resumed and finished on the next run: the whole tree ends clean and the
+    44	//       marker is cleared (asserted by OUTCOME, robust to the marker's exact
+    45	//       name/path).
+    46	//   P5. UNDER LOCK. A live foreign lock blocks the purge: it fails (exit 1) and
+    47	//       leaves the ENTIRE memfs byte-identical — io.files() deep-equal before/
+    48	//       after (verifier fold F7): under a foreign lock NOTHING may be written,
+    49	//       not even a marker.
+    50	//   P6. NO-OP. A tree with no transcript anywhere purges cleanly (exit 0) and
+    51	//       leaves the bundle byte-identical.
+    52	//   P7. PRESERVATION (verifier fold F8 — deletion is NOT purging). Every
+    53	//       retained copy SURVIVES the purge with its non-transcript content intact:
+    54	//       the .bak still parses with its bundleId/decisions; the history freeze
+    55	//       keeps its path, bundleId, and sealed handoff; every seeded journal EVENT
+    56	//       survives (matched by dedupeKey across the live journal and history
+    57	//       .ndjson files, tolerant to the plan's rewrite-AND-ROTATE wording moving
+    58	//       live entries into history/) with its non-transcript payload fields
+    59	//       preserved; the log entry keeps its ts/event metadata. Only transcript
+    60	//       fields disappear.
+    61	// ---------------------------------------------------------------------------
+    62	
+    63	const ROOT = '/repo';
+    64	const paths = bundlePaths(ROOT);
+    65	const T0 = '2026-07-11T00:00:00.000Z';
+    66	const SECRET = 'sk-PLANTED-SECRET-ABC123XYZ';
+    67	
+    68	function baseBundle(overrides = {}) {
+    69	  return {
+    70	    schema: 'baton/bundle@1',
+    71	    bundleId: 'b_purge000000000',
+    72	    generation: 1,
+    73	    createdAt: T0,
+    74	    updatedAt: T0,
+    75	    origin: { platform: 'claude-code', model: 'claude-fable-5', sessionHint: null, unstable: false },
+    76	    task: { goal: 'Wire the purge command', constraints: [], acceptance: [] },
+    77	    plan: { steps: [] },
+    78	    decisions: [{ seq: 1, ts: T0, summary: 'keep-this-decision' }],
+    79	    files: { touched: [] },
+    80	    roles: { assignments: {} },
+    81	    git: null,
+    82	    handoff: { status: 'open', reason: null, reasonClass: null, toPlatformHint: null, finalizedAt: null, receive_log: [] },
+    83	    journalSeq: 2,
+    84	    compaction: { droppedDecisions: 0, note: null },
+    85	    dedupeRing: [],
+    86	    // The opt-in transcript field (P1), carrying the planted secret.
+    87	    transcript: { tail: [{ role: 'user', text: `my api key is ${SECRET} keep it safe` }], capturedAt: T0 },
+    88	    ...overrides,
+    89	  };
+    90	}
+    91	
+    92	const snapText = (b) => JSON.stringify(b, null, 2) + '\n';
+    93	
+    94	// A journal whose entries include a transcript-bearing payload carrying the secret.
+    95	const JOURNAL_WITH_SECRET =
+    96	  JSON.stringify({ seq: 1, ts: T0, type: 'note', dedupeKey: 'k1', source: 'stop', payload: { text: 'ok' } }) + '\n' +
+    97	  JSON.stringify({ seq: 2, ts: T0, type: 'note', dedupeKey: 'k2', source: 'precompact', payload: { text: 'boundary', transcript: { tail: [SECRET] } } }) + '\n';
+    98	
+    99	// A history freeze (finalize) + its rotated journal, both carrying the secret.
+   100	const FREEZE_STEM = '2026-07-10T00-00-00-000Z.finalize';
+   101	const HISTORY_FREEZE = snapText(baseBundle({ bundleId: 'b_frozen00000000', handoff: { status: 'sealed', reason: 'x', reasonClass: null, toPlatformHint: null, finalizedAt: T0, receive_log: [] } }));
+   102	const HISTORY_JOURNAL = JSON.stringify({ seq: 2, ts: T0, type: 'note', dedupeKey: 'h1', source: 'precompact', payload: { transcript: { tail: [SECRET] } } }) + '\n';
+   103	
+   104	// A diagnostics log line carrying the secret in a transcript field (defense in depth).
+   105	const LOG_LINE = JSON.stringify({ ts: T0, event: 'precompact', transcript: { tail: [SECRET] } }) + '\n';
+   106	
+   107	function fullTree() {
+   108	  return {
+   109	    [paths.snapshot]: snapText(baseBundle()),
+   110	    [paths.bak]: snapText(baseBundle({ bundleId: 'b_bak0000000000' })),
+   111	    [paths.journal]: JOURNAL_WITH_SECRET,
+   112	    [`${paths.historyDir}/${FREEZE_STEM}.json`]: HISTORY_FREEZE,
+   113	    [`${paths.historyDir}/${FREEZE_STEM}.ndjson`]: HISTORY_JOURNAL,
+   114	    [`${paths.logDir}/2026-07-11.jsonl`]: LOG_LINE,
+   115	  };
+   116	}
+   117	
+   118	/** Recursively collect every file's content under a memfs directory. */
+   119	function allFiles(io, dir) {
+   120	  /** @type {{path: string, content: string}[]} */
+   121	  const out = [];
+   122	  if (!io.fs.existsSync(dir)) return out;
+   123	  for (const name of io.fs.readdirSync(dir)) {
+   124	    const p = `${dir}/${name}`;
+   125	    if (io.fs.statSync(p).isDirectory()) out.push(...allFiles(io, p));
+   126	    else out.push({ path: p, content: io.fs.readFileSync(p, 'utf8') });
+   127	  }
+   128	  return out;
+   129	}
+   130	
+   131	const treeContainsSecret = (io) => allFiles(io, paths.dir).filter((f) => f.content.includes(SECRET));
+   132	
+   133	// ===========================================================================
+   134	describe('purge-transcript — whole-tree secret removal', () => {
+   135	  it('the fixture actually plants the secret across the tree (guards against a vacuous pass)', () => {
+   136	    const io = makeIo({ files: fullTree() });
+   137	    const hits = treeContainsSecret(io);
+   138	    assert.ok(hits.length >= 5, `the planted secret must appear in every retained copy first; found in ${hits.length} files`);
+   139	  });
+   140	
+   141	  it('removes the transcript from EVERY retained copy: no file under .handoff/ contains the secret afterward', async () => {
+   142	    const io = makeIo({ files: fullTree() });
+   143	    const code = await cmdPurgeTranscript([], io);
+   144	    assert.equal(code, 0, `purge should succeed; stderr: ${io.stderrText()}`);
+   145	
+   146	    const hits = treeContainsSecret(io);
+   147	    assert.deepEqual(
+   148	      hits.map((f) => f.path),
+   149	      [],
+   150	      'the planted secret must be gone from the ENTIRE .handoff/ tree (snapshot, .bak, journal, history freeze + journal, log)',
+   151	    );
+   152	  });
+   153	
+   154	  it('RED (item 6): purge also scrubs the planted secret from loop children/*.log and findings/*.ndjson', async () => {
+   155	    const LOOP = loopPaths(ROOT);
+   156	    const io = makeIo({
+   157	      files: {
+   158	        ...fullTree(),
+   159	        // Raw child transcript log (item 6 routes these through redaction) + a
+   160	        // findings line whose SECRET lives in the `findings` field (not a
+   161	        // `transcript` field, so today's field-strip alone misses it).
+   162	        [`${LOOP.dir}/children/001-gate-1.log`]: `working...\nconfiguring api_key=${SECRET} keep it safe\ntokens used: 9\nVERDICT: BLOCKED\n`,
+   163	        [`${LOOP.dir}/findings/gate-1.ndjson`]: JSON.stringify({ iteration: 1, findings: `leak: ${SECRET}`, at: T0 }) + '\n',
+   164	      },
+   165	    });
+   166	    // Precondition: the loop tree carries the secret before purge.
+   167	    assert.ok(io.files()[`${LOOP.dir}/children/001-gate-1.log`].includes(SECRET), 'the child log is seeded with the secret');
+   168	    assert.ok(io.files()[`${LOOP.dir}/findings/gate-1.ndjson`].includes(SECRET), 'the findings ndjson is seeded with the secret');
+   169	
+   170	    const code = await cmdPurgeTranscript([], io);
+   171	    assert.equal(code, 0, `purge should succeed; stderr: ${io.stderrText()}`);
+   172	    assert.deepEqual(
+   173	      treeContainsSecret(io).map((f) => f.path),
+   174	      [],
+   175	      'the secret is gone from the ENTIRE .handoff tree, including .handoff/loop/children/*.log and findings/*.ndjson',
+   176	    );
+   177	  });
+   178	
+   179	  it('is surgical: the active snapshot loses ONLY its transcript; goal, decisions, journalSeq survive', async () => {
+   180	    const io = makeIo({ files: fullTree() });
+   181	    await cmdPurgeTranscript([], io);
+   182	
+   183	    const snap = JSON.parse(io.files()[paths.snapshot]);
+   184	    assert.ok(!('transcript' in snap), 'the transcript field is removed from the active snapshot');
+   185	    assert.equal(snap.task.goal, 'Wire the purge command', 'the goal is preserved');
+   186	    assert.ok(snap.decisions.some((d) => d.summary === 'keep-this-decision'), 'decisions are preserved');
+   187	    assert.equal(snap.journalSeq, 2, 'journalSeq is preserved');
+   188	    assert.equal(snap.schema, 'baton/bundle@1', 'the bundle stays schema-valid');
+   189	  });
+   190	});
+   191	
+   192	// ===========================================================================
+   193	describe('purge-transcript — marker-based interruption recovery', () => {
+   194	  it('writes and then clears a purge marker during a fresh run (marker-backed operation)', async () => {
+   195	    const io = makeIo({ files: fullTree() });
+   196	    await cmdPurgeTranscript([], io);
+   197	
+   198	    const states = io.fs.__history.map((h) => h.files);
+   199	    const isMarker = (k) => /\.handoff\//.test(k) && /purge/i.test(k) && /marker/i.test(k);
+   200	    const iWritten = states.findIndex((f) => Object.keys(f).some(isMarker));
+   201	    assert.ok(iWritten !== -1, 'a purge marker is written at some point (marker-backed, not a lucky one-shot)');
+   202	    const iCleared = states.findIndex((f, idx) => idx > iWritten && !Object.keys(f).some(isMarker));
+   203	    assert.ok(iCleared !== -1, 'the purge marker is cleared once the whole tree is clean');
+   204	  });
+   205	
+   206	  it('resumes an interrupted purge (leftover marker + partially-scrubbed tree) until the whole tree is clean', async () => {
+   207	    // Simulate a crash mid-purge: the snapshot was already scrubbed, but the .bak,
+   208	    // journal, history and log still carry the secret, and a marker is present.
+   209	    const io = makeIo({
+   210	      files: {
+   211	        ...fullTree(),
+   212	        // snapshot already clean (transcript removed by the interrupted run)
+   213	        [paths.snapshot]: snapText(baseBundle({ transcript: undefined })),
+   214	        // a leftover purge marker from the interrupted run
+   215	        [`${paths.dir}/purge.marker.json`]: JSON.stringify({ startedAt: T0 }),
+   216	      },
+   217	    });
+   218	    // Precondition: the tree is still dirty in the un-scrubbed copies.
+   219	    assert.ok(treeContainsSecret(io).length >= 4, 'the partially-purged tree still leaks the secret before resume');
+   220	
+   221	    const code = await cmdPurgeTranscript([], io);
+   222	    assert.equal(code, 0);
+   223	
+   224	    assert.deepEqual(treeContainsSecret(io).map((f) => f.path), [], 'resume scrubs every remaining copy until the tree is clean');
+   225	    const markerStillThere = allFiles(io, paths.dir).some((f) => /purge/i.test(f.path) && /marker/i.test(f.path));
+   226	    assert.equal(markerStillThere, false, 'the purge marker is cleared after a successful resume');
+   227	  });
+   228	});
+   229	
+   230	// ===========================================================================
+
+exec
+/bin/zsh -lc "nl -ba core/src/util/redact.mjs | sed -n '1,220p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	// Secret redaction for transcript tails (plan §Transcript policy; gate-2
+     2	// fix 10). Pattern classes cover the common credential shapes; anything
+     3	// matched is replaced wholesale with [redacted]. False positives are cheap
+     4	// (a redacted transcript line), false negatives are not — patterns lean broad.
+     5	
+     6	const MARKER = '[redacted]';
+     7	
+     8	const PATTERNS = [
+     9	  // PEM private key blocks (multi-line) — first so inner matches don't shred it.
+    10	  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
+    11	  // Vendor token prefixes.
+    12	  /\bsk-[A-Za-z0-9_-]{8,}/g, // OpenAI / Anthropic (incl. sk-ant-…)
+    13	  /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
+    14	  /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}\b/g, // GitHub tokens
+    15	  /\bgithub_pat_[A-Za-z0-9_]{20,}\b/g,
+    16	  /\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, // Slack
+    17	  // JWTs (three base64url segments, first decoding to a JSON header).
+    18	  /\bey[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\.[A-Za-z0-9_-]{4,}\b/g,
+    19	  // Authorization headers.
+    20	  /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/g,
+    21	  // Generic credential assignments: api_key = "…", password: …, token=…
+    22	  /\b(?:api[_-]?key|secret|token|passwd|password|authorization)\b\s*[:=]\s*["']?[^\s"']{8,}["']?/gi,
+    23	];
+    24	
+    25	/**
+    26	 * @param {string} text
+    27	 * @returns {string}
+    28	 */
+    29	export function redactSecrets(text) {
+    30	  if (typeof text !== 'string' || text.length === 0) return typeof text === 'string' ? text : '';
+    31	  let out = text;
+    32	  for (const re of PATTERNS) out = out.replace(re, MARKER);
+    33	  return out;
+    34	}
+
+codex
+The item-6 integration pin does assert both absence and the redaction marker, and the planted `sk-...` shape lines up with the current word-boundary pattern. I’m checking whether purge preservation and the live fixture’s last-marker behavior are pinned tightly enough.
+exec
+/bin/zsh -lc "nl -ba tests/commands/purge-transcript.test.mjs | sed -n '230,340p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   230	// ===========================================================================
+   231	describe('purge-transcript — runs under the repo lock', () => {
+   232	  it('(F7) a live foreign lock blocks the purge: exit 1 and the ENTIRE memfs is byte-identical', async () => {
+   233	    const io = makeIo({
+   234	      files: {
+   235	        ...fullTree(),
+   236	        [`${paths.lockDir}/owner.json`]: JSON.stringify({ host: 'host-A', pid: 999999, startTime: 7, fencingToken: 'LIVE', acquiredAt: T0, heartbeatAt: T0 }),
+   237	      },
+   238	      processAlive: (pid) => pid === 999999 || pid === 4242,
+   239	    });
+   240	    const before = io.files();
+   241	
+   242	    const code = await cmdPurgeTranscript([], io);
+   243	    assert.notEqual(code, 0, 'a live foreign lock makes purge a command failure (not a hook — it hard-fails)');
+   244	    // The essential safety property: under a foreign lock NOTHING is written —
+   245	    // no scrub, no marker, no log entry. A half-done purge that left some copies
+   246	    // leaking is exactly what the lock exists to prevent.
+   247	    assert.deepEqual(io.files(), before, 'a lock-refused purge leaves the ENTIRE memfs byte-identical (deep-equal, every file)');
+   248	  });
+   249	});
+   250	
+   251	// ===========================================================================
+   252	describe('purge-transcript — (F8) retained copies are preserved, not deleted', () => {
+   253	  it('every retained copy survives with its non-transcript content intact; only transcript fields are removed', async () => {
+   254	    const io = makeIo({ files: fullTree() });
+   255	    const code = await cmdPurgeTranscript([], io);
+   256	    assert.equal(code, 0);
+   257	    const files = io.files();
+   258	
+   259	    // .bak survives, parses, keeps its identity + decisions; transcript gone.
+   260	    const bakText = files[paths.bak];
+   261	    assert.ok(bakText, 'bundle.json.bak still exists — purging is scrubbing, not deleting');
+   262	    const bak = JSON.parse(bakText);
+   263	    assert.ok(!('transcript' in bak), 'the .bak transcript is removed');
+   264	    assert.equal(bak.bundleId, 'b_bak0000000000', 'the .bak keeps its bundleId');
+   265	    assert.ok(bak.decisions.some((d) => d.summary === 'keep-this-decision'), 'the .bak keeps its decisions');
+   266	
+   267	    // The history FREEZE survives AT ITS PATH with its sealed state; transcript gone.
+   268	    const freezeText = files[`${paths.historyDir}/${FREEZE_STEM}.json`];
+   269	    assert.ok(freezeText, 'the history freeze still exists at its original path');
+   270	    const freeze = JSON.parse(freezeText);
+   271	    assert.ok(!('transcript' in freeze), 'the freeze transcript is removed');
+   272	    assert.equal(freeze.bundleId, 'b_frozen00000000', 'the freeze keeps its bundleId');
+   273	    assert.equal(freeze.handoff.status, 'sealed', 'the freeze keeps its sealed handoff block');
+   274	
+   275	    // Every seeded journal EVENT survives somewhere under .handoff (live journal
+   276	    // or a history .ndjson — tolerant to rewrite-and-rotate), scrubbed of
+   277	    // transcripts but with its other payload fields preserved.
+   278	    const entries = [];
+   279	    for (const f of allFiles(io, paths.dir)) {
+   280	      if (!/\.ndjson$/.test(f.path)) continue;
+   281	      for (const line of f.content.split('\n')) {
+   282	        if (line.trim() === '') continue;
+   283	        try {
+   284	          entries.push(JSON.parse(line));
+   285	        } catch {
+   286	          assert.fail(`purge left an unparseable journal line in ${f.path}: ${line}`);
+   287	        }
+   288	      }
+   289	    }
+   290	    const byKey = (k) => entries.find((e) => e.dedupeKey === k);
+   291	    const k1 = byKey('k1');
+   292	    assert.ok(k1, 'the transcript-free journal event (k1) survives the purge');
+   293	    assert.equal(k1.payload.text, 'ok', 'k1 keeps its payload untouched');
+   294	    const k2 = byKey('k2');
+   295	    assert.ok(k2, 'the transcript-bearing journal event (k2) survives — scrubbed, not dropped');
+   296	    assert.equal(k2.payload.text, 'boundary', 'k2 keeps its non-transcript payload fields');
+   297	    assert.ok(!JSON.stringify(k2).includes(SECRET), 'k2 no longer carries the transcript secret');
+   298	    const h1 = byKey('h1');
+   299	    assert.ok(h1, 'the rotated-history journal event (h1) survives the purge');
+   300	    assert.ok(!JSON.stringify(h1).includes(SECRET), 'h1 no longer carries the transcript secret');
+   301	
+   302	    // The diagnostics log entry keeps its metadata; the transcript is gone.
+   303	    const logFiles = allFiles(io, paths.logDir);
+   304	    assert.ok(logFiles.length > 0, 'the log file survives the purge');
+   305	    const logEntries = logFiles
+   306	      .flatMap((f) => f.content.split('\n'))
+   307	      .filter((l) => l.trim() !== '')
+   308	      .map((l) => JSON.parse(l));
+   309	    const logEntry = logEntries.find((e) => e.event === 'precompact' && e.ts === T0);
+   310	    assert.ok(logEntry, 'the log entry keeps its ts/event metadata');
+   311	    assert.ok(!JSON.stringify(logEntry).includes(SECRET), 'the log entry no longer carries the secret');
+   312	  });
+   313	});
+   314	
+   315	// ===========================================================================
+   316	describe('purge-transcript — no transcript anywhere', () => {
+   317	  it('a clean tree purges as a no-op: exit 0, bundle byte-identical', async () => {
+   318	    const clean = snapText(baseBundle({ transcript: undefined }));
+   319	    const io = makeIo({ files: { [paths.snapshot]: clean, [paths.journal]: JSON.stringify({ seq: 1, ts: T0, type: 'note', dedupeKey: 'k', source: 'stop', payload: { text: 'ok' } }) + '\n' } });
+   320	    const before = io.files();
+   321	
+   322	    const code = await cmdPurgeTranscript([], io);
+   323	    assert.equal(code, 0);
+   324	    assert.equal(io.files()[paths.snapshot], before[paths.snapshot], 'a bundle with no transcript is left byte-identical');
+   325	  });
+   326	});
+
+exec
+/bin/zsh -lc 'nl -ba tests/fixtures/codex-live-child.log | tail -n 140' in /Users/saksham/baton
+ succeeded in 0ms:
+   122	+```sh
+   123	+baton loop init "<goal>"
+   124	+# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
+   125	+baton loop run
+   126	+```
+   127	+
+   128	+`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
+   129	+
+   130	+If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
+   131	+
+   132	+```sh
+   133	+baton loop run --approve-smoke <token>
+   134	+```
+   135	+
+   136	+The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
+   137	+
+   138	+Park/resume/escalate behavior is explicit:
+   139	+
+   140	+| Exit | Meaning | Operator action |
+   141	+|---:|---|---|
+   142	+| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
+   143	+| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
+   144	+| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
+   145	+| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
+   146	+| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
+   147	+
+   148	+A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
+   149	+
+   150	 ## Install
+   151	 
+   152	 | Harness | Command |
+   153	
+   154	2026-07-19T23:10:59.196444Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+   155	codex
+   156	The checkpoint command completed and the commit metadata is correct. I’m checking final status once more so the handoff result is clean.
+   157	exec
+   158	/bin/zsh -lc 'git status --short --branch' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+   159	 succeeded in 0ms:
+   160	## baton/wt-a/subtask-doc-loop
+   161	
+   162	diff --git a/README.md b/README.md
+   163	index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+   164	--- a/README.md
+   165	+++ b/README.md
+   166	@@ -12,6 +12,40 @@
+   167	 
+   168	 baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+   169	 
+   170	+## baton loop
+   171	+
+   172	+`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
+   173	+
+   174	+Quickstart:
+   175	+
+   176	+```sh
+   177	+baton loop init "<goal>"
+   178	+# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
+   179	+baton loop run
+   180	+```
+   181	+
+   182	+`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
+   183	+
+   184	+If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
+   185	+
+   186	+```sh
+   187	+baton loop run --approve-smoke <token>
+   188	+```
+   189	+
+   190	+The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
+   191	+
+   192	+Park/resume/escalate behavior is explicit:
+   193	+
+   194	+| Exit | Meaning | Operator action |
+   195	+|---:|---|---|
+   196	+| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
+   197	+| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
+   198	+| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
+   199	+| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
+   200	+| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
+   201	+
+   202	+A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
+   203	+
+   204	 ## Install
+   205	 
+   206	 | Harness | Command |
+   207	
+   208	2026-07-19T23:11:02.936435Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+   209	codex
+   210	VERDICT: APPROVED_WITH_NOTES
+   211	FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+   212	diff --git a/README.md b/README.md
+   213	index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+   214	--- a/README.md
+   215	+++ b/README.md
+   216	@@ -12,6 +12,40 @@
+   217	 
+   218	 baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+   219	 
+   220	+## baton loop
+   221	+
+   222	+`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
+   223	+
+   224	+Quickstart:
+   225	+
+   226	+```sh
+   227	+baton loop init "<goal>"
+   228	+# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
+   229	+baton loop run
+   230	+```
+   231	+
+   232	+`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
+   233	+
+   234	+If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
+   235	+
+   236	+```sh
+   237	+baton loop run --approve-smoke <token>
+   238	+```
+   239	+
+   240	+The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
+   241	+
+   242	+Park/resume/escalate behavior is explicit:
+   243	+
+   244	+| Exit | Meaning | Operator action |
+   245	+|---:|---|---|
+   246	+| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
+   247	+| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
+   248	+| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
+   249	+| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
+   250	+| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
+   251	+
+   252	+A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
+   253	+
+   254	 ## Install
+   255	 
+   256	 | Harness | Command |
+   257	
+   258	tokens used
+   259	105,019
+   260	VERDICT: APPROVED_WITH_NOTES
+   261	FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+
+exec
+/bin/zsh -lc 'rg -n "tokens used|VERDICT|FINDINGS|17 unrelated|APPROVED_WITH_NOTES|BLOCKED|APPROVED" tests/fixtures/codex-live-child.log' in /Users/saksham/baton
+ succeeded in 0ms:
+210:VERDICT: APPROVED_WITH_NOTES
+211:FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+258:tokens used
+260:VERDICT: APPROVED_WITH_NOTES
+261:FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+
+exec
+/bin/zsh -lc 'npm run typecheck' in /Users/saksham/baton
+2026-07-20T06:38:35.215249Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+ succeeded in 702ms:
+codex
+The focused runnable suites behave as claimed for the parts I can execute here: purge has the new item-6 red and the live codex pins are green; typecheck is green. I’m now checking the current supervisor write path by source to confirm 6-1 is a real behavioral red despite the mkdtemp limitation.
+exec
+/bin/zsh -lc "nl -ba core/src/loop/children.mjs | sed -n '1,260p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	/**
+     2	 * Child supervision — the loop's reliability surface. Owns the FULL child
+     3	 * lifecycle: argv assembly (per-role permissions), detached process-group
+     4	 * spawn with closed stdin, timeout SIGTERM→grace→SIGKILL of the whole group,
+     5	 * capped transcript logs, region-bounded verdict parsing (prompt-echo-proof),
+     6	 * and exit classification via core detect. Plan:
+     7	 * docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"Child supervision
+     8	 * contract".
+     9	 */
+    10	import { spawn } from 'node:child_process';
+    11	import { mkdirSync, writeFileSync } from 'node:fs';
+    12	import { dirname } from 'node:path';
+    13	import { classify } from '../detect/classifier.mjs';
+    14	
+    15	// Every review seat is read-only — writers are the implementer-side roles
+    16	// only. The merger CHILD is read-only too: it adversarially re-checks, but
+    17	// the SUPERVISOR performs the actual merge via worktrees.mergeSubtask
+    18	// (pipeline contract — the merger child never issues git).
+    19	const REVIEWER_ROLES = new Set(['plan-reviewer', 'test-verifier', 'subtask-reviewer', 'final-reviewer-a', 'final-reviewer-b', 'merger']);
+    20	
+    21	// AGENTS.md §9: children commit solely as the repo owner, zero AI attribution.
+    22	const GIT_IDENTITY = Object.freeze({
+    23	  GIT_AUTHOR_NAME: 'SakshamUboweja',
+    24	  GIT_AUTHOR_EMAIL: 'ssakshamu@gmail.com',
+    25	  GIT_COMMITTER_NAME: 'SakshamUboweja',
+    26	  GIT_COMMITTER_EMAIL: 'ssakshamu@gmail.com',
+    27	});
+    28	
+    29	/**
+    30	 * Assemble the spawn contract for a role child. Reviewers are read-only on
+    31	 * every platform; every child is marked supervised (its own baton hooks
+    32	 * no-op), carries the sole-author git identity, and has stdin CLOSED at
+    33	 * spawn (the codex-exec stdin-hang field failure).
+    34	 * @param {{platform: string, role: string, model: string, effort?: string | null, mode?: string}} assignment
+    35	 * @param {string} prompt
+    36	 * @param {{root: string, gitDir?: string}} opts
+    37	 * @returns {{command: string, args: string[], env: Record<string, string>, stdio: any[], cwd: string}}
+    38	 */
+    39	export function buildChildArgv(assignment, prompt, opts) {
+    40	  const readOnly = REVIEWER_ROLES.has(assignment.role);
+    41	  const env = { BATON_SUPERVISED_CHILD: '1', ...GIT_IDENTITY };
+    42	  const stdio = ['ignore', 'pipe', 'pipe'];
+    43	
+    44	  if (assignment.platform === 'claude-code') {
+    45	    // --model honors the role matrix (and entry-level avoidance);
+    46	    // --output-format json is what parseVerdict's claude branch reads; the
+    47	    // cwd puts the child in its seat, never the supervisor cwd.
+    48	    const args = ['-p', prompt, '--model', assignment.model, '--output-format', 'json'];
+    49	    if (readOnly) {
+    50	      // Scoped read-only git so a reviewer can actually SEE the diff it
+    51	      // reviews — still no write/edit capability.
+    52	      args.push('--permission-mode', 'default', '--allowedTools', 'Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)');
+    53	    } else {
+    54	      args.push('--permission-mode', 'acceptEdits', '--allowedTools', 'Read,Grep,Glob,Write,Edit,Bash');
+    55	    }
+    56	    return { command: 'claude', args, env, stdio, cwd: opts.root };
+    57	  }
+    58	
+    59	  // codex (and the default shape for exec-style CLIs).
+    60	  const args = ['exec', '-C', opts.root, '-s', readOnly ? 'read-only' : 'workspace-write', '--model', assignment.model];
+    61	  if (assignment.effort) args.push('-c', `model_reasoning_effort=${assignment.effort}`);
+    62	  if (!readOnly && typeof opts.gitDir === 'string' && opts.gitDir.length > 0) {
+    63	    // A linked worktree's index/lock live under the MAIN repo's .git —
+    64	    // outside the seat-cwd sandbox. Without this grant a codex writer can
+    65	    // edit but never commit (dogfood finding D2). Read-only children never
+    66	    // get it.
+    67	    args.push('-c', `sandbox_workspace_write.writable_roots=[${JSON.stringify(opts.gitDir)}]`);
+    68	  }
+    69	  args.push(prompt);
+    70	  return { command: 'codex', args, env, stdio, cwd: opts.root };
+    71	}
+    72	
+    73	const VERDICT_RE = /VERDICT:\s*(APPROVED_WITH_NOTES|APPROVED|BLOCKED)\b/g;
+    74	
+    75	/** @param {string} region @returns {{verdict: string, findings: string} | null} */
+    76	function lastVerdictIn(region) {
+    77	  let last = null;
+    78	  for (const m of region.matchAll(VERDICT_RE)) last = m;
+    79	  if (!last) return null;
+    80	  const after = region.slice((last.index ?? 0) + last[0].length);
+    81	  return { verdict: last[1], findings: after.trim() };
+    82	}
+    83	
+    84	/**
+    85	 * Region-bounded verdict parsing — the prompt region (which quotes the
+    86	 * verdict format in its instructions) is NEVER scanned, and there is no
+    87	 * whole-transcript fallback. Unparseable is BLOCKED, never APPROVED.
+    88	 * - codex: only the text after the LAST line starting with 'tokens used'.
+    89	 * - claude-code: only the `result` field of the structured JSON output.
+    90	 * Multiple tails inside the trusted region → the LAST one wins.
+    91	 * @param {string} transcript @param {{platform: string}} opts
+    92	 * @returns {{verdict: string, findings: string, reason?: string}}
+    93	 */
+    94	export function parseVerdict(transcript, { platform }) {
+    95	  const unparseable = { verdict: 'BLOCKED', findings: '', reason: 'unparseable' };
+    96	  const text = String(transcript ?? '');
+    97	
+    98	  if (platform === 'claude-code') {
+    99	    let obj = null;
+   100	    try {
+   101	      obj = JSON.parse(text.trim());
+   102	    } catch {
+   103	      return unparseable;
+   104	    }
+   105	    if (typeof obj?.result !== 'string') return unparseable;
+   106	    const hit = lastVerdictIn(obj.result);
+   107	    return hit ?? unparseable;
+   108	  }
+   109	
+   110	  // codex: locate the LAST 'tokens used' marker line; the trusted region is
+   111	  // strictly after it.
+   112	  const lines = text.split('\n');
+   113	  let markerLine = -1;
+   114	  for (let i = 0; i < lines.length; i += 1) {
+   115	    if (/^tokens used\b/i.test(lines[i])) markerLine = i;
+   116	  }
+   117	  if (markerLine === -1) return unparseable;
+   118	  const region = lines.slice(markerLine + 1).join('\n');
+   119	  const hit = lastVerdictIn(region);
+   120	  return hit ?? unparseable;
+   121	}
+   122	
+   123	const TRUNCATION_MARKER = '\n[... truncated by baton log cap ...]\n';
+   124	
+   125	/**
+   126	 * Cap a transcript: head preserved, middle replaced with a marker, TAIL
+   127	 * preserved verbatim (the verdict lives at the end and must never be cut).
+   128	 * @param {string} text @param {number} maxBytes
+   129	 * @returns {string}
+   130	 */
+   131	export function capLog(text, maxBytes) {
+   132	  const s = String(text ?? '');
+   133	  if (Buffer.byteLength(s) <= maxBytes) return s;
+   134	  const headBytes = Math.max(1, Math.floor(maxBytes * 0.4));
+   135	  const tailBytes = Math.max(1, maxBytes - headBytes);
+   136	  const buf = Buffer.from(s);
+   137	  const head = buf.subarray(0, headBytes).toString();
+   138	  const tail = buf.subarray(buf.length - tailBytes).toString();
+   139	  return head + TRUNCATION_MARKER + tail;
+   140	}
+   141	
+   142	/**
+   143	 * Exit classification delegates to core detect — one classifier, one
+   144	 * signature table, no drift. Returns exactly classify(...).class.
+   145	 * @param {string} transcript @param {number} exitCode @param {string} platform @param {any} table
+   146	 * @returns {string}
+   147	 */
+   148	export function classifyChildExit(transcript, exitCode, platform, table) {
+   149	  return classify({ text: transcript, exitCode, platform, table }).class;
+   150	}
+   151	
+   152	/** @param {number} pid @param {NodeJS.Signals} sig */
+   153	function killGroup(pid, sig) {
+   154	  try {
+   155	    process.kill(-pid, sig);
+   156	  } catch {
+   157	    // ESRCH — already gone.
+   158	  }
+   159	}
+   160	
+   161	/**
+   162	 * Spawn and supervise one child: detached in its OWN process group, stdin
+   163	 * closed; on timeout SIGTERM the group, wait graceMs, SIGKILL the group (no
+   164	 * zombie grandchildren). Output streams to a capped log at opts.logPath; the
+   165	 * verdict is parsed from the full transcript, region-bounded.
+   166	 * @param {{command: string, args: string[], env?: Record<string, string>, cwd?: string}} spec
+   167	 * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, fs?: {writeFileSync: Function, mkdirSync: Function}, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+   168	 * @returns {Promise<{timedOut: boolean, exitCode: number | null, verdict?: string, findings?: string, reason?: string, logPath: string, pgid?: number}>}
+   169	 */
+   170	export function superviseChild(spec, opts) {
+   171	  return new Promise((resolve) => {
+   172	    const maxLogBytes = opts.maxLogBytes ?? 1_000_000;
+   173	    const child = spawn(spec.command, spec.args, {
+   174	      cwd: spec.cwd,
+   175	      env: { ...process.env, ...(spec.env ?? {}) },
+   176	      stdio: ['ignore', 'pipe', 'pipe'],
+   177	      detached: true, // its own process group — the kill unit
+   178	    });
+   179	
+   180	    // Report the group at spawn time so the supervisor can persist it BEFORE
+   181	    // the child completes — a supervisor crash leaves the orphan reap-able.
+   182	    const pgid = typeof child.pid === 'number' ? child.pid : -1;
+   183	    if (typeof opts.onStart === 'function' && typeof child.pid === 'number') {
+   184	      opts.onStart({ pid: child.pid, pgid });
+   185	    }
+   186	
+   187	    // Bounded head+tail capture (v1.1 item 5): the retained transcript never
+   188	    // exceeds ~maxLogBytes, so a runaway child cannot balloon the supervisor.
+   189	    // Under the cap the capture is verbatim; over it, the first half is
+   190	    // frozen and the last half rolls — death banners and verdict tails live
+   191	    // at the END of a log, so both classification and parsing survive.
+   192	    const half = Math.max(64, Math.floor(maxLogBytes / 2));
+   193	    let head = '';
+   194	    let tail = '';
+   195	    let truncated = false;
+   196	    let timedOut = false;
+   197	    /** @type {NodeJS.Timeout | null} */
+   198	    let killTimer = null;
+   199	
+   200	    const onChunk = (/** @type {Buffer} */ c) => {
+   201	      const s = c.toString();
+   202	      if (!truncated) {
+   203	        head += s;
+   204	        if (head.length > maxLogBytes) {
+   205	          tail = head.slice(half);
+   206	          head = head.slice(0, half);
+   207	          truncated = true;
+   208	        }
+   209	      } else {
+   210	        tail += s;
+   211	      }
+   212	      if (truncated && tail.length > half) tail = tail.slice(-half);
+   213	    };
+   214	    child.stdout?.on('data', onChunk);
+   215	    child.stderr?.on('data', onChunk);
+   216	
+   217	    const timeout = setTimeout(() => {
+   218	      timedOut = true;
+   219	      if (typeof child.pid === 'number') {
+   220	        killGroup(child.pid, 'SIGTERM');
+   221	        killTimer = setTimeout(() => {
+   222	          if (typeof child.pid === 'number') killGroup(child.pid, 'SIGKILL');
+   223	        }, opts.graceMs);
+   224	      }
+   225	    }, opts.timeoutMs);
+   226	
+   227	    const finish = (/** @type {number | null} */ exitCode) => {
+   228	      clearTimeout(timeout);
+   229	      if (killTimer) clearTimeout(killTimer);
+   230	      // Belt-and-braces: reap any group survivors even on a clean exit path.
+   231	      if (timedOut && typeof child.pid === 'number') killGroup(child.pid, 'SIGKILL');
+   232	      const transcript = truncated ? `${head}\n[... log truncated: output exceeded ${maxLogBytes} bytes ...]\n${tail}` : head;
+   233	      // Log writes go through the injectable fs seam (opts.fs, default
+   234	      // node:fs) so callers can observe/bound them (v1.1 item 5).
+   235	      const fsx = opts.fs ?? { writeFileSync, mkdirSync };
+   236	      try {
+   237	        fsx.mkdirSync(dirname(opts.logPath), { recursive: true });
+   238	        fsx.writeFileSync(opts.logPath, transcript);
+   239	      } catch {
+   240	        // The log must never mask the result.
+   241	      }
+   242	      const parsed = parseVerdict(transcript, { platform: opts.platform ?? 'codex' });
+   243	      resolve({
+   244	        timedOut,
+   245	        exitCode: timedOut ? null : exitCode,
+   246	        verdict: parsed.verdict,
+   247	        findings: parsed.findings,
+   248	        ...(parsed.reason ? { reason: parsed.reason } : {}),
+   249	        logPath: opts.logPath,
+   250	        pgid,
+   251	      });
+   252	    };
+   253	
+   254	    child.on('error', () => finish(null));
+   255	    child.on('close', (code) => finish(code));
+   256	  });
+   257	}
+
+exec
+/bin/zsh -lc "nl -ba core/src/loop/state.mjs | sed -n '1,220p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	/**
+     2	 * Loop run state — snapshot + journal + replay for the Layer-2 supervisor,
+     3	 * mirroring the bundle store's crash-tolerance idioms (atomic tmp+rename
+     4	 * snapshots, torn-tail-tolerant NDJSON, seq-dedup replay). Everything lives
+     5	 * under <root>/.handoff/loop/; the supervisor is the sole writer. Plan:
+     6	 * docs/plans/2026-07-18-goal-loop-worktree-pipeline.md §"baton loop",
+     7	 * §"Smoke gate", §"Supervisor lifetime and recovery", §"Caps".
+     8	 */
+     9	import { appendEntry, readAllTolerant } from '../util/jsonl.mjs';
+    10	import { atomicWriteJson, safeReadJson, ensureDir } from '../util/fsx.mjs';
+    11	import { dedupeKey } from '../util/ids.mjs';
+    12	
+    13	export const LOOP_STATE_SCHEMA = 'baton/loop-state@1';
+    14	
+    15	/** The frozen status vocabulary. */
+    16	export const LOOP_STATUS = Object.freeze({
+    17	  RUNNING: 'running',
+    18	  AWAITING_SMOKE_APPROVAL: 'awaiting-smoke-approval',
+    19	  PARKED: 'parked',
+    20	  ESCALATED: 'escalated',
+    21	  DONE: 'done',
+    22	});
+    23	
+    24	/** The frozen journal event vocabulary. */
+    25	export const LOOP_EVENT = Object.freeze({
+    26	  PHASE_ADVANCE: 'phase-advance',
+    27	  GATE_ITERATION: 'gate-iteration',
+    28	  ESCALATE: 'escalate',
+    29	  PARK: 'park',
+    30	  RESUME: 'resume',
+    31	  SMOKE_AWAIT: 'smoke-await',
+    32	  SMOKE_APPROVE: 'smoke-approve',
+    33	});
+    34	
+    35	// Every gate loops at most 5 times — a repo-wide hard invariant (AGENTS.md
+    36	// §Review gates); the reducer refuses a 6th and escalates instead.
+    37	const GATE_ITERATION_CAP = 5;
+    38	
+    39	/** @param {string} root */
+    40	export function loopPaths(root) {
+    41	  const dir = `${root}/.handoff/loop`;
+    42	  return { dir, state: `${dir}/state.json`, journal: `${dir}/journal.ndjson` };
+    43	}
+    44	
+    45	/**
+    46	 * Fresh run state — pure and deterministic from the injected io (identity
+    47	 * facts + clock only; no Date.now/Math.random, which would break replay).
+    48	 * @param {any} spec a VALIDATED loop spec @param {any} io
+    49	 */
+    50	export function initLoopState(spec, io) {
+    51	  const runId = `loop-${dedupeKey({ host: io.host, pid: io.pid, startTime: io.startTime, at: io.now() }).slice(0, 12)}`;
+    52	  /** @type {Record<string, number>} */
+    53	  const iterations = {};
+    54	  for (const p of spec.phases ?? []) {
+    55	    if (/gate/.test(String(p.id))) iterations[p.id] = 0;
+    56	  }
+    57	  return {
+    58	    schema: LOOP_STATE_SCHEMA,
+    59	    runId,
+    60	    goal: spec.goal,
+    61	    phaseCount: Array.isArray(spec.phases) ? spec.phases.length : 0,
+    62	    phaseIndex: 0,
+    63	    iterations,
+    64	    status: LOOP_STATUS.RUNNING,
+    65	    parkReason: null,
+    66	    escalation: null,
+    67	    smokeApproval: null,
+    68	    createdAt: io.now(),
+    69	    journalSeq: 0,
+    70	  };
+    71	}
+    72	
+    73	/**
+    74	 * The pure transition reducer. Never mutates its input; unknown events and
+    75	 * refused transitions return the input state unchanged (a new reference is
+    76	 * only produced for a real transition).
+    77	 * @param {any} state @param {any} ev
+    78	 */
+    79	export function applyLoopEvent(state, ev) {
+    80	  switch (ev?.type) {
+    81	    case LOOP_EVENT.PHASE_ADVANCE: {
+    82	      const next = state.phaseIndex + 1;
+    83	      if (next >= state.phaseCount) return { ...state, phaseIndex: state.phaseCount, status: LOOP_STATUS.DONE };
+    84	      return { ...state, phaseIndex: next };
+    85	    }
+    86	    case LOOP_EVENT.GATE_ITERATION: {
+    87	      const gate = String(ev.gate);
+    88	      const current = state.iterations?.[gate] ?? 0;
+    89	      // The 6th attempt is REFUSED: the counter stays at the cap and the run
+    90	      // escalates with a record naming the gate — never a 6th run.
+    91	      if (current >= GATE_ITERATION_CAP) {
+    92	        return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: current } };
+    93	      }
+    94	      return { ...state, iterations: { ...state.iterations, [gate]: current + 1 } };
+    95	    }
+    96	    case LOOP_EVENT.ESCALATE: {
+    97	      // Supervisors enforce spec caps LOWER than the hard invariant; this
+    98	      // event persists that escalation (dogfood finding D7: a cap-3 pipeline
+    99	      // exit left state.json 'running' because only the reducer's own 5-cap
+   100	      // could flip the status). Idempotent — an already-escalated run keeps
+   101	      // its original record.
+   102	      if (state.status === LOOP_STATUS.ESCALATED) return state;
+   103	      const gate = String(ev.gate);
+   104	      return { ...state, status: LOOP_STATUS.ESCALATED, escalation: { gate, iteration: state.iterations?.[gate] ?? 0 } };
+   105	    }
+   106	    case LOOP_EVENT.PARK:
+   107	      return { ...state, status: LOOP_STATUS.PARKED, parkReason: ev.reason ?? null };
+   108	    case LOOP_EVENT.RESUME:
+   109	      // Only a PARK is resumable; an escalation is an operator decision.
+   110	      if (state.status !== LOOP_STATUS.PARKED) return state;
+   111	      return { ...state, status: LOOP_STATUS.RUNNING, parkReason: null };
+   112	    case LOOP_EVENT.SMOKE_AWAIT:
+   113	      return { ...state, status: LOOP_STATUS.AWAITING_SMOKE_APPROVAL };
+   114	    case LOOP_EVENT.SMOKE_APPROVE: {
+   115	      // Guarded transition: only meaningful while awaiting, and only with the
+   116	      // caller's verifySmokeToken result stamped verified === true. A missing
+   117	      // or false `verified` is unverified — it never resumes the run.
+   118	      if (state.status !== LOOP_STATUS.AWAITING_SMOKE_APPROVAL) return state;
+   119	      if (ev.verified !== true) return state;
+   120	      // A smoke gate on the FINAL phase already advanced past phaseCount —
+   121	      // approval completes the run as DONE, not RUNNING (dogfood finding D9:
+   122	      // the printed done/exit 0 left a 'running' artifact behind).
+   123	      const resumedStatus = state.phaseIndex >= state.phaseCount ? LOOP_STATUS.DONE : LOOP_STATUS.RUNNING;
+   124	      return { ...state, status: resumedStatus, smokeApproval: { token: ev.token, at: ev.ts ?? null } };
+   125	    }
+   126	    default:
+   127	      return state;
+   128	  }
+   129	}
+   130	
+   131	/**
+   132	 * Atomic snapshot write (tmp + rename under .handoff/loop).
+   133	 * @param {string} root @param {any} state @param {any} io
+   134	 */
+   135	export async function writeLoopState(root, state, io) {
+   136	  const p = loopPaths(root);
+   137	  ensureDir(io.fs, p.dir);
+   138	  atomicWriteJson(io.fs, p.state, state);
+   139	}
+   140	
+   141	/**
+   142	 * Append one journal event; allocates the next seq past
+   143	 * max(snapshot.journalSeq, journal tail) unless the entry carries one.
+   144	 * @param {string} root @param {any} ev @param {any} io
+   145	 * @returns {Promise<number>} the persisted seq
+   146	 */
+   147	export async function appendLoopEvent(root, ev, io) {
+   148	  const p = loopPaths(root);
+   149	  ensureDir(io.fs, p.dir);
+   150	  let seq = ev.seq;
+   151	  if (typeof seq !== 'number') {
+   152	    const snap = safeReadJson(io.fs, p.state);
+   153	    const snapSeq = snap.ok && typeof snap.value?.journalSeq === 'number' ? snap.value.journalSeq : 0;
+   154	    let tailSeq = 0;
+   155	    if (io.fs.existsSync(p.journal)) {
+   156	      for (const e of readAllTolerant(io.fs, p.journal).entries) {
+   157	        if (typeof e.seq === 'number' && e.seq > tailSeq) tailSeq = e.seq;
+   158	      }
+   159	    }
+   160	    seq = Math.max(snapSeq, tailSeq) + 1;
+   161	  }
+   162	  const ts = typeof ev.ts === 'string' ? ev.ts : io.now();
+   163	  const entry = {
+   164	    ...ev,
+   165	    seq,
+   166	    ts,
+   167	    dedupeKey: typeof ev.dedupeKey === 'string' && ev.dedupeKey.length > 0 ? ev.dedupeKey : dedupeKey({ seq, ts, type: ev.type, gate: ev.gate ?? null }),
+   168	  };
+   169	  appendEntry(io.fs, p.journal, entry);
+   170	  return seq;
+   171	}
+   172	
+   173	/**
+   174	 * Load = snapshot + torn-tail-tolerant replay of journal events PAST the
+   175	 * snapshot's seq. Duplicate seqs/dedupeKeys apply exactly once, so a
+   176	 * supervisor-death recovery never re-runs a completed iteration.
+   177	 * @param {string} root @param {any} io
+   178	 * @returns {Promise<{state: any, warnings: string[]}>}
+   179	 */
+   180	export async function loadLoopState(root, io) {
+   181	  const p = loopPaths(root);
+   182	  /** @type {string[]} */
+   183	  const warnings = [];
+   184	  const snap = safeReadJson(io.fs, p.state);
+   185	  if (!snap.ok) return { state: null, warnings: ['no loop state snapshot found'] };
+   186	  let state = snap.value;
+   187	  const baseSeq = typeof state.journalSeq === 'number' ? state.journalSeq : 0;
+   188	
+   189	  if (io.fs.existsSync(p.journal)) {
+   190	    const { entries, warnings: jw } = readAllTolerant(io.fs, p.journal);
+   191	    for (const w of jw ?? []) warnings.push(`journal: ${w.kind ?? 'warning'} at line ${w.line ?? '?'}`);
+   192	    const applied = new Set();
+   193	    let maxSeq = baseSeq;
+   194	    for (const e of entries) {
+   195	      const seq = typeof e.seq === 'number' ? e.seq : null;
+   196	      if (seq !== null && seq <= baseSeq) continue; // already folded into the snapshot
+   197	      const key = e.dedupeKey ?? (seq !== null ? `seq:${seq}` : null);
+   198	      if (key !== null && applied.has(key)) continue; // replayed duplicate — apply once
+   199	      if (seq !== null && applied.has(`seq:${seq}`)) continue;
+   200	      state = applyLoopEvent(state, e);
+   201	      if (key !== null) applied.add(key);
+   202	      if (seq !== null) {
+   203	        applied.add(`seq:${seq}`);
+   204	        if (seq > maxSeq) maxSeq = seq;
+   205	      }
+   206	    }
+   207	    state = { ...state, journalSeq: maxSeq };
+   208	  }
+   209	  return { state, warnings };
+   210	}
+   211	
+   212	// ---------------------------------------------------------------------------
+   213	// Smoke-approval token — a STRUCTURED digest over the six bound inputs, so a
+   214	// stale approval is refused NAMING what moved (mirrors the receive receipt
+   215	// token's driftedInputs discipline).
+   216	// ---------------------------------------------------------------------------
+   217	
+   218	const SMOKE_TOKEN_PREFIX = 'smk1';
+   219	const SMOKE_TOKEN_FIELDS = /** @type {const} */ ([
+   220	  'stateDigest',
+
+exec
+/bin/zsh -lc 'rg -n "redactSecrets|writeFileSync|appendFileSync|capLog|superviseChild|transcriptTail|parseVerdict|tokens used|marker" core/src/loop/children.mjs core/src/commands/purge-transcript.mjs core/src/loop/state.mjs' in /Users/saksham/baton
+ succeeded in 0ms:
+core/src/commands/purge-transcript.mjs:100:  const markerPath = `${p.dir}/purge.marker.json`;
+core/src/commands/purge-transcript.mjs:117:  // Auto-resume (gate-2 minor 16): a leftover marker means an earlier purge
+core/src/commands/purge-transcript.mjs:119:  if (io.fs.existsSync(markerPath)) {
+core/src/commands/purge-transcript.mjs:120:    io.stderr.write('baton purge-transcript: resuming an interrupted purge (marker found) — re-scrubbing the whole tree\n');
+core/src/commands/purge-transcript.mjs:125:      atomicWriteJson(io.fs, markerPath, { startedAt: io.now() });
+core/src/commands/purge-transcript.mjs:127:        if (file === markerPath) continue;
+core/src/commands/purge-transcript.mjs:131:      io.fs.unlinkSync(markerPath);
+core/src/loop/children.mjs:11:import { mkdirSync, writeFileSync } from 'node:fs';
+core/src/loop/children.mjs:46:    // --output-format json is what parseVerdict's claude branch reads; the
+core/src/loop/children.mjs:88: * - codex: only the text after the LAST line starting with 'tokens used'.
+core/src/loop/children.mjs:94:export function parseVerdict(transcript, { platform }) {
+core/src/loop/children.mjs:110:  // codex: locate the LAST 'tokens used' marker line; the trusted region is
+core/src/loop/children.mjs:113:  let markerLine = -1;
+core/src/loop/children.mjs:115:    if (/^tokens used\b/i.test(lines[i])) markerLine = i;
+core/src/loop/children.mjs:117:  if (markerLine === -1) return unparseable;
+core/src/loop/children.mjs:118:  const region = lines.slice(markerLine + 1).join('\n');
+core/src/loop/children.mjs:126: * Cap a transcript: head preserved, middle replaced with a marker, TAIL
+core/src/loop/children.mjs:131:export function capLog(text, maxBytes) {
+core/src/loop/children.mjs:167: * @param {{timeoutMs: number, graceMs: number, logPath: string, maxLogBytes?: number, platform?: string, fs?: {writeFileSync: Function, mkdirSync: Function}, onStart?: (info: {pid: number, pgid: number}) => void}} opts
+core/src/loop/children.mjs:170:export function superviseChild(spec, opts) {
+core/src/loop/children.mjs:235:      const fsx = opts.fs ?? { writeFileSync, mkdirSync };
+core/src/loop/children.mjs:238:        fsx.writeFileSync(opts.logPath, transcript);
+core/src/loop/children.mjs:242:      const parsed = parseVerdict(transcript, { platform: opts.platform ?? 'codex' });
+
+exec
+/bin/zsh -lc "nl -ba core/src/commands/purge-transcript.mjs | sed -n '1,260p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	import { bundlePaths } from '../bundle/store.mjs';
+     2	import { withLock, LockHeldError } from '../bundle/lock.mjs';
+     3	import { atomicWriteText, atomicWriteJson } from '../util/fsx.mjs';
+     4	import { checkHandoffTree } from '../util/jail.mjs';
+     5	import { emitEnvelope, resolveRoot, parseFlagsStrict, usageError } from './shared.mjs';
+     6	
+     7	/**
+     8	 * Remove every property named `transcript` anywhere in a JSON value.
+     9	 * @param {any} v
+    10	 * @returns {any}
+    11	 */
+    12	function stripTranscript(v) {
+    13	  if (Array.isArray(v)) return v.map(stripTranscript);
+    14	  if (v !== null && typeof v === 'object') {
+    15	    /** @type {Record<string, any>} */
+    16	    const out = {};
+    17	    for (const [k, val] of Object.entries(v)) {
+    18	      if (k === 'transcript') continue;
+    19	      out[k] = stripTranscript(val);
+    20	    }
+    21	    return out;
+    22	  }
+    23	  return v;
+    24	}
+    25	
+    26	/**
+    27	 * lstat walk (gate-2 fix 6): never follows links. The tree was jail-checked
+    28	 * before the lock, but a symlink appearing mid-walk still throws rather than
+    29	 * letting the scrub rewrite bytes outside the repository.
+    30	 * @param {any} io @param {string} dir @returns {string[]}
+    31	 */
+    32	function walk(io, dir) {
+    33	  /** @type {string[]} */
+    34	  const out = [];
+    35	  if (!io.fs.existsSync(dir)) return out;
+    36	  for (const name of io.fs.readdirSync(dir)) {
+    37	    const p = `${dir}/${name}`;
+    38	    const st = io.fs.lstatSync(p);
+    39	    if (st.isSymbolicLink()) throw new Error(`${p} is a symlink — refusing to purge through links (managed-tree jail)`);
+    40	    if (st.isDirectory()) out.push(...walk(io, p));
+    41	    else out.push(p);
+    42	  }
+    43	  return out;
+    44	}
+    45	
+    46	/** @param {any} io @param {string} path */
+    47	function scrubJsonFile(io, path) {
+    48	  const raw = io.fs.readFileSync(path, 'utf8');
+    49	  /** @type {any} */
+    50	  let parsed;
+    51	  try {
+    52	    parsed = JSON.parse(raw);
+    53	  } catch {
+    54	    return; // unparseable snapshots are the recovery ladder's problem, not purge's
+    55	  }
+    56	  const stripped = stripTranscript(parsed);
+    57	  const next = JSON.stringify(stripped, null, 2) + '\n';
+    58	  if (JSON.stringify(stripped) !== JSON.stringify(parsed)) atomicWriteText(io.fs, path, next);
+    59	}
+    60	
+    61	/** @param {any} io @param {string} path */
+    62	function scrubLinesFile(io, path) {
+    63	  const raw = io.fs.readFileSync(path, 'utf8');
+    64	  let changed = false;
+    65	  const lines = raw.split('\n').map((/** @type {string} */ line) => {
+    66	    if (line.trim() === '') return line;
+    67	    /** @type {any} */
+    68	    let parsed;
+    69	    try {
+    70	      parsed = JSON.parse(line);
+    71	    } catch {
+    72	      return line; // tolerate foreign lines verbatim
+    73	    }
+    74	    const stripped = stripTranscript(parsed);
+    75	    const next = JSON.stringify(stripped);
+    76	    if (next !== JSON.stringify(parsed)) {
+    77	      changed = true;
+    78	      return next;
+    79	    }
+    80	    return line;
+    81	  });
+    82	  if (changed) atomicWriteText(io.fs, path, lines.join('\n'));
+    83	}
+    84	
+    85	/**
+    86	 * `baton purge-transcript` — scrub the opt-in transcript field from EVERY
+    87	 * retained copy under .handoff/ (active snapshot, .bak, journal, history
+    88	 * freezes + rotated journals, diagnostics log). Marker-guarded so an
+    89	 * interrupted purge resumes until the whole tree is clean; runs under the repo
+    90	 * lock so a live foreign session blocks it entirely.
+    91	 * @param {string[]} args @param {any} io
+    92	 * @returns {Promise<number>}
+    93	 */
+    94	export async function cmdPurgeTranscript(args, io) {
+    95	  const parsed = parseFlagsStrict(args, {});
+    96	  if (parsed.error !== undefined) return usageError(io, parsed.flags, 'purge-transcript', parsed.error);
+    97	  const flags = parsed.flags;
+    98	  const root = resolveRoot(io, flags);
+    99	  const p = bundlePaths(root);
+   100	  const markerPath = `${p.dir}/purge.marker.json`;
+   101	
+   102	  if (!io.fs.existsSync(p.dir)) {
+   103	    if (flags.json) emitEnvelope(io, { ok: true, data: { purged: 0, note: 'no .handoff directory — nothing to purge' } });
+   104	    else io.stdout.write('purge-transcript: no .handoff directory — nothing to purge\n');
+   105	    return 0;
+   106	  }
+   107	
+   108	  // Jail check BEFORE the lock: acquiring the lock mkdirs inside .handoff, so
+   109	  // a symlinked tree must be refused before any write lands through the link.
+   110	  const safe = checkHandoffTree(root, io);
+   111	  if (!safe.ok) {
+   112	    if (flags.json) emitEnvelope(io, { ok: false, error: { code: 'unsafe-tree', msg: safe.problem } });
+   113	    else io.stderr.write(`baton purge-transcript: ${safe.problem}\n`);
+   114	    return 1;
+   115	  }
+   116	
+   117	  // Auto-resume (gate-2 minor 16): a leftover marker means an earlier purge
+   118	  // was interrupted mid-scrub — this run finishes the job.
+   119	  if (io.fs.existsSync(markerPath)) {
+   120	    io.stderr.write('baton purge-transcript: resuming an interrupted purge (marker found) — re-scrubbing the whole tree\n');
+   121	  }
+   122	
+   123	  try {
+   124	    withLock(root, io, () => {
+   125	      atomicWriteJson(io.fs, markerPath, { startedAt: io.now() });
+   126	      for (const file of walk(io, p.dir)) {
+   127	        if (file === markerPath) continue;
+   128	        if (/\.(ndjson|jsonl)$/.test(file)) scrubLinesFile(io, file);
+   129	        else if (/\.(json|bak)$/.test(file)) scrubJsonFile(io, file);
+   130	      }
+   131	      io.fs.unlinkSync(markerPath);
+   132	    });
+   133	  } catch (err) {
+   134	    const msg = /** @type {any} */ (err)?.message ?? String(err);
+   135	    const code = err instanceof LockHeldError ? 'lock-held' : 'purge-failed';
+   136	    if (flags.json) emitEnvelope(io, { ok: false, error: { code, msg } });
+   137	    else io.stderr.write(`baton purge-transcript: ${msg}\n`);
+   138	    return 1;
+   139	  }
+   140	
+   141	  if (flags.json) emitEnvelope(io, { ok: true, data: { note: 'transcript fields removed from every retained copy under .handoff/' } });
+   142	  else io.stdout.write('purge-transcript: transcript fields removed from every retained copy under .handoff/\n');
+   143	  return 0;
+   144	}
+
+2026-07-20T06:38:45.776679Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+exec
+/bin/zsh -lc "nl -ba package.json | sed -n '1,80p'" in /Users/saksham/baton
+ succeeded in 0ms:
+     1	{
+     2	  "name": "@sakshamuboweja/baton",
+     3	  "version": "0.2.0",
+     4	  "description": "Usage-limit failover for AI coding sessions across Claude Code, Codex CLI, and Cursor: checkpoint, hand off, resume with remapped model roles.",
+     5	  "type": "module",
+     6	  "bin": {
+     7	    "baton": "core/bin/baton.mjs"
+     8	  },
+     9	  "engines": {
+    10	    "node": ">=20"
+    11	  },
+    12	  "files": [
+    13	    "core/",
+    14	    "adapters/",
+    15	    "templates/",
+    16	    ".claude-plugin/",
+    17	    "baton.config.json"
+    18	  ],
+    19	  "scripts": {
+    20	    "test": "node --test",
+    21	    "typecheck": "tsc --noEmit"
+    22	  },
+    23	  "keywords": [
+    24	    "claude-code",
+    25	    "codex",
+    26	    "cursor",
+    27	    "handoff",
+    28	    "failover",
+    29	    "agents"
+    30	  ],
+    31	  "author": "SakshamUboweja <ssakshamu@gmail.com>",
+    32	  "license": "MIT",
+    33	  "repository": {
+    34	    "type": "git",
+    35	    "url": "https://github.com/SakshamUboweja/baton"
+    36	  },
+    37	  "devDependencies": {
+    38	    "@types/node": "^20.14.0",
+    39	    "typescript": "^5.6.0"
+    40	  },
+    41	  "exports": {
+    42	    ".": "./core/src/cli.mjs",
+    43	    "./package.json": "./package.json"
+    44	  }
+    45	}
+
+exec
+/bin/zsh -lc "nl -ba tests/fixtures/codex-live-child.log | sed -n '200,263p'" in /Users/saksham/baton
+ succeeded in 0ms:
+   200	+| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
+   201	+
+   202	+A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
+   203	+
+   204	 ## Install
+   205	 
+   206	 | Harness | Command |
+   207	
+   208	2026-07-19T23:11:02.936435Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+   209	codex
+   210	VERDICT: APPROVED_WITH_NOTES
+   211	FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+   212	diff --git a/README.md b/README.md
+   213	index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
+   214	--- a/README.md
+   215	+++ b/README.md
+   216	@@ -12,6 +12,40 @@
+   217	 
+   218	 baton **complements** native configs — AGENTS.md, CLAUDE.md, and `.cursor/rules` stay canonical. It never wraps or proxies a harness. Delete `.handoff/` and everything works as before.
+   219	 
+   220	+## baton loop
+   221	+
+   222	+`baton loop` is the goal supervisor. It runs a repo-local `loop.json` plan through headless writer and reviewer roles from `baton.config.json`, records state in gitignored `.handoff/loop/`, and keeps the handoff bundle ready if a child session dies on usage limits. It supervises the boring parts that otherwise get lost between harnesses: phase position, review iteration counts, child logs, smoke-test approval, and park/resume/escalate decisions.
+   223	+
+   224	+Quickstart:
+   225	+
+   226	+```sh
+   227	+baton loop init "<goal>"
+   228	+# edit loop.json: add constraints, set smoke.cmd / smoke.expect, adjust phases if needed
+   229	+baton loop run
+   230	+```
+   231	+
+   232	+`baton loop init` writes `loop.json` at the repo root and leaves an existing file untouched. `baton loop run` validates that spec against your role matrix, starts the supervisor, and runs each phase until the goal is approved, parked, or escalated. Runtime files stay under `.handoff/loop/`; the committed contract is `loop.json` plus `baton.config.json`.
+   233	+
+   234	+If `loop.json` defines a smoke command, the loop stops after the smoke-build slice and writes `.handoff/loop/SMOKE-REVIEW.md` plus `.handoff/loop/smoke-approval.json`. Review the smoke output, copy the token from the approval file or the review note, then continue with:
+   235	+
+   236	+```sh
+   237	+baton loop run --approve-smoke <token>
+   238	+```
+   239	+
+   240	+The token is bound to loop state, smoke command, smoke output, git state, and the child assignment. If anything moved after the review, approval is refused and the run parks for a fresh smoke pass; baton does not spend the full-run budget on stale approval.
+   241	+
+   242	+Park/resume/escalate behavior is explicit:
+   243	+
+   244	+| Exit | Meaning | Operator action |
+   245	+|---:|---|---|
+   246	+| 0 | Done, or paused cleanly awaiting smoke approval | Continue only if a smoke token is requested |
+   247	+| 1 | Another live supervisor owns the run lock | Let the live supervisor finish, or recover only after it is provably dead |
+   248	+| 2 | Usage/config error | Fix `loop.json`, `baton.config.json`, flags, or root selection |
+   249	+| 3 | Escalated | Read `.handoff/loop/ESCALATION.md`; this file is operator-only, not a prompt for the next child |
+   250	+| 4 | Parked | Inspect the park reason, then run `baton loop resume` when ready |
+   251	+
+   252	+A parked run preserves state, logs, and any worktree context for inspection. `baton loop resume` only resumes a parked run; an escalated run needs an operator decision because a review gate hit its cap and baton will not start a hidden sixth attempt.
+   253	+
+   254	 ## Install
+   255	 
+   256	 | Harness | Command |
+   257	
+   258	tokens used
+   259	105,019
+   260	VERDICT: APPROVED_WITH_NOTES
+   261	FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+
+exec
+/bin/zsh -lc "node -e \"const fs=require('node:fs'); const s=fs.readFileSync('tests/fixtures/codex-live-child.log','utf8'); const m=s.match(/VERDICT:[\\s\\S]*/); console.log(m[0].split('\\n').slice(0,3).join('\\n'));\"" in /Users/saksham/baton
+ succeeded in 0ms:
+VERDICT: APPROVED_WITH_NOTES
+FINDINGS: 1. Committed `fa10e206`; `git diff --check` and focused loop tests passed, but full validation is not green: `tsc` is missing for typecheck and `npm test` has 17 unrelated spawn/integration failures.
+diff --git a/README.md b/README.md
+
+2026-07-20T06:39:40.263645Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+One important gap emerged in the live fixture: the pre-marker decoy and the final verdict tail are textually the same for the asserted verdict and findings substring, so the test is green without proving the last-marker region was honored. I’m checking whether that should be the blocking issue alone or combined with the purge preservation gap.
+exec
+/bin/zsh -lc "node --input-type=module -e \"import { redactSecrets } from './core/src/util/redact.mjs'; console.log(redactSecrets('configuring api_key=sk-PLANTED-CHILDLOG-ABC123XYZ456 keep it safe\\n'));\"" in /Users/saksham/baton
+ succeeded in 0ms:
+configuring [redacted] keep it safe
+
+
+2026-07-20T06:40:06.483566Z ERROR codex_models_manager::manager: failed to renew cache TTL: missing field `supports_reasoning_summaries` at line 78 column 5
+codex
+Audit result: the item-6 redaction shape is valid: the planted `sk-...` matches the existing `\bsk-...` pattern, and 6-1 asserts both secret absence and `[redacted]` presence [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:229), [core/src/util/redact.mjs](/Users/saksham/baton/core/src/util/redact.mjs:12), [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:247). 6-1 is behavioral red by source: `superviseChild` writes `transcript` directly without calling `redactSecrets` [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:232).
+
+I ran `node --test tests/commands/purge-transcript.test.mjs tests/unit/loop-children.test.mjs`: the runnable subset has the expected 6-2 red at the loop-log/findings purge test [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:154), and the live fixture tests pass as currently written [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:390). `npm run typecheck` exited 0; the script is `tsc --noEmit` [package.json](/Users/saksham/baton/package.json:21).
+
+VERDICT: BLOCKED
+FINDINGS:
+1. [high] — 7-1 does not genuinely prove last-`tokens used` region bounding: the pre-marker decoy has the same `VERDICT: APPROVED_WITH_NOTES` and same asserted findings substring as the final post-marker tail [tests/fixtures/codex-live-child.log](/Users/saksham/baton/tests/fixtures/codex-live-child.log:210), [tests/fixtures/codex-live-child.log](/Users/saksham/baton/tests/fixtures/codex-live-child.log:258), while the test only asserts that shared verdict/substr [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:394). — Fix: make the pre-marker decoy distinct, e.g. `VERDICT: BLOCKED` / `FINDINGS: decoy-before-marker`, and assert parsed findings include the post-marker substring and exclude the decoy.
+2. [medium] — 6-2 would pass a destructive purge that deletes or corrupts `.handoff/loop/children/*.log` and `.handoff/loop/findings/*.ndjson`: it seeds those files [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:162) but only asserts whole-tree secret absence afterward [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:172). — Fix: after purge, assert both loop files still exist, the child log preserves non-secret transcript/verdict text, and the findings `.ndjson` line still parses and preserves non-secret fields.
+3. [low] — No pin combines child-log redaction with the item-5 truncation path: item 5 caps without a secret [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:171), while item 6 redacts only a small uncapped child log [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:226). — Fix: add an over-cap child emitting a retained secret plus verdict tail, then assert the truncation marker remains, the secret is redacted, and the verdict still parses.
+tokens used
+57,267
+Audit result: the item-6 redaction shape is valid: the planted `sk-...` matches the existing `\bsk-...` pattern, and 6-1 asserts both secret absence and `[redacted]` presence [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:229), [core/src/util/redact.mjs](/Users/saksham/baton/core/src/util/redact.mjs:12), [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:247). 6-1 is behavioral red by source: `superviseChild` writes `transcript` directly without calling `redactSecrets` [core/src/loop/children.mjs](/Users/saksham/baton/core/src/loop/children.mjs:232).
+
+I ran `node --test tests/commands/purge-transcript.test.mjs tests/unit/loop-children.test.mjs`: the runnable subset has the expected 6-2 red at the loop-log/findings purge test [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:154), and the live fixture tests pass as currently written [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:390). `npm run typecheck` exited 0; the script is `tsc --noEmit` [package.json](/Users/saksham/baton/package.json:21).
+
+VERDICT: BLOCKED
+FINDINGS:
+1. [high] — 7-1 does not genuinely prove last-`tokens used` region bounding: the pre-marker decoy has the same `VERDICT: APPROVED_WITH_NOTES` and same asserted findings substring as the final post-marker tail [tests/fixtures/codex-live-child.log](/Users/saksham/baton/tests/fixtures/codex-live-child.log:210), [tests/fixtures/codex-live-child.log](/Users/saksham/baton/tests/fixtures/codex-live-child.log:258), while the test only asserts that shared verdict/substr [tests/unit/loop-children.test.mjs](/Users/saksham/baton/tests/unit/loop-children.test.mjs:394). — Fix: make the pre-marker decoy distinct, e.g. `VERDICT: BLOCKED` / `FINDINGS: decoy-before-marker`, and assert parsed findings include the post-marker substring and exclude the decoy.
+2. [medium] — 6-2 would pass a destructive purge that deletes or corrupts `.handoff/loop/children/*.log` and `.handoff/loop/findings/*.ndjson`: it seeds those files [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:162) but only asserts whole-tree secret absence afterward [tests/commands/purge-transcript.test.mjs](/Users/saksham/baton/tests/commands/purge-transcript.test.mjs:172). — Fix: after purge, assert both loop files still exist, the child log preserves non-secret transcript/verdict text, and the findings `.ndjson` line still parses and preserves non-secret fields.
+3. [low] — No pin combines child-log redaction with the item-5 truncation path: item 5 caps without a secret [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:171), while item 6 redacts only a small uncapped child log [tests/integration/loop-children-spawn.test.mjs](/Users/saksham/baton/tests/integration/loop-children-spawn.test.mjs:226). — Fix: add an over-cap child emitting a retained secret plus verdict tail, then assert the truncation marker remains, the secret is redacted, and the verdict still parses.
