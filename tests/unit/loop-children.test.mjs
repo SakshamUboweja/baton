@@ -353,8 +353,7 @@ describe('classifyChildExit — delegates to core detect classify() for EVERY ma
 // last chunk of genuine body, the real "tokens used" marker line, and the
 // verbatim verdict tail. It pins parseVerdict's region parse and the D1 tail-only
 // classification against reality (regression protection against marker drift).
-// Provenance: /Users/saksham/baton-dogfood-3/.handoff/loop-archive-pipeline/
-// children/002-doc-loop-writer.log (attempt-3 pipeline dogfood, 2026-07-20);
+// Provenance: a real attempt-3 pipeline dogfood child log (2026-07-20),
 // trimmed to a tail slice so the tracked surface is small and hand-verifiable —
 // plain build/test/README-editing chatter, no tokens/keys/personal data beyond
 // the repo's own paths. ONE alteration: the pre-marker body verdict block was

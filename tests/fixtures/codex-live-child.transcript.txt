@@ -31,17 +31,17 @@
 codex
 The commit was created. I’m doing a final repository sanity check and recording the required baton checkpoint as a handoff-safe note; `.handoff/` is gitignored and will not be committed.
 exec
-/bin/zsh -lc 'git show -s --format=%H%n%an <%ae>%n%s HEAD' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc 'git show -s --format=%H%n%an <%ae>%n%s HEAD' in /workspace/baton-dogfood-3/.worktrees/wt-a
  exited 1 in 0ms:
 zsh:1: no such file or directory: %ae
 
 exec
-/bin/zsh -lc 'git status --short --branch' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc 'git status --short --branch' in /workspace/baton-dogfood-3/.worktrees/wt-a
  succeeded in 0ms:
 ## baton/wt-a/subtask-doc-loop
 
 exec
-/bin/zsh -lc 'git diff HEAD~1..HEAD --stat' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc 'git diff HEAD~1..HEAD --stat' in /workspace/baton-dogfood-3/.worktrees/wt-a
  succeeded in 0ms:
  README.md | 34 ++++++++++++++++++++++++++++++++++
  1 file changed, 34 insertions(+)
@@ -96,14 +96,14 @@ index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f14
 codex
 The branch is clean after the commit. One metadata check command had shell quoting wrong around `<%ae>`, so I’m rerunning it quoted and then checkpointing the completed subtask.
 exec
-/bin/zsh -lc "git show -s --format='%H%n%an <%ae>%n%s' HEAD" in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc "git show -s --format='%H%n%an <%ae>%n%s' HEAD" in /workspace/baton-dogfood-3/.worktrees/wt-a
  succeeded in 0ms:
 fa10e206f9321a3f2ec8d2ed7c94f0e2f15da6e1
 SakshamUboweja <ssakshamu@gmail.com>
 Document baton loop surface
 
 exec
-/bin/zsh -lc "printf '%s\\n' '{\"schema\":\"baton/event@1\",\"events\":[{\"type\":\"decision\",\"payload\":{\"summary\":\"doc-loop README section committed: documents baton loop supervisor, quickstart, smoke approval, and park/resume/escalate exit semantics.\"}}]}' | node core/bin/baton.mjs checkpoint --platform codex" in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc "printf '%s\\n' '{\"schema\":\"baton/event@1\",\"events\":[{\"type\":\"decision\",\"payload\":{\"summary\":\"doc-loop README section committed: documents baton loop supervisor, quickstart, smoke approval, and park/resume/escalate exit semantics.\"}}]}' | node core/bin/baton.mjs checkpoint --platform codex" in /workspace/baton-dogfood-3/.worktrees/wt-a
  succeeded in 0ms:
 diff --git a/README.md b/README.md
 index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f141210e2c3
@@ -155,7 +155,7 @@ index b7d1169a74ac556e0a661c46b41f6641530c2e57..a32d2cfc00a974d258ddfff38c742f14
 codex
 The checkpoint command completed and the commit metadata is correct. I’m checking final status once more so the handoff result is clean.
 exec
-/bin/zsh -lc 'git status --short --branch' in /Users/saksham/baton-dogfood-3/.worktrees/wt-a
+/bin/zsh -lc 'git status --short --branch' in /workspace/baton-dogfood-3/.worktrees/wt-a
  succeeded in 0ms:
 ## baton/wt-a/subtask-doc-loop
 
