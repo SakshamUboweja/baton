@@ -1,0 +1,245 @@
+================================================================================
+GATE 2 — FINAL REVIEW B  ·  MILESTONE D (v1.1 hardening)
+================================================================================
+role:        final-reviewer-b
+model:       claude-code/claude-fable-5  (fresh context)
+date:        2026-07-20
+iteration:   1 / 5
+scope:       docs/plans/2026-07-20-v1.1-hardening.md — items 1..10
+commits:     09e6264..HEAD  (HEAD 88b02e0; 20 commits)
+degraded:    single-vendor this round — sibling reviewer-a is running on Claude
+             Opus (not codex/cross-vendor) because the codex account is
+             usage-limited. This Gate 2 is therefore NOT cross-vendor.
+================================================================================
+
+VALIDATION (run this session)
+--------------------------------------------------------------------------------
+- npm test          -> tests 1264 / pass 1264 / fail 0  (suites 392)   GREEN
+- npm run typecheck -> tsc --noEmit, clean, no output                  GREEN
+- git log 09e6264..HEAD author audit:
+    * every commit authored SakshamUboweja <ssakshamu@gmail.com>       PASS
+    * commit-body trailer scan (co-authored / generated-with / claude /
+      anthropic / AI / robot-emoji) -> NO AI TRAILERS FOUND            PASS
+  The sole-author / zero-AI-attribution git invariant holds end-to-end.
+
+FROZEN-CONTRACT REGRESSION CHECK
+--------------------------------------------------------------------------------
+- Exit codes: loop/pipeline still 0 done|awaiting / 1 live-lock / 2 usage /
+  3 escalated / 4 parked (loop.mjs:113-114, pipeline.mjs:44-45; pinned in
+  loop-run.test + pipeline-run.test). Detect classes 10-14 untouched —
+  classifier.mjs diff is ADDITIVE only (new transcriptTail export,
+  classifier.mjs:52-52; no signature-table edits). PASS
+- Smoke token format: prefix 'smk1.' + 6 per-field 10-char digests unchanged
+  (state.mjs:218-240). PASS
+- .handoff layouts: all v1.1 additions are additive under .handoff/loop/
+  (findings/<gate>.ndjson, children/*.log, merges.ndjson, supervisor.out,
+  supervisor.lock, smoke-approval.json). No renamed/removed paths. PASS
+- Hard 5-iteration cap: GATE_ITERATION_CAP=5 reducer refuses the 6th
+  (state.mjs:37,91-94); pipeline rejects a spec iterationCap>5 BEFORE spawn
+  (pipeline.mjs:146-149). PASS
+- Milestone A/B behavior: full suite green including the B-suite (validateBundle
+  B4, hostile-journal replay B4, auto-seed B6 all pass in this run). PASS
+
+================================================================================
+PER-ITEM VERIFICATION (implementation read + acceptance-test audit)
+================================================================================
+
+(1) D9 done-status persistence — PASS
+    state.mjs:114-124 SMOKE_APPROVE: when phaseIndex>=phaseCount the approved
+    transition resolves to DONE (not RUNNING), and writeLoopState persists it.
+    loop.mjs:456 stamps verified:true only after verifySmokeToken. Pinned:
+    loop-run.test "RED (D9): a smoke-approved run ... persists raw status done"
+    + GUARD (re-run still prints done, no re-spawn). Reads raw state.json.
+
+(2) Trunk derivation — PASS
+    deriveTrunk (pipeline.mjs:100-110): origin/HEAD symbolic-ref, fallback
+    rev-parse --abbrev-ref HEAD, final 'main' only for detached HEAD. Derived
+    ONCE at init (pipeline.mjs:197), stamped in state.trunk, reused everywhere:
+    is-ancestor (459), postflight (631), ahead-check (636), reviewer/merger
+    prompts (652,682), mergeSubtask/attributionScan (706), stale-park msg (471).
+    I confirmed by grep that EVERY trunk-sensitive worktree caller passes `trunk`
+    explicitly — the `= 'main'` defaults in worktrees.mjs (postflight:121,
+    mergeSubtask:170, attributionScan:141) are dead fallbacks the pipeline never
+    hits. Additive migration for pre-trunk legacy state derives-and-stamps, never
+    refuses (pipeline.mjs:213-216). Master-trunk pin (pipeline-run.test:1774)
+    asserts NO 'main' in any git argv and prompts range over master; the
+    main-trunk suite still passes. FACT.
+
+(3) Per-phase child budgets — PASS
+    loop.mjs:366-367,500-505 keys a phaseChildren Map by phase.id; a phase over
+    maxChildrenPerPhase parks naming that phase; other phases unaffected. Pinned:
+    loop-run.test item-3 RED (one phase parks, global product NOT exhausted) +
+    GUARD (phases each under budget complete though the SUM exceeds one budget).
+    NOTE (minor, v1.2): the counter is in-memory only, not persisted — a
+    crash/resume refunds a phase's child budget. This does NOT threaten the hard
+    5-cap (that lives in the persisted state.iterations). See finding 3.
+
+(4) Findings persistence — PASS
+    findings/<gate>.ndjson append-only (loop.mjs:386-390, pipeline.mjs:257-261);
+    latestFindings reads the LAST non-empty line (loop.mjs:370-385). Read at the
+    START of each phase/subtask (loop.mjs:477, pipeline.mjs:496), so it feeds a
+    FRESH process, not just in-memory retries. The deferred failure mode —
+    re-invoke with status still 'running' after a BLOCKED iteration — is pinned
+    for BOTH surfaces: loop-run.test "RED (4b loop)" (seedRunningState +
+    plain `run`, not resume) and pipeline-run.test "RED (4b pipeline)" (real
+    supervisor crash at 3 persisted iterations, then re-invoke embeds LATEST
+    findings). Escalations embed the latest persisted findings when in-memory is
+    empty (loop.mjs:495, pipeline.mjs:298-301; pinned 4c). Append-only ordering
+    pinned (4d). FACT.
+
+(4b) Review artifacts from gate children — PASS
+    Written after each PARSED verdict under reviews/<runId>/<gate>/iteration-NN/
+    (loop.mjs:394-417 writeGateArtifacts; pipeline.mjs:266-288 writeGateArtifact,
+    all three cycle children share cycleNN fixed at the writer spawn,
+    pipeline.mjs:562). FAIL-OPEN: write errors warn and continue (loop.mjs:413,
+    pipeline.mjs:284). verdict.md carries the full header contract (role/model/
+    platform/date/verdict/degraded). Pinned: 4b-1 (two dirs, verbatim prompt +
+    contract verdict), 4b-2 (fail-open on write error), GUARD (a DEAD failover
+    child writes NO verdict.md — only parsed verdicts leave artifacts).
+
+(5) Streaming log caps — PASS
+    superviseChild streams into bounded head+tail buffers (children.mjs:193-214):
+    once head exceeds maxLogBytes it freezes the first half and the tail rolls at
+    <= half, so retained memory is ~maxLogBytes regardless of child output size.
+    The written transcript is head + marker + tail (children.mjs:233). Verdict
+    lives in the tail, so parsing survives truncation.
+    NOTE (minor, v1.2): capLog (children.mjs:132-141) is exported and unit-tested
+    but NOT called by any production path — superviseChild uses its own inline
+    streaming logic. Dead production code, harmless. See finding 2.
+
+(6) Child-log redaction + purge — PASS
+    superviseChild routes the written log through redactSecrets
+    (children.mjs:241) — secrets never hit disk; clean text passes byte-identical.
+    Verdict parse happens on the RAW transcript BEFORE redaction (children.mjs:245)
+    so redaction cannot corrupt a verdict/classification. purge-transcript now
+    walks .log files through scrubTextFile and redacts the findings ndjson field
+    (purge-transcript.mjs:78,92-96,143). Pinned: purge-transcript.test "RED (item
+    6): purge also scrubs the planted secret from loop children/*.log and
+    findings/*.ndjson" + the whole-tree "no file contains the secret afterward".
+
+(7) Live codex marker fixture — PASS
+    tests/fixtures/codex-live-child.transcript.txt (real gpt-5.5 supervised-writer
+    tail slice, provenance documented in loop-children.test:372-388) pins
+    parseVerdict's post-marker region parse AND D1 tail-only classification
+    against the SHIPPED signature table. Teeth: a distinct pre-marker decoy
+    (VERDICT: BLOCKED "decoy-before-marker") proves the region-bounding — a
+    non-bounded parse would read the wrong verdict. GREEN pins (7-1/7-2).
+
+(8) Probe-aware resolution — PASS
+    readProbeCache (availability.mjs:15-27) honors PROBE_CACHE_MS = 15*60*1000
+    (line 9,18); stale/missing -> null (offline-degraded). Fed into resolveRoles
+    at the FIRST spawn (loop.mjs:355,510; pipeline.mjs:158,173) AND into every
+    failover relaunch — writer (pipeline.mjs:605), reviewer+merger
+    (pipeline.mjs:540 via superviseVerdictChild), and loop failover
+    (loop.mjs:575) all pass the same fresh `probes`. Pinned: 8-1 (fresh cache
+    diverts first spawn), "8-1 failover" (relaunch honors cache), GUARD 8-4
+    (stale + missing both resolve as today), GUARD 8-5 (installed/ok but
+    unverifiable still resolves — degraded, never blocked). FACT.
+
+(9) Pipeline smoke gate — PASS
+    After the FINAL subtask merges (state DONE), pipeline.mjs:722-750 runs
+    spec.smoke.cmd once, SMOKE_AWAIT, issues a token bound to trunkSha (not HEAD
+    — the reviewed base; pipeline.mjs:344,737), writes SMOKE-REVIEW.md, exits 0
+    awaiting. --approve-smoke recomputes + verifies; drift parks (pipeline.mjs:
+    330-357). Shared loop machinery (smokeApprovalToken/verifySmokeToken,
+    SMOKE_AWAIT/SMOKE_APPROVE). Pinned: 9-1 (smoke runs ONLY after the final
+    merge, then awaits a genuine token), completes only on a verified token.
+    Crash-idempotence: a crash before SMOKE_AWAIT re-runs smoke on resume
+    (line 722 gated on status DONE && !smokeApproval) — acceptable, smoke is
+    re-runnable; no double-run after approval. FACT.
+
+(10) --detach (POSIX) — PASS with a MAJOR note
+    detachSupervisor (loop.mjs:248-274) prechecks via acquireSupervisorLock
+    (refuses a live owner exit 1; reaps a dead owner's recorded child groups
+    BEFORE forking), releases, forks via io.spawnDetached, then polls until the
+    child owns the lock before returning. Shared by loop + pipeline
+    (pipeline.mjs:85-88). Pinned via the io.spawnDetached seam: 10-1 (parent
+    exits 0 after child owns the lock, prints pid+tail), 10-2 (refuse live, no
+    fork), 10-3 (reclaim dead + kill recorded groups BEFORE fork), GUARD 10-4
+    (lock released on completion), 10-5 (capped supervisor.out path + positive
+    maxBytes). Real-spawn integration (loop-detach.test) exercises the DEFAULT
+    spawnDetached: parent returns 0, real supervisor.out created, lock released
+    on completion. Windows falls back to attached with a notice (loop.mjs:77).
+    See finding 1 for the supervisor.out cap gap.
+
+================================================================================
+FINDINGS
+================================================================================
+
+[1][major, non-blocking] supervisor.out cap (item 10 acceptance e) is nominal,
+    not actively enforced within a run.
+    baton.mjs:79-93 spawnDetached accepts spec.maxBytes but NEVER references it:
+    the log is opened 'w' (truncate-on-open) and the child's stdout/stderr stream
+    into it unbounded for the life of the run. The comment (baton.mjs:76-78)
+    concedes this — "the file itself is size-guarded on next open." So
+    SUPERVISOR_OUT_CAP (loop.mjs:235, 1 MB) bounds the file only ACROSS detaches,
+    not within one. The seam test (loop-run.test:840) only asserts a positive
+    maxBytes is PASSED; the real-spawn test (loop-detach.test:95) only asserts
+    <= 2 MB for a fast-parking child that emits almost nothing — neither exercises
+    a runaway supervisor. Real-world risk is LOW (the supervisor's own stdout is
+    bounded status lines; child transcripts go to separately-capped
+    children/*.log), which is why this is a note, not a block. But the falsifiable
+    acceptance "respects its cap" is only half-met.
+    Fix (v1.2): enforce the cap in spawnDetached — e.g. stream through a size-
+    counting wrapper that stops/rotates at spec.maxBytes, and add a real-spawn
+    pin that emits > cap and asserts the file is truncated mid-run.
+
+[2][minor, non-blocking] Dead production code: capLog (children.mjs:132-141) is
+    exported and unit-tested but called by NO production path (superviseChild
+    uses its own inline streaming cap). Harmless but misleading — a reader may
+    assume the streaming path routes through it.
+    Fix (v1.2): either route superviseChild's final transcript assembly through
+    capLog (single source of truth for the head/marker/tail shape) or drop the
+    export and its unit test.
+
+[3][minor, non-blocking] Per-phase child budget (item 3) is in-memory only
+    (loop.mjs:367 phaseChildren Map) — a crash/resume refunds the budget. The
+    hard 5-iteration cap is unaffected (it lives in persisted state.iterations),
+    so this does not threaten any invariant; it only means maxChildrenPerPhase is
+    per-invocation rather than cumulative across resumes.
+    Fix (v1.2): if a cumulative budget is intended, persist per-phase child
+    counts to the journal/state; otherwise document it as per-invocation.
+
+[4][minor, non-blocking] detachSupervisor (loop.mjs:269-272) polls up to 5 s for
+    the child's lock, then prints "detached supervisor started (pid X)"
+    UNCONDITIONALLY — even if the child never acquired the lock (e.g. it died at
+    startup). A caller could get a success message for a run that never owns the
+    lock.
+    Fix (v1.2): after the poll, if the lock still does not exist, warn (and
+    consider a non-zero exit) rather than reporting success.
+
+================================================================================
+ASSESSMENT
+================================================================================
+All ten v1.1 items are genuinely implemented to their falsifiable acceptances —
+not merely green — verified by reading the implementation against acceptance-
+level pins that include the specific deferred failure modes (D9 running-artifact,
+master-trunk end-to-end, crash-then-reinvoke findings, region-bounded live
+fixture, probe-fed failover relaunch, trunk-bound smoke drift, dead-lock reclaim
+with orphan reaping). Frozen contracts (exit codes, detect classes, smoke token
+format, .handoff layouts, 5-cap, sole-author git invariant) are intact. No
+Milestone A/B regression (1264/1264, typecheck clean).
+
+The four findings are all non-blocking. The only substantive one (finding 1) is a
+real gap between the item-10 "respects its cap" acceptance and the implementation,
+but its real-world blast radius is small and it is honestly documented in code and
+in the test's own "SEAM JUDGMENT CALL" note. It is v1.2 hardening, not a v1.1
+blocker. I recommend folding findings 1-4 into the v1.2 backlog.
+
+--------------------------------------------------------------------------------
+VERDICT: APPROVED_WITH_NOTES
+FINDINGS:
+1. [major] supervisor.out byte-cap (item 10 acceptance e) is not enforced within
+   a run — baton.mjs spawnDetached ignores spec.maxBytes and only truncates on
+   next open; tests assert the arg is passed, not that a runaway is capped. Fix:
+   stream through a size-counting wrapper that rotates/stops at maxBytes and add a
+   real-spawn pin emitting > cap.
+2. [minor] capLog (children.mjs:132) is dead production code — exported/tested but
+   unused; superviseChild uses inline streaming. Fix: route the transcript
+   assembly through capLog or drop it.
+3. [minor] Per-phase child budget (loop.mjs:367) is in-memory only; a resume
+   refunds it (hard 5-cap unaffected). Fix: persist the count or document it as
+   per-invocation.
+4. [minor] detachSupervisor prints "started (pid X)" even if the child never
+   acquired the lock (loop.mjs:269-272). Fix: warn/non-zero when the lock never
+   appears after the poll.
