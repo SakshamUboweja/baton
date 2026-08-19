@@ -35,10 +35,6 @@ Built on the same engine:
 
 This repo dogfoods baton: the root `AGENTS.md` and `CLAUDE.md` are the operating contract its own AI sessions follow, and `templates/` holds the pair baton scaffolds into your projects. See [`docs/architecture.md`](docs/architecture.md) for how the bundle, detection, remap, and receive transaction fit together.
 
-## Status
-
-v1 is feature-complete and unpublished — built test-first behind independent, cross-vendor review gates. npm publish is pending.
-
 ## License
 
 MIT
